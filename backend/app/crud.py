@@ -1,4 +1,4 @@
-from datetime import date
+﻿from datetime import date
 from sqlalchemy.orm import Session
 from app.models import User, CommuteProfile, CommuteScheduleOverride
 
@@ -127,6 +127,28 @@ def update_address_and_coords(
         profile.office_city = city
     else:
         raise ValueError("field_prefix must be 'home' or 'office'")
+
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+def reset_profile_for_reconfigure(db: Session, user_id: int):
+    profile = get_or_create_profile(db, user_id)
+
+    profile.home_address = None
+    profile.home_lat = None
+    profile.home_lng = None
+    profile.home_city = None
+
+    profile.office_address = None
+    profile.office_lat = None
+    profile.office_lng = None
+    profile.office_city = None
+
+    profile.preferred_arrival_time = None
+    profile.walk_to_bus_stop_min = None
+
+    profile.pending_field = "home_location"
 
     db.commit()
     db.refresh(profile)
