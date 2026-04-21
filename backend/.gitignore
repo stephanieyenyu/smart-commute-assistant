@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+smart_commute.db
+.env
