@@ -2,14 +2,6 @@
 import hashlib
 import hmac
 import json
-from app.tdx_bus import (
-    get_nearby_stops,
-    get_estimated_arrivals,
-    simplify_stop_list,
-    simplify_eta_list,
-    dedupe_stops_by_name,
-    choose_catchable_bus,
-)
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -26,10 +18,18 @@ from app.crud import (
     update_profile_field,
     update_address_and_coords,
     upsert_override,
+    get_next_setup_step,
+    reset_profile_for_reconfigure,
 )
-from app.google_maps import geocode_address, estimate_walk_minutes
+from app.google_maps import geocode_address
 from app.weather import get_commute_weather
-from app.service import calculate_departure_time, estimate_commute_minutes, get_bus_realtime_snapshot
+from app.service import (
+    calculate_departure_time,
+    estimate_commute_minutes,
+    get_bus_realtime_snapshot,
+    choose_departure_time_with_realtime_bus,
+    get_metro_snapshot,
+)
 
 router = APIRouter()
 
@@ -62,6 +62,8 @@ FIELD_PROMPTS = {
 
 def verify_line_signature(body: bytes, x_line_signature: str | None) -> bool:
     if not x_line_signature:
+        return False
+    if not LINE_CHANNEL_SECRET:
         return False
 
     digest = hmac.new(
@@ -111,120 +113,51 @@ def get_effective_arrival_time(db, user_id: int, target_date: date, default_arri
     return default_arrival_time, False
 
 
-def infer_city_from_text(text: str | None) -> str | None:
-    if not text:
-        return None
-
-    if "台北市" in text or "臺北市" in text:
-        return "臺北市"
-    if "台中市" in text or "臺中市" in text:
-        return "臺中市"
-    if "台南市" in text or "臺南市" in text:
-        return "臺南市"
-    if "高雄市" in text:
-        return "高雄市"
-    if "新北市" in text:
-        return "新北市"
-    if "桃園市" in text:
-        return "桃園市"
-    if "基隆市" in text:
-        return "基隆市"
-    if "新竹市" in text:
-        return "新竹市"
-    if "新竹縣" in text:
-        return "新竹縣"
-    if "苗栗縣" in text:
-        return "苗栗縣"
-    if "彰化縣" in text:
-        return "彰化縣"
-    if "南投縣" in text:
-        return "南投縣"
-    if "雲林縣" in text:
-        return "雲林縣"
-    if "嘉義市" in text:
-        return "嘉義市"
-    if "嘉義縣" in text:
-        return "嘉義縣"
-    if "屏東縣" in text:
-        return "屏東縣"
-    if "宜蘭縣" in text:
-        return "宜蘭縣"
-    if "台東縣" in text or "臺東縣" in text:
-        return "臺東縣"
-    if "花蓮縣" in text:
-        return "花蓮縣"
-    if "澎湖縣" in text:
-        return "澎湖縣"
-    if "金門縣" in text:
-        return "金門縣"
-    if "連江縣" in text:
-        return "連江縣"
-
-    return None
-
-
-def select_city_name(profile) -> str | None:
-    city_name = profile.home_city
-    if not city_name:
-        city_name = profile.office_city
-    if not city_name:
-        city_name = infer_city_from_text(profile.home_address)
-    if not city_name:
-        city_name = infer_city_from_text(profile.office_address)
-
-    print(f"[weather] selected_city_name={city_name}")
-    return city_name
-
-
-def get_next_setup_step(profile) -> str | None:
-    if not profile.home_address:
-        return "home_location"
-    if not profile.office_address:
-        return "office_location"
-    if not profile.preferred_arrival_time:
-        return "preferred_arrival_time"
-    return None
-
-
-def reset_profile_for_reconfigure(db, user_id: int):
-    profile = get_or_create_profile(db, user_id)
-
-    profile.home_address = None
-    profile.home_lat = None
-    profile.home_lng = None
-    profile.home_city = None
-
-    profile.office_address = None
-    profile.office_lat = None
-    profile.office_lng = None
-    profile.office_city = None
-
-    profile.preferred_arrival_time = None
-
-    # 先維持 0，之後你再改成系統自動算到站牌步行時間
-    profile.walk_to_bus_stop_min = 0
-
-    if hasattr(profile, "selected_bus_stop_id"):
-        profile.selected_bus_stop_id = None
-    if hasattr(profile, "selected_bus_stop_name"):
-        profile.selected_bus_stop_name = None
-    if hasattr(profile, "selected_bus_stop_lat"):
-        profile.selected_bus_stop_lat = None
-    if hasattr(profile, "selected_bus_stop_lng"):
-        profile.selected_bus_stop_lng = None
-
-    profile.pending_field = "home_location"
-
-    db.commit()
-    db.refresh(profile)
-    return profile
-
-
 def ensure_profile_defaults_for_calc(db, user_id: int, profile):
     if profile.walk_to_bus_stop_min is None:
         update_profile_field(db, user_id, "walk_to_bus_stop_min", 0)
         profile = get_profile(db, user_id)
     return profile
+
+
+def infer_city_from_text(text: str | None) -> str | None:
+    if not text:
+        return None
+
+    mapping = {
+        "台北市": "臺北市",
+        "臺北市": "臺北市",
+        "新北市": "新北市",
+        "桃園市": "桃園市",
+        "台中市": "臺中市",
+        "臺中市": "臺中市",
+        "台南市": "臺南市",
+        "臺南市": "臺南市",
+        "高雄市": "高雄市",
+        "基隆市": "基隆市",
+        "新竹市": "新竹市",
+        "嘉義市": "嘉義市",
+        "新竹縣": "新竹縣",
+        "苗栗縣": "苗栗縣",
+        "彰化縣": "彰化縣",
+        "南投縣": "南投縣",
+        "雲林縣": "雲林縣",
+        "嘉義縣": "嘉義縣",
+        "屏東縣": "屏東縣",
+        "宜蘭縣": "宜蘭縣",
+        "花蓮縣": "花蓮縣",
+        "台東縣": "臺東縣",
+        "臺東縣": "臺東縣",
+        "澎湖縣": "澎湖縣",
+        "金門縣": "金門縣",
+        "連江縣": "連江縣",
+    }
+
+    for key, value in mapping.items():
+        if key in text:
+            return value
+
+    return None
 
 
 async def save_location_or_address(
@@ -253,7 +186,6 @@ async def save_location_or_address(
         township = geocode_result.get("township")
         place_name = geocode_result.get("place_name")
 
-        # 如果是手打地址而不是位置訊息，就用 geocode 回來的座標
         if lat is None:
             lat = geocode_result.get("lat")
         if lng is None:
@@ -301,7 +233,7 @@ async def line_webhook(
                 continue
 
             user = get_or_create_user(db, line_user_id=line_user_id)
-            profile = get_or_create_profile(db, user.id)
+            get_or_create_profile(db, user.id)
 
             if event_type == "follow":
                 set_pending_field(db, user.id, "home_location")
@@ -320,7 +252,6 @@ async def line_webhook(
             message_type = message.get("type")
             reply_token = event.get("replyToken")
 
-            # 1. 先處理 location message
             if message_type == "location":
                 profile = get_profile(db, user.id)
                 current_step = profile.pending_field or get_next_setup_step(profile)
@@ -357,7 +288,6 @@ async def line_webhook(
                         lat=lat,
                         lng=lng,
                     )
-
                     update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
                     set_pending_field(db, user.id, "preferred_arrival_time")
 
@@ -374,29 +304,18 @@ async def line_webhook(
                     )
                     continue
 
-                    # 暫時先設 0，之後再改成系統自動算步行到站牌時間
-                    update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
-
-                    set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_text(
-                        reply_token,
-                        "已儲存公司位置。\n"
-                        f"{FIELD_PROMPTS['preferred_arrival_time']}"
-                    )
-                    continue
-
                 await reply_text(
                     reply_token,
                     "目前不需要位置資訊。\n"
-                    "可傳送：查看設定、今天通勤建議、明天幾點出門、修改明天到公司時間、重新設定"
+                    "可傳送：查看設定、今天通勤建議、明天幾點出門、修改明天到公司時間、重新設定、測試公車、測試捷運"
                 )
                 continue
 
-            # 2. 其他非文字、非位置訊息直接略過
             if message_type != "text":
                 continue
 
             user_text = message.get("text", "").strip()
+            print(f"[debug] user_text={repr(user_text)}")
 
             today_date = date.today()
             tomorrow_date = today_date + timedelta(days=1)
@@ -406,7 +325,6 @@ async def line_webhook(
                 tomorrow_override.target_arrival_time if tomorrow_override else None
             )
 
-            # 3. 可直接切回位置設定的指令
             if user_text in ["傳送住家位置", "設定住家位置"]:
                 set_pending_field(db, user.id, "home_location")
                 await reply_text(reply_token, FIELD_PROMPTS["home_location"])
@@ -417,7 +335,6 @@ async def line_webhook(
                 await reply_text(reply_token, FIELD_PROMPTS["office_location"])
                 continue
 
-            # 4. 重新設定
             if user_text == "重新設定":
                 reset_profile_for_reconfigure(db, user.id)
                 await reply_text(
@@ -427,7 +344,6 @@ async def line_webhook(
                 )
                 continue
 
-            # 5. 查看設定
             if user_text == "查看設定":
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
@@ -449,8 +365,172 @@ async def line_webhook(
                 )
                 continue
 
-            # 6. 今天通勤建議
-            if user_text == "今天通勤建議":
+            if user_text in ["測試公車", "公車測試"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(
+                        reply_token,
+                        "請先完成基本設定。\n"
+                        f"{FIELD_PROMPTS[next_step]}"
+                    )
+                    continue
+
+                try:
+                    bus_snapshot = await get_bus_realtime_snapshot(profile)
+
+                    if not bus_snapshot.get("available"):
+                        await reply_text(
+                            reply_token,
+                            "目前無法取得附近公車資訊。"
+                        )
+                        continue
+
+                    first_stop = bus_snapshot["first_stop"]
+                    nearby_stops = bus_snapshot.get("nearby_stops", [])
+                    walk_minutes = bus_snapshot.get("walk_minutes")
+                    arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
+                    chosen_bus = bus_snapshot.get("chosen_bus")
+                    valid_eta_list = bus_snapshot.get("valid_eta_list", [])
+
+                    message_lines = ["附近站牌測試："]
+                    for idx, stop in enumerate(nearby_stops[:5], start=1):
+                        message_lines.append(
+                            f"{idx}. {stop['stop_name']} | stop_id={stop['stop_id']} | uid={stop['stop_uid']}"
+                        )
+
+                    message_lines.append("")
+                    message_lines.append(f"最近站牌：{first_stop['stop_name']}")
+
+                    if walk_minutes is not None:
+                        message_lines.append(f"步行到站牌時間：約 {walk_minutes} 分鐘")
+                    else:
+                        message_lines.append("步行到站牌時間：無法估算")
+
+                    message_lines.append("安全緩衝：1 分鐘")
+
+                    if arrival_at_stop_min is not None:
+                        message_lines.append(f"預估抵達站牌時間：約 {arrival_at_stop_min} 分鐘後")
+
+                    message_lines.append("")
+                    message_lines.append(f"最近站牌 ETA 測試：{first_stop['stop_name']}")
+
+                    for eta in valid_eta_list[:5]:
+                        route_label = eta["route_name"]
+                        if eta.get("subroute_name") and eta["subroute_name"] != eta["route_name"]:
+                            route_label += f"({eta['subroute_name']})"
+
+                        eta_text = (
+                            f"{eta['eta_min']} 分鐘"
+                            if eta["eta_min"] is not None
+                            else "無即時時間"
+                        )
+
+                        message_lines.append(f"{route_label}：{eta_text} | direction={eta.get('direction')}")
+
+                    message_lines.append("")
+
+                    if chosen_bus:
+                        chosen_label = chosen_bus["route_name"]
+                        if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
+                            chosen_label += f"({chosen_bus['subroute_name']})"
+
+                        message_lines.append(
+                            f"你目前最有機會趕上的車：{chosen_label}，約 {chosen_bus['eta_min']} 分鐘後到站"
+                        )
+                    else:
+                        arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
+                        valid_eta_list = bus_snapshot.get("valid_eta_list", [])
+
+                        if arrival_at_stop_min is not None and valid_eta_list:
+                            first_eta = valid_eta_list[0].get("eta_min")
+                            first_route = valid_eta_list[0].get("route_name", "未知路線")
+
+                            if first_eta is not None:
+                                message_lines.append(
+                                    f"目前最近一班公車 {first_route} 約 {first_eta} 分鐘後到站，"
+                                    f"但你預估 {arrival_at_stop_min} 分鐘後才能抵達站牌，這班車大概率趕不上。"
+                                )
+                            else:
+                                message_lines.append("目前清單中沒有明確能趕上的即時班次")
+                        else:
+                            message_lines.append("目前清單中沒有明確能趕上的即時班次")
+
+                    await reply_text(
+                        reply_token,
+                        "\n".join(message_lines)
+                    )
+                    continue
+
+                except Exception as e:
+                    print(f"[bus-test] failed: {e}")
+                    await reply_text(
+                        reply_token,
+                        f"測試公車失敗：{e}"
+                    )
+                    continue
+
+            if user_text in ["測試捷運", "捷運測試"]:
+                print("[debug] entered 測試捷運 branch")
+
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(
+                        reply_token,
+                        "請先完成基本設定。\n"
+                        f"{FIELD_PROMPTS[next_step]}"
+                    )
+                    continue
+
+                try:
+                    metro_snapshot = await get_metro_snapshot(profile)
+
+                    if not metro_snapshot.get("available"):
+                        await reply_text(
+                            reply_token,
+                            "目前無法取得附近捷運資訊。"
+                        )
+                        continue
+
+                    station = metro_snapshot["station"]
+                    walk_minutes = metro_snapshot.get("walk_minutes")
+                    distance_km = metro_snapshot.get("distance_km")
+
+                    lines = [
+                        "捷運測試：",
+                        f"最近捷運站：{station['name']}",
+                    ]
+
+                    if distance_km is not None:
+                        lines.append(f"直線距離：約 {distance_km:.2f} 公里")
+
+                    if walk_minutes is not None:
+                        lines.append(f"步行到捷運站：約 {walk_minutes} 分鐘")
+                    else:
+                        lines.append("步行到捷運站：無法估算")
+
+                    await reply_text(
+                        reply_token,
+                        "\n".join(lines)
+                    )
+                    continue
+
+                except Exception as e:
+                    print(f"[metro-test] failed: {e}")
+                    await reply_text(
+                        reply_token,
+                        f"測試捷運失敗：{e}"
+                    )
+                    continue
+
+            if user_text in ["今天通勤建議", "今日通勤建議", "通勤建議"]:
+                print("[debug] entered 今天通勤建議 branch")
+
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
 
@@ -480,7 +560,6 @@ async def line_webhook(
 
                 weather_info = await get_commute_weather(profile)
                 weather_buffer = weather_info.get("extra_buffer_minutes", 0)
-                bus_snapshot = await get_bus_realtime_snapshot(profile)
 
                 departure_time = await calculate_departure_time(
                     profile,
@@ -488,6 +567,15 @@ async def line_webhook(
                     effective_arrival_time,
                     weather_buffer_minutes=weather_buffer,
                 )
+
+                bus_snapshot = await get_bus_realtime_snapshot(profile)
+
+                realtime_departure = choose_departure_time_with_realtime_bus(
+                    baseline_departure_time=departure_time,
+                    bus_snapshot=bus_snapshot,
+                )
+
+                final_departure_time = realtime_departure["final_departure_time"]
 
                 note = (
                     f"已套用今天覆蓋到公司時間：{effective_arrival_time}"
@@ -552,7 +640,55 @@ async def line_webhook(
                             f"目前最有機會趕上的車：{chosen_label}，約 {chosen_bus['eta_min']} 分鐘後到站"
                         )
                     else:
-                        bus_lines.append("目前清單中沒有明確能趕上的即時班次")
+                        arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
+                        valid_eta_list = bus_snapshot.get("valid_eta_list", [])
+
+                        if arrival_at_stop_min is not None and valid_eta_list:
+                            first_eta = valid_eta_list[0].get("eta_min")
+                            first_route = valid_eta_list[0].get("route_name", "未知路線")
+
+                            if first_eta is not None:
+                                bus_lines.append(
+                                    f"目前最近一班公車 {first_route} 約 {first_eta} 分鐘後到站，"
+                                    f"但你預估 {arrival_at_stop_min} 分鐘後才能抵達站牌，這班車大概率趕不上。"
+                                )
+                            else:
+                                bus_lines.append("目前清單中沒有明確能趕上的即時班次")
+                        else:
+                            bus_lines.append("目前清單中沒有明確能趕上的即時班次")
+
+                        try:
+                            metro_snapshot = await get_metro_snapshot(profile)
+
+                            if metro_snapshot.get("available"):
+                                station = metro_snapshot["station"]
+                                metro_walk_minutes = metro_snapshot.get("walk_minutes")
+
+                                bus_lines.append("可改考慮捷運：")
+                                bus_lines.append(f"最近捷運站：{station['name']}")
+
+                                if metro_walk_minutes is not None:
+                                    bus_lines.append(f"步行到捷運站：約 {metro_walk_minutes} 分鐘")
+                                else:
+                                    bus_lines.append("步行到捷運站：無法估算")
+                            else:
+                                bus_lines.append("目前也無法取得可參考的捷運資訊。")
+                        except Exception as e:
+                            print(f"[today-metro] failed: {e}")
+                            bus_lines.append("捷運替代資訊暫時無法取得。")
+
+                    if realtime_departure["used_realtime_adjustment"]:
+                        bus_lines.append(
+                            f"即時公車修正：已將建議出門時間調整為 {final_departure_time}"
+                        )
+                    elif realtime_departure["reason"] == "baseline_departure_passed":
+                        bus_lines.append("目前已超過今日原定上班出門時段，以下即時公車僅供參考。")
+                    elif realtime_departure["reason"] == "baseline_too_far_for_realtime":
+                        bus_lines.append("目前距離原定出門時間仍較久，暫不以即時公車調整出門時間。")
+                    elif realtime_departure["latest_leave_time"]:
+                        bus_lines.append(
+                            f"依目前即時班次估計，若要搭上這班車，最晚約 {realtime_departure['latest_leave_time']} 出門"
+                        )
 
                     if valid_eta_list:
                         bus_lines.append("即時班次：")
@@ -569,11 +705,11 @@ async def line_webhook(
                             bus_lines.append(f"{route_label}：{eta_text}")
                 else:
                     bus_lines.append("即時公車資訊：目前無法取得")
-                
+
                 reply_parts = [
                     "今日通勤建議：",
                     f"到公司時間：{effective_arrival_time}",
-                    f"建議出門時間：{departure_time}",
+                    f"建議出門時間：{final_departure_time}",
                     "建議方式：目前以 Google 大眾運輸估算為主",
                     f"預估通勤時間：{estimated_minutes} 分鐘",
                     f"今日天氣：{weather_line}",
@@ -587,140 +723,8 @@ async def line_webhook(
                     reply_token,
                     "\n".join(reply_parts)
                 )
+                continue
 
-            if user_text == "測試公車":
-                    profile = get_profile(db, user.id)
-                    next_step = get_next_setup_step(profile)
-
-                    if next_step is not None:
-                        set_pending_field(db, user.id, next_step)
-                        await reply_text(
-                            reply_token,
-                            "請先完成基本設定。\n"
-                            f"{FIELD_PROMPTS[next_step]}"
-                        )
-                        continue
-
-                    if not profile.home_lat or not profile.home_lng or not profile.home_city:
-                        await reply_text(
-                            reply_token,
-                            "目前缺少住家座標或城市資料，請先重新設定住家位置。"
-                        )
-                        continue
-
-                    try:
-                        nearby_raw = await get_nearby_stops(
-                            city_name=profile.home_city,
-                            lat=profile.home_lat,
-                            lng=profile.home_lng,
-                            distance_m=500,
-                            top=8,
-                        )
-                        nearby_stops = simplify_stop_list(nearby_raw)
-                        nearby_stops = dedupe_stops_by_name(nearby_stops)
-
-                        if not nearby_stops:
-                            await reply_text(
-                                reply_token,
-                                "附近查不到公車站牌。"
-                            )
-                            continue
-
-                        first_stop = nearby_stops[0]
-
-                        walk_minutes = None
-                        if first_stop.get("lat") is not None and first_stop.get("lng") is not None:
-                            walk_minutes = await estimate_walk_minutes(
-                                profile.home_lat,
-                                profile.home_lng,
-                                first_stop["lat"],
-                                first_stop["lng"],
-                            )
-
-                        eta_raw = await get_estimated_arrivals(
-                            city_name=profile.home_city,
-                            stop_id=first_stop["stop_id"],
-                            top=20,
-                        )
-                        eta_list = simplify_eta_list(eta_raw)
-
-                        chosen_bus, valid_eta_list = choose_catchable_bus(
-                            eta_list=eta_list,
-                            walk_minutes=walk_minutes,
-                            safety_buffer_min=1,
-                        )
-
-                        message_lines = ["附近站牌測試："]
-                        for idx, stop in enumerate(nearby_stops[:5], start=1):
-                            message_lines.append(
-                                f"{idx}. {stop['stop_name']} | stop_id={stop['stop_id']} | uid={stop['stop_uid']}"
-                            )
-
-                        message_lines.append("")
-                        message_lines.append(f"最近站牌：{first_stop['stop_name']}")
-
-                        if walk_minutes is not None:
-                            message_lines.append(f"步行到站牌時間：約 {walk_minutes} 分鐘")
-                        else:
-                            message_lines.append("步行到站牌時間：無法估算")
-
-                        message_lines.append("安全緩衝：1 分鐘")
-
-                        if walk_minutes is not None:
-                            message_lines.append(f"預估抵達站牌時間：約 {walk_minutes + 1} 分鐘後")
-
-                        message_lines.append("")
-                        message_lines.append(f"最近站牌 ETA 測試：{first_stop['stop_name']}")
-
-                        added = 0
-                        for eta in valid_eta_list:
-                            eta_text = (
-                                f"{eta['eta_min']} 分鐘"
-                                if eta["eta_min"] is not None
-                                else "無即時時間"
-                            )
-
-                            route_label = eta["route_name"]
-                            if eta.get("subroute_name") and eta["subroute_name"] != eta["route_name"]:
-                                route_label += f"({eta['subroute_name']})"
-
-                            message_lines.append(
-                                f"{route_label}：{eta_text} | direction={eta.get('direction')}"
-                            )
-                            added += 1
-
-                            if added >= 5:
-                                break
-
-                        message_lines.append("")
-
-                        if chosen_bus:
-                            chosen_label = chosen_bus["route_name"]
-                            if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
-                                chosen_label += f"({chosen_bus['subroute_name']})"
-
-                            message_lines.append(
-                                f"你目前最有機會趕上的車：{chosen_label}，約 {chosen_bus['eta_min']} 分鐘後到站"
-                            )
-                        else:
-                            message_lines.append("目前清單中沒有明確能趕上的即時班次")
-
-                        await reply_text(
-                            reply_token,
-                            "\n".join(message_lines)
-                        )
-                        continue
-
-                    except Exception as e:
-                        print(f"[bus-test] failed: {e}")
-                        await reply_text(
-                            reply_token,
-                            f"測試公車失敗：{e}"
-                        )
-                        continue
-
-
-            # 7. 明天幾點出門
             if user_text == "明天幾點出門":
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
@@ -801,7 +805,6 @@ async def line_webhook(
                 )
                 continue
 
-            # 8. 修改明天到公司時間
             if user_text == "修改明天到公司時間":
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
@@ -822,7 +825,6 @@ async def line_webhook(
                 )
                 continue
 
-            # 9. 若正在等待位置，但使用者傳的是文字地址，也接受
             profile = get_profile(db, user.id)
             current_step = profile.pending_field or get_next_setup_step(profile)
 
@@ -861,6 +863,13 @@ async def line_webhook(
                         )
                         update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
                         set_pending_field(db, user.id, "preferred_arrival_time")
+
+                        check_profile = get_profile(db, user.id)
+                        print(
+                            f"[setup] office saved | office_address={check_profile.office_address} | "
+                            f"pending_field={check_profile.pending_field}"
+                        )
+
                         await reply_text(
                             reply_token,
                             "已儲存公司位置。\n"
@@ -876,7 +885,6 @@ async def line_webhook(
                     )
                     continue
 
-            # 10. 若正在等待文字欄位，就把這次輸入當答案
             if current_step in ["preferred_arrival_time", "override_tomorrow_arrival_time"]:
                 value, error_message = validate_pending_input(current_step, user_text)
 
@@ -916,7 +924,6 @@ async def line_webhook(
                 set_pending_field(db, user.id, None)
 
                 updated_profile = get_profile(db, user.id)
-
                 print(
                     f"[setup] arrival saved | office_address={updated_profile.office_address} | "
                     f"preferred_arrival_time={updated_profile.preferred_arrival_time} | "
@@ -930,7 +937,6 @@ async def line_webhook(
                 )
                 continue
 
-            # 11. 其他未知訊息
             next_step = get_next_setup_step(profile)
 
             if next_step is None:
@@ -944,7 +950,9 @@ async def line_webhook(
                     "修改明天到公司時間\n"
                     "重新設定\n"
                     "傳送住家位置\n"
-                    "傳送公司位置"
+                    "傳送公司位置\n"
+                    "測試公車\n"
+                    "測試捷運"
                 )
             else:
                 set_pending_field(db, user.id, next_step)
