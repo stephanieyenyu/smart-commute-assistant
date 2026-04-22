@@ -7,8 +7,8 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.config import LINE_CHANNEL_SECRET
-from app.line_client import reply_text
 from app.db import SessionLocal
+from app.line_client import reply_text
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
@@ -22,6 +22,7 @@ from app.crud import (
     reset_profile_for_reconfigure,
     upsert_transport_mode_override,
     get_transport_mode_override,
+    set_reminder_enabled,
 )
 from app.google_maps import geocode_address
 from app.weather import get_commute_weather
@@ -33,6 +34,7 @@ from app.service import (
     get_metro_snapshot,
     choose_commute_option_with_override,
 )
+from app.reminder_scheduler import clear_today_reminder_state_for_user
 
 router = APIRouter()
 
@@ -40,8 +42,8 @@ FIELD_LABELS = {
     "home_location": "住家位置",
     "office_location": "公司位置",
     "preferred_arrival_time": "到公司時間",
-    "override_tomorrow_arrival_time": "明天到公司時間",
     "override_today_arrival_time": "今天到公司時間",
+    "override_tomorrow_arrival_time": "明天到公司時間",
 }
 
 FIELD_PROMPTS = {
@@ -60,8 +62,8 @@ FIELD_PROMPTS = {
         "3. 若暫時不方便傳位置，也可以直接輸入完整公司地址"
     ),
     "preferred_arrival_time": "請直接輸入到公司時間，格式 HH:MM，例如 08:30",
-    "override_tomorrow_arrival_time": "請直接輸入明天新的到公司時間，格式 HH:MM，例如 09:30",
     "override_today_arrival_time": "請直接輸入今天新的到公司時間，格式 HH:MM，例如 15:30",
+    "override_tomorrow_arrival_time": "請直接輸入明天新的到公司時間，格式 HH:MM，例如 09:30",
 }
 
 MODE_LABELS = {
@@ -98,6 +100,56 @@ SELECTION_SOURCE_NAME_MAP = {
     "fallback_auto": "你今天指定的交通方式目前不適合，所以改用系統自動幫你選擇",
 }
 
+COMMAND_ALIASES = {
+    "view_settings": {"查看設定"},
+    "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
+    "tomorrow_departure": {"明天幾點出門"},
+    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間"},
+    "edit_tomorrow_arrival": {"修改明天到公司時間"},
+    "reset": {"重新設定"},
+    "send_home_location": {"傳送住家位置", "設定住家位置"},
+    "send_office_location": {"傳送公司位置", "設定公司位置"},
+    "test_bus": {"測試公車", "公車測試"},
+    "test_metro": {"測試捷運", "捷運測試"},
+    "test_reminder": {"測試提醒"},
+    "reset_today_reminder": {"清除今日提醒狀態", "重置今日提醒"},
+    "set_mode_auto": {"今天自動判斷", "今天交通自動"},
+    "set_mode_bus": {"今天搭公車", "今天坐公車"},
+    "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
+    "set_mode_bus_to_metro": {"今天搭公車轉捷運", "今天公車轉捷運"},
+    "view_mode_today": {"查看今天交通方式"},
+    "enable_reminder": {"開啟自動提醒"},
+    "disable_reminder": {"關閉自動提醒"},
+    "view_reminder_setting": {"查看提醒設定"},
+}
+
+GREETING_WORDS = {"嗨", "你好", "哈囉", "哈喽", "hi", "hello", "hey"}
+
+READY_MENU_TEXT = (
+    "您目前設定已完成。\n"
+    "可傳送：\n"
+    "查看設定\n"
+    "今天通勤建議\n"
+    "明天幾點出門\n"
+    "修改今天到公司時間\n"
+    "修改明天到公司時間\n"
+    "重新設定\n"
+    "傳送住家位置\n"
+    "傳送公司位置\n"
+    "測試公車\n"
+    "測試捷運\n"
+    "測試提醒\n"
+    "清除今日提醒狀態\n"
+    "開啟自動提醒\n"
+    "關閉自動提醒\n"
+    "查看提醒設定\n"
+    "今天自動判斷\n"
+    "今天搭公車\n"
+    "今天搭捷運\n"
+    "今天搭公車轉捷運\n"
+    "查看今天交通方式"
+)
+
 
 def normalize_user_text(text: str) -> str:
     if not text:
@@ -111,24 +163,16 @@ def normalize_user_text(text: str) -> str:
     )
 
 
-COMMAND_ALIASES = {
-    "view_settings": {"查看設定"},
-    "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
-    "tomorrow_departure": {"明天幾點出門"},
-    "edit_tomorrow_arrival": {"修改明天到公司時間"},
-    "reset": {"重新設定"},
-    "send_home_location": {"傳送住家位置", "設定住家位置"},
-    "send_office_location": {"傳送公司位置", "設定公司位置"},
-    "test_bus": {"測試公車", "公車測試"},
-    "test_metro": {"測試捷運", "捷運測試"},
-    "test_reminder": {"測試提醒"},
-    "set_mode_auto": {"今天自動判斷", "今天交通自動"},
-    "set_mode_bus": {"今天搭公車", "今天坐公車"},
-    "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
-    "set_mode_bus_to_metro": {"今天搭公車轉捷運", "今天公車轉捷運"},
-    "view_mode_today": {"查看今天交通方式"},
-    "edit_today_arrival": {"修改今天到公司時間"},
-}
+def looks_like_address(text: str) -> bool:
+    if not text:
+        return False
+
+    text = text.strip()
+    if text.lower() in {"hi", "hello", "hey"} or text in {"嗨", "你好", "哈囉", "哈喽", "早安", "晚安"}:
+        return False
+
+    address_keywords = ["市", "縣", "區", "鄉", "鎮", "路", "街", "號", "巷", "弄", "段"]
+    return any(keyword in text for keyword in address_keywords)
 
 
 def verify_line_signature(body: bytes, x_line_signature: str | None) -> bool:
@@ -147,18 +191,26 @@ def verify_line_signature(body: bytes, x_line_signature: str | None) -> bool:
     return hmac.compare_digest(signature, x_line_signature)
 
 
-def format_profile_text(profile, tomorrow_override_time: str | None = None) -> str:
+def format_profile_text(
+    profile,
+    today_override_time: str | None = None,
+    tomorrow_override_time: str | None = None,
+) -> str:
     home_address = profile.home_address or "尚未設定"
     office_address = profile.office_address or "尚未設定"
     preferred_arrival_time = profile.preferred_arrival_time or "尚未設定"
+    reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
 
     text = (
         "您目前設定如下：\n"
         f"住家位置：{home_address}\n"
         f"公司位置：{office_address}\n"
-        f"到公司時間：{preferred_arrival_time}"
+        f"到公司時間：{preferred_arrival_time}\n"
+        f"自動提醒：{reminder_status}"
     )
 
+    if today_override_time:
+        text += f"\n今天覆蓋到公司時間：{today_override_time}"
     if tomorrow_override_time:
         text += f"\n明天覆蓋到公司時間：{tomorrow_override_time}"
 
@@ -179,10 +231,8 @@ def validate_pending_input(field_name: str, user_text: str):
 
 def get_effective_arrival_time(db, user_id: int, target_date: date, default_arrival_time: str):
     override = get_override_for_date(db, user_id, target_date)
-
     if override and override.target_arrival_time:
         return override.target_arrival_time, True
-
     return default_arrival_time, False
 
 
@@ -337,13 +387,9 @@ async def line_webhook(
 
                 if current_step == "home_location":
                     await save_location_or_address(
-                        db,
-                        user.id,
-                        "home",
-                        raw_address,
-                        lat=lat,
-                        lng=lng,
+                        db, user.id, "home", raw_address, lat=lat, lng=lng
                     )
+                    clear_today_reminder_state_for_user(user.id)
                     set_pending_field(db, user.id, "office_location")
                     await reply_text(
                         reply_token,
@@ -354,22 +400,11 @@ async def line_webhook(
 
                 if current_step == "office_location":
                     await save_location_or_address(
-                        db,
-                        user.id,
-                        "office",
-                        raw_address,
-                        lat=lat,
-                        lng=lng,
+                        db, user.id, "office", raw_address, lat=lat, lng=lng
                     )
+                    clear_today_reminder_state_for_user(user.id)
                     update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
                     set_pending_field(db, user.id, "preferred_arrival_time")
-
-                    check_profile = get_profile(db, user.id)
-                    print(
-                        f"[setup] office saved | office_address={check_profile.office_address} | "
-                        f"pending_field={check_profile.pending_field}"
-                    )
-
                     await reply_text(
                         reply_token,
                         "已儲存公司位置。\n"
@@ -377,11 +412,7 @@ async def line_webhook(
                     )
                     continue
 
-                await reply_text(
-                    reply_token,
-                    "目前不需要位置資訊。\n"
-                    "可傳送：查看設定、今天通勤建議、明天幾點出門、修改明天到公司時間、重新設定、測試公車、測試捷運、今天自動判斷、今天搭公車、今天搭捷運、今天搭公車轉捷運、查看今天交通方式"
-                )
+                await reply_text(reply_token, READY_MENU_TEXT)
                 continue
 
             if message_type != "text":
@@ -394,10 +425,38 @@ async def line_webhook(
             today_date = date.today()
             tomorrow_date = today_date + timedelta(days=1)
 
+            today_override = get_override_for_date(db, user.id, today_date)
+            today_override_time = (
+                today_override.target_arrival_time
+                if today_override and today_override.target_arrival_time
+                else None
+            )
+
             tomorrow_override = get_override_for_date(db, user.id, tomorrow_date)
             tomorrow_override_time = (
-                tomorrow_override.target_arrival_time if tomorrow_override else None
+                tomorrow_override.target_arrival_time
+                if tomorrow_override and tomorrow_override.target_arrival_time
+                else None
             )
+
+            if command_text.lower() in {"hi", "hello", "hey"} or command_text in {"嗨", "你好", "哈囉", "哈喽"}:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+
+                if next_step is None:
+                    await reply_text(
+                        reply_token,
+                        "你好，我是智慧通勤助理。\n" + READY_MENU_TEXT
+                    )
+                else:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(
+                        reply_token,
+                        "你好，我是智慧通勤助理。\n"
+                        "你目前還沒完成設定。\n"
+                        f"{FIELD_PROMPTS[next_step]}"
+                    )
+                continue
 
             if command_text in COMMAND_ALIASES["send_home_location"]:
                 set_pending_field(db, user.id, "home_location")
@@ -411,6 +470,7 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["reset"]:
                 reset_profile_for_reconfigure(db, user.id)
+                clear_today_reminder_state_for_user(user.id)
                 await reply_text(
                     reply_token,
                     "好的，現在開始重新設定。\n"
@@ -426,36 +486,58 @@ async def line_webhook(
                     set_pending_field(db, user.id, None)
                     await reply_text(
                         reply_token,
-                        format_profile_text(profile, tomorrow_override_time),
+                        format_profile_text(profile, today_override_time, tomorrow_override_time),
                     )
                     continue
 
                 set_pending_field(db, user.id, next_step)
                 await reply_text(
                     reply_token,
-                    f"{format_profile_text(profile, tomorrow_override_time)}\n\n"
+                    f"{format_profile_text(profile, today_override_time, tomorrow_override_time)}\n\n"
                     "尚未完成設定。\n"
                     f"{FIELD_PROMPTS[next_step]}"
                 )
                 continue
 
+            if command_text in COMMAND_ALIASES["enable_reminder"]:
+                set_reminder_enabled(db, user.id, True)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_text(reply_token, "已開啟自動提醒。")
+                continue
+
+            if command_text in COMMAND_ALIASES["disable_reminder"]:
+                set_reminder_enabled(db, user.id, False)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_text(reply_token, "已關閉自動提醒。")
+                continue
+
+            if command_text in COMMAND_ALIASES["view_reminder_setting"]:
+                profile = get_profile(db, user.id)
+                status_text = "開啟" if profile.reminder_enabled else "關閉"
+                await reply_text(reply_token, f"目前自動提醒：{status_text}")
+                continue
+
             if command_text in COMMAND_ALIASES["set_mode_auto"]:
                 upsert_transport_mode_override(db, user.id, today_date, "auto")
+                clear_today_reminder_state_for_user(user.id)
                 await reply_text(reply_token, "已設定今天交通方式為：自動判斷")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus"]:
                 upsert_transport_mode_override(db, user.id, today_date, "bus")
+                clear_today_reminder_state_for_user(user.id)
                 await reply_text(reply_token, "已設定今天交通方式為：公車優先")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_metro"]:
                 upsert_transport_mode_override(db, user.id, today_date, "metro")
+                clear_today_reminder_state_for_user(user.id)
                 await reply_text(reply_token, "已設定今天交通方式為：捷運優先")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus_to_metro"]:
                 upsert_transport_mode_override(db, user.id, today_date, "bus_to_metro")
+                clear_today_reminder_state_for_user(user.id)
                 await reply_text(reply_token, "已設定今天交通方式為：公車轉捷運")
                 continue
 
@@ -484,10 +566,7 @@ async def line_webhook(
                     bus_snapshot = await get_bus_realtime_snapshot(profile)
 
                     if not bus_snapshot.get("available"):
-                        await reply_text(
-                            reply_token,
-                            "目前無法取得附近公車資訊。"
-                        )
+                        await reply_text(reply_token, "目前無法取得附近公車資訊。")
                         continue
 
                     first_stop = bus_snapshot["first_stop"]
@@ -524,56 +603,29 @@ async def line_webhook(
                         if eta.get("subroute_name") and eta["subroute_name"] != eta["route_name"]:
                             route_label += f"({eta['subroute_name']})"
 
-                        eta_text = (
-                            f"{eta['eta_min']} 分鐘"
-                            if eta["eta_min"] is not None
-                            else "無即時時間"
-                        )
-
+                        eta_text = f"{eta['eta_min']} 分鐘" if eta["eta_min"] is not None else "無即時時間"
                         message_lines.append(f"{route_label}：{eta_text} | direction={eta.get('direction')}")
 
                     message_lines.append("")
-
                     if chosen_bus:
                         chosen_label = chosen_bus["route_name"]
                         if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
                             chosen_label += f"({chosen_bus['subroute_name']})"
-
                         message_lines.append(
                             f"你目前最有機會趕上的車：{chosen_label}，約 {chosen_bus['eta_min']} 分鐘後到站"
                         )
                     else:
-                        if arrival_at_stop_min is not None and valid_eta_list:
-                            first_eta = valid_eta_list[0].get("eta_min")
-                            first_route = valid_eta_list[0].get("route_name", "未知路線")
+                        message_lines.append("目前清單中沒有明確能趕上的即時班次")
 
-                            if first_eta is not None:
-                                message_lines.append(
-                                    f"目前最近一班公車 {first_route} 約 {first_eta} 分鐘後到站，"
-                                    f"但你預估 {arrival_at_stop_min} 分鐘後才能抵達站牌，這班車大概率趕不上。"
-                                )
-                            else:
-                                message_lines.append("目前清單中沒有明確能趕上的即時班次")
-                        else:
-                            message_lines.append("目前清單中沒有明確能趕上的即時班次")
-
-                    await reply_text(
-                        reply_token,
-                        "\n".join(message_lines)
-                    )
+                    await reply_text(reply_token, "\n".join(message_lines))
                     continue
 
                 except Exception as e:
                     print(f"[bus-test] failed: {e}")
-                    await reply_text(
-                        reply_token,
-                        f"測試公車失敗：{e}"
-                    )
+                    await reply_text(reply_token, f"測試公車失敗：{e}")
                     continue
 
             if command_text in COMMAND_ALIASES["test_metro"]:
-                print("[debug] entered 測試捷運 branch")
-
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
 
@@ -590,10 +642,7 @@ async def line_webhook(
                     metro_snapshot = await get_metro_snapshot(profile)
 
                     if not metro_snapshot.get("available"):
-                        await reply_text(
-                            reply_token,
-                            "目前無法取得附近捷運資訊。"
-                        )
+                        await reply_text(reply_token, "目前無法取得附近捷運資訊。")
                         continue
 
                     station = metro_snapshot["station"]
@@ -607,29 +656,20 @@ async def line_webhook(
 
                     if distance_km is not None:
                         lines.append(f"直線距離：約 {distance_km:.2f} 公里")
-
                     if walk_minutes is not None:
                         lines.append(f"步行到捷運站：約 {walk_minutes} 分鐘")
                     else:
                         lines.append("步行到捷運站：無法估算")
 
-                    await reply_text(
-                        reply_token,
-                        "\n".join(lines)
-                    )
+                    await reply_text(reply_token, "\n".join(lines))
                     continue
 
                 except Exception as e:
                     print(f"[metro-test] failed: {e}")
-                    await reply_text(
-                        reply_token,
-                        f"測試捷運失敗：{e}"
-                    )
+                    await reply_text(reply_token, f"測試捷運失敗：{e}")
                     continue
-            
-            if command_text in COMMAND_ALIASES["test_reminder"]:
-                print("[debug] entered 測試提醒 branch")
 
+            if command_text in COMMAND_ALIASES["test_reminder"]:
                 try:
                     profile = get_profile(db, user.id)
                     next_step = get_next_setup_step(profile)
@@ -645,11 +685,8 @@ async def line_webhook(
 
                     profile = ensure_profile_defaults_for_calc(db, user.id, profile)
 
-                    effective_arrival_time, used_override = get_effective_arrival_time(
-                        db,
-                        user.id,
-                        today_date,
-                        profile.preferred_arrival_time,
+                    effective_arrival_time, _ = get_effective_arrival_time(
+                        db, user.id, today_date, profile.preferred_arrival_time
                     )
 
                     weather_info = await get_commute_weather(profile)
@@ -693,7 +730,6 @@ async def line_webhook(
                         weather_line += f"，{temperature}°C"
                     elif min_t is not None and max_t is not None:
                         weather_line += f"，{min_t}-{max_t}°C"
-
                     if pop is not None:
                         weather_line += f"，降雨機率 {pop}%"
 
@@ -762,25 +798,25 @@ async def line_webhook(
                         if station:
                             reminder_lines.append(f"轉乘捷運：{station.get('name', '未知站名')}")
 
-                    await reply_text(
-                        reply_token,
-                        "\n".join(reminder_lines)
-                    )
+                    await reply_text(reply_token, "\n".join(reminder_lines))
                     continue
 
                 except Exception as e:
                     import traceback
                     print("[test-reminder] failed")
                     print(traceback.format_exc())
-                    await reply_text(
-                        reply_token,
-                        f"測試提醒失敗：{type(e).__name__}: {e}"
-                    )
+                    await reply_text(reply_token, f"測試提醒失敗：{type(e).__name__}: {e}")
                     continue
 
-            if command_text in COMMAND_ALIASES["today_commute"]:
-                print("[debug] entered 今天通勤建議 branch")
+            if command_text in COMMAND_ALIASES["reset_today_reminder"]:
+                clear_today_reminder_state_for_user(user.id)
+                await reply_text(
+                    reply_token,
+                    "已清除你今天的提醒狀態。\n現在可以重新測試今天的自動提醒。"
+                )
+                continue
 
+            if command_text in COMMAND_ALIASES["today_commute"]:
                 try:
                     profile = get_profile(db, user.id)
                     next_step = get_next_setup_step(profile)
@@ -797,19 +833,14 @@ async def line_webhook(
                     profile = ensure_profile_defaults_for_calc(db, user.id, profile)
 
                     effective_arrival_time, used_override = get_effective_arrival_time(
-                        db,
-                        user.id,
-                        today_date,
-                        profile.preferred_arrival_time,
+                        db, user.id, today_date, profile.preferred_arrival_time
                     )
 
                     weather_info = await get_commute_weather(profile)
                     weather_buffer = weather_info.get("extra_buffer_minutes", 0)
 
                     baseline_minutes = await estimate_commute_minutes(
-                        profile,
-                        today_date,
-                        effective_arrival_time,
+                        profile, today_date, effective_arrival_time
                     )
 
                     final_departure_time = await calculate_departure_time(
@@ -822,7 +853,7 @@ async def line_webhook(
                     recommended_mode = "unknown"
                     mode_text = MODE_LABELS.get("unknown", "目前無法明確判斷")
                     mode_reason = "fallback_baseline_only"
-                    option_summary = "目前先以基礎通勤估算為主"
+                    option_summary = "目前先以基礎大眾運輸估算為主"
                     best_option = {}
                     selection_source = "auto"
 
@@ -837,7 +868,6 @@ async def line_webhook(
                         )
                         best_option = option_choice.get("best_option", {}) or {}
                         selection_source = option_choice.get("selection_source", "auto")
-
                         recommended_mode = best_option.get("mode", "unknown")
                         mode_text = MODE_LABELS.get(recommended_mode, "目前無法明確判斷")
                         mode_reason = best_option.get("reason", "unknown")
@@ -887,14 +917,12 @@ async def line_webhook(
                     weather_line = f"{weather_text}"
                     if weather_description:
                         weather_line += f"，{weather_description}"
-
                     if temperature is not None:
                         weather_line += f"，{temperature}°C"
                     elif min_t is not None and max_t is not None:
                         weather_line += f"，{min_t}-{max_t}°C"
 
                     rain_line = f"{pop}%" if pop is not None else "未知"
-
                     buffer_note = (
                         f"今日天氣已額外增加 {weather_buffer} 分鐘緩衝。"
                         if weather_buffer > 0
@@ -914,10 +942,8 @@ async def line_webhook(
 
                             if first_stop:
                                 detail_lines.append(f"最近站牌：{first_stop.get('stop_name', '未知站牌')}")
-
                             if walk_minutes is not None:
                                 detail_lines.append(f"步行到站牌：約 {walk_minutes} 分鐘")
-
                             if arrival_at_stop_min is not None:
                                 detail_lines.append(f"預估抵達站牌時間：約 {arrival_at_stop_min} 分鐘後")
 
@@ -926,7 +952,6 @@ async def line_webhook(
                                 subroute_name = chosen_bus.get("subroute_name")
                                 if subroute_name and subroute_name != chosen_bus.get("route_name"):
                                     chosen_label += f"({subroute_name})"
-
                                 eta_min = chosen_bus.get("eta_min")
                                 if eta_min is not None:
                                     detail_lines.append(
@@ -934,11 +959,8 @@ async def line_webhook(
                                     )
 
                             realtime_info = departure_calc.get("realtime_info", {})
-
                             if realtime_info.get("used_realtime_adjustment"):
-                                detail_lines.append(
-                                    f"即時公車修正：已將建議出門時間調整為 {final_departure_time}"
-                                )
+                                detail_lines.append(f"即時公車修正：已將建議出門時間調整為 {final_departure_time}")
                             elif realtime_info.get("reason") == "baseline_departure_passed":
                                 detail_lines.append("目前已超過今日原定上班出門時段，以下即時公車僅供參考。")
                             elif realtime_info.get("reason") == "baseline_too_far_for_realtime":
@@ -955,7 +977,6 @@ async def line_webhook(
                                     subroute_name = eta.get("subroute_name")
                                     if subroute_name and subroute_name != eta.get("route_name"):
                                         route_label += f"({subroute_name})"
-
                                     eta_min = eta.get("eta_min")
                                     eta_text = f"{eta_min} 分鐘" if eta_min is not None else "無即時時間"
                                     detail_lines.append(f"{route_label}：{eta_text}")
@@ -968,10 +989,8 @@ async def line_webhook(
 
                             if station:
                                 detail_lines.append(f"最近捷運站：{station.get('name', '未知站名')}")
-
                             if distance_km is not None:
                                 detail_lines.append(f"直線距離：約 {distance_km:.2f} 公里")
-
                             if walk_minutes is not None:
                                 detail_lines.append(f"步行到捷運站：約 {walk_minutes} 分鐘")
 
@@ -983,34 +1002,25 @@ async def line_webhook(
                             first_stop = bus_data.get("first_stop", {}) or {}
                             chosen_bus = bus_data.get("chosen_bus")
                             bus_walk_minutes = bus_data.get("walk_minutes")
-
                             station = metro_data.get("station", {}) or {}
                             metro_walk_minutes = metro_data.get("walk_minutes")
 
                             if first_stop:
                                 detail_lines.append(f"第一段公車站牌：{first_stop.get('stop_name', '未知站牌')}")
-
                             if bus_walk_minutes is not None:
                                 detail_lines.append(f"步行到公車站：約 {bus_walk_minutes} 分鐘")
-
                             if chosen_bus:
                                 chosen_label = chosen_bus.get("route_name", "未知路線")
                                 subroute_name = chosen_bus.get("subroute_name")
                                 if subroute_name and subroute_name != chosen_bus.get("route_name"):
                                     chosen_label += f"({subroute_name})"
-
                                 eta_min = chosen_bus.get("eta_min")
                                 if eta_min is not None:
-                                    detail_lines.append(
-                                        f"第一段公車：{chosen_label}，約 {eta_min} 分鐘後到站"
-                                    )
-
+                                    detail_lines.append(f"第一段公車：{chosen_label}，約 {eta_min} 分鐘後到站")
                             if station:
                                 detail_lines.append(f"轉乘捷運：{station.get('name', '未知站名')}")
-
                             if metro_walk_minutes is not None:
                                 detail_lines.append(f"捷運步行參考：約 {metro_walk_minutes} 分鐘")
-
                             detail_lines.append("轉乘緩衝：5 分鐘")
 
                     except Exception:
@@ -1041,22 +1051,14 @@ async def line_webhook(
                         "",
                     ] + detail_lines
 
-                    print(f"[today] reply_parts={reply_parts}")
-
-                    await reply_text(
-                        reply_token,
-                        "\n".join(reply_parts)
-                    )
+                    await reply_text(reply_token, "\n".join(reply_parts))
                     continue
 
                 except Exception as e:
                     import traceback
                     print("[today] exception happened")
                     print(traceback.format_exc())
-                    await reply_text(
-                        reply_token,
-                        f"今天通勤建議執行失敗：{type(e).__name__}: {e}"
-                    )
+                    await reply_text(reply_token, f"今天通勤建議執行失敗：{type(e).__name__}: {e}")
                     continue
 
             if command_text in COMMAND_ALIASES["tomorrow_departure"]:
@@ -1075,16 +1077,11 @@ async def line_webhook(
                 profile = ensure_profile_defaults_for_calc(db, user.id, profile)
 
                 effective_arrival_time, used_override = get_effective_arrival_time(
-                    db,
-                    user.id,
-                    tomorrow_date,
-                    profile.preferred_arrival_time,
+                    db, user.id, tomorrow_date, profile.preferred_arrival_time
                 )
 
                 estimated_minutes = await estimate_commute_minutes(
-                    profile,
-                    tomorrow_date,
-                    effective_arrival_time,
+                    profile, tomorrow_date, effective_arrival_time
                 )
 
                 weather_info = await get_commute_weather(profile)
@@ -1109,24 +1106,16 @@ async def line_webhook(
                 temperature = weather_info.get("temperature")
                 min_t = weather_info.get("temperature_min")
                 max_t = weather_info.get("temperature_max")
-                scope = weather_info.get("scope")
 
                 weather_line = f"{weather_text}"
                 if weather_description:
                     weather_line += f"，{weather_description}"
-
                 if temperature is not None:
                     weather_line += f"，{temperature}°C"
                 elif min_t is not None and max_t is not None:
                     weather_line += f"，{min_t}-{max_t}°C"
 
                 rain_line = f"{pop}%" if pop is not None else "未知"
-
-                print(
-                    "[tomorrow-weather] "
-                    f"scope={scope}, city={weather_info.get('city')}, township={weather_info.get('township')}, "
-                    f"wx={weather_text}, pop={pop}, buffer={weather_buffer}"
-                )
 
                 await reply_text(
                     reply_token,
@@ -1138,6 +1127,7 @@ async def line_webhook(
                     f"已套用天氣緩衝：{weather_buffer} 分鐘。"
                 )
                 continue
+
             if command_text in COMMAND_ALIASES["edit_today_arrival"]:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
@@ -1152,10 +1142,7 @@ async def line_webhook(
                     continue
 
                 set_pending_field(db, user.id, "override_today_arrival_time")
-                await reply_text(
-                    reply_token,
-                    FIELD_PROMPTS["override_today_arrival_time"]
-                )
+                await reply_text(reply_token, FIELD_PROMPTS["override_today_arrival_time"])
                 continue
 
             if command_text in COMMAND_ALIASES["edit_tomorrow_arrival"]:
@@ -1172,10 +1159,7 @@ async def line_webhook(
                     continue
 
                 set_pending_field(db, user.id, "override_tomorrow_arrival_time")
-                await reply_text(
-                    reply_token,
-                    FIELD_PROMPTS["override_tomorrow_arrival_time"]
-                )
+                await reply_text(reply_token, FIELD_PROMPTS["override_tomorrow_arrival_time"])
                 continue
 
             profile = get_profile(db, user.id)
@@ -1191,14 +1175,20 @@ async def line_webhook(
                     )
                     continue
 
+                if not looks_like_address(typed_address):
+                    field_name = "住家位置" if current_step == "home_location" else "公司位置"
+                    await reply_text(
+                        reply_token,
+                        f"你目前正在設定{field_name}。\n"
+                        "請直接輸入完整地址，或使用 LINE 位置傳送功能。\n"
+                        f"{FIELD_PROMPTS[current_step]}"
+                    )
+                    continue
+
                 try:
                     if current_step == "home_location":
-                        await save_location_or_address(
-                            db,
-                            user.id,
-                            "home",
-                            typed_address,
-                        )
+                        await save_location_or_address(db, user.id, "home", typed_address)
+                        clear_today_reminder_state_for_user(user.id)
                         set_pending_field(db, user.id, "office_location")
                         await reply_text(
                             reply_token,
@@ -1208,21 +1198,10 @@ async def line_webhook(
                         continue
 
                     if current_step == "office_location":
-                        await save_location_or_address(
-                            db,
-                            user.id,
-                            "office",
-                            typed_address,
-                        )
+                        await save_location_or_address(db, user.id, "office", typed_address)
+                        clear_today_reminder_state_for_user(user.id)
                         update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
                         set_pending_field(db, user.id, "preferred_arrival_time")
-
-                        check_profile = get_profile(db, user.id)
-                        print(
-                            f"[setup] office saved | office_address={check_profile.office_address} | "
-                            f"pending_field={check_profile.pending_field}"
-                        )
-
                         await reply_text(
                             reply_token,
                             "已儲存公司位置。\n"
@@ -1249,17 +1228,9 @@ async def line_webhook(
                     continue
 
                 if current_step == "override_today_arrival_time":
-                    upsert_override(
-                        db,
-                        user.id,
-                        today_date,
-                        value,
-                    )
+                    upsert_override(db, user.id, today_date, value)
+                    clear_today_reminder_state_for_user(user.id)
                     set_pending_field(db, user.id, None)
-
-                    refreshed_profile = get_profile(db, user.id)
-                    refreshed_profile = ensure_profile_defaults_for_calc(db, user.id, refreshed_profile)
-
                     await reply_text(
                         reply_token,
                         f"已儲存今天到公司時間：{value}\n"
@@ -1268,12 +1239,7 @@ async def line_webhook(
                     continue
 
                 if current_step == "override_tomorrow_arrival_time":
-                    upsert_override(
-                        db,
-                        user.id,
-                        tomorrow_date,
-                        value,
-                    )
+                    upsert_override(db, user.id, tomorrow_date, value)
                     set_pending_field(db, user.id, None)
 
                     refreshed_profile = get_profile(db, user.id)
@@ -1293,45 +1259,21 @@ async def line_webhook(
                     continue
 
                 update_profile_field(db, user.id, "preferred_arrival_time", value)
+                clear_today_reminder_state_for_user(user.id)
                 set_pending_field(db, user.id, None)
 
                 updated_profile = get_profile(db, user.id)
-                print(
-                    f"[setup] arrival saved | office_address={updated_profile.office_address} | "
-                    f"preferred_arrival_time={updated_profile.preferred_arrival_time} | "
-                    f"pending_field={updated_profile.pending_field}"
-                )
-
                 await reply_text(
                     reply_token,
                     f"已儲存到公司時間：{value}\n\n"
-                    f"{format_profile_text(updated_profile, tomorrow_override_time)}"
+                    f"{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}"
                 )
                 continue
 
             next_step = get_next_setup_step(profile)
 
             if next_step is None:
-                await reply_text(
-                    reply_token,
-                    "您目前設定已完成。\n"
-                    "可傳送：\n"
-                    "查看設定\n"
-                    "今天通勤建議\n"
-                    "明天幾點出門\n"
-                    "修改明天到公司時間\n"
-                    "修改今天到公司時間\n"
-                    "重新設定\n"
-                    "傳送住家位置\n"
-                    "傳送公司位置\n"
-                    "測試公車\n"
-                    "測試捷運\n"
-                    "今天自動判斷\n"
-                    "今天搭公車\n"
-                    "今天搭捷運\n"
-                    "今天搭公車轉捷運\n"
-                    "查看今天交通方式"
-                )
+                await reply_text(reply_token, READY_MENU_TEXT)
             else:
                 set_pending_field(db, user.id, next_step)
                 await reply_text(
