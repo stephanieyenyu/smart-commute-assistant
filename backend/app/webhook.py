@@ -228,6 +228,7 @@ async def save_location_or_address(
     lng: float | None = None,
 ):
     geocode_result = None
+
     try:
         geocode_result = await geocode_address(raw_address)
     except Exception as e:
@@ -235,12 +236,16 @@ async def save_location_or_address(
 
     normalized_address = raw_address
     city = infer_city_from_text(raw_address)
+    township = None
+    place_name = None
 
     if geocode_result:
         normalized_address = geocode_result.get("formatted_address") or raw_address
         city = geocode_result.get("city") or city
+        township = geocode_result.get("township")
+        place_name = geocode_result.get("place_name")
 
-        # 如果原本沒有 lat/lng，就用 geocode 回來的
+        # 如果是手打地址而不是位置訊息，就用 geocode 回來的座標
         if lat is None:
             lat = geocode_result.get("lat")
         if lng is None:
@@ -254,6 +259,8 @@ async def save_location_or_address(
         lat,
         lng,
         city,
+        township,
+        place_name,
     )
 
 
@@ -339,7 +346,9 @@ async def line_webhook(
                         lng=lng,
                     )
 
+                    # 暫時先設 0，之後再改成系統自動算步行到站牌時間
                     update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
+
                     set_pending_field(db, user.id, "preferred_arrival_time")
                     await reply_text(
                         reply_token,
@@ -632,6 +641,7 @@ async def line_webhook(
                             f"{FIELD_PROMPTS['preferred_arrival_time']}"
                         )
                         continue
+
                 except Exception as e:
                     print(f"[text address] save failed: {e}")
                     await reply_text(
