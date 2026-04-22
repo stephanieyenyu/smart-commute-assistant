@@ -20,7 +20,7 @@ from app.crud import (
     upsert_override,
 )
 from app.google_maps import geocode_address
-from app.weather import get_today_weather_by_city
+from app.weather import get_commute_weather
 from app.service import calculate_departure_time, estimate_commute_minutes
 
 router = APIRouter()
@@ -466,9 +466,8 @@ async def line_webhook(
                     effective_arrival_time,
                 )
 
-                city_name = select_city_name(profile)
-                weather_info = await get_today_weather_by_city(city_name)
-                weather_buffer = weather_info["extra_buffer_minutes"]
+                weather_info = await get_commute_weather(profile)
+                weather_buffer = weather_info.get("extra_buffer_minutes", 0)
 
                 departure_time = await calculate_departure_time(
                     profile,
@@ -483,13 +482,21 @@ async def line_webhook(
                     else f"目前使用預設到公司時間：{effective_arrival_time}"
                 )
 
-                weather_text = weather_info["weather_text"]
-                pop = weather_info["pop"]
-                min_t = weather_info["temperature_min"]
-                max_t = weather_info["temperature_max"]
+                weather_text = weather_info.get("weather_text", "未知")
+                weather_description = weather_info.get("weather_description")
+                pop = weather_info.get("pop")
+                temperature = weather_info.get("temperature")
+                min_t = weather_info.get("temperature_min")
+                max_t = weather_info.get("temperature_max")
+                scope = weather_info.get("scope")
 
                 weather_line = f"{weather_text}"
-                if min_t is not None and max_t is not None:
+                if weather_description:
+                    weather_line += f"，{weather_description}"
+
+                if temperature is not None:
+                    weather_line += f"，{temperature}°C"
+                elif min_t is not None and max_t is not None:
                     weather_line += f"，{min_t}-{max_t}°C"
 
                 rain_line = f"{pop}%" if pop is not None else "未知"
@@ -501,11 +508,9 @@ async def line_webhook(
                 )
 
                 print(
-                    "[today] "
-                    f"arrival={effective_arrival_time}, "
-                    f"estimated_minutes={estimated_minutes}, "
-                    f"weather_text={weather_text}, pop={pop}, "
-                    f"weather_buffer={weather_buffer}, departure={departure_time}"
+                    "[today-weather] "
+                    f"scope={scope}, city={weather_info.get('city')}, township={weather_info.get('township')}, "
+                    f"wx={weather_text}, pop={pop}, buffer={weather_buffer}"
                 )
 
                 await reply_text(
@@ -551,9 +556,8 @@ async def line_webhook(
                     effective_arrival_time,
                 )
 
-                city_name = select_city_name(profile)
-                weather_info = await get_today_weather_by_city(city_name)
-                weather_buffer = weather_info["extra_buffer_minutes"]
+                weather_info = await get_commute_weather(profile)
+                weather_buffer = weather_info.get("extra_buffer_minutes", 0)
 
                 departure_time = await calculate_departure_time(
                     profile,
@@ -568,16 +572,29 @@ async def line_webhook(
                     else f"目前使用預設到公司時間：{effective_arrival_time}"
                 )
 
-                weather_text = weather_info["weather_text"]
-                pop = weather_info["pop"]
+                weather_text = weather_info.get("weather_text", "未知")
+                weather_description = weather_info.get("weather_description")
+                pop = weather_info.get("pop")
+                temperature = weather_info.get("temperature")
+                min_t = weather_info.get("temperature_min")
+                max_t = weather_info.get("temperature_max")
+                scope = weather_info.get("scope")
+
+                weather_line = f"{weather_text}"
+                if weather_description:
+                    weather_line += f"，{weather_description}"
+
+                if temperature is not None:
+                    weather_line += f"，{temperature}°C"
+                elif min_t is not None and max_t is not None:
+                    weather_line += f"，{min_t}-{max_t}°C"
+
                 rain_line = f"{pop}%" if pop is not None else "未知"
 
                 print(
-                    "[tomorrow] "
-                    f"arrival={effective_arrival_time}, "
-                    f"estimated_minutes={estimated_minutes}, "
-                    f"weather_text={weather_text}, pop={pop}, "
-                    f"weather_buffer={weather_buffer}, departure={departure_time}"
+                    "[tomorrow-weather] "
+                    f"scope={scope}, city={weather_info.get('city')}, township={weather_info.get('township')}, "
+                    f"wx={weather_text}, pop={pop}, buffer={weather_buffer}"
                 )
 
                 await reply_text(
@@ -585,7 +602,7 @@ async def line_webhook(
                     f"明天建議 {departure_time} 出門。\n"
                     f"{note}\n"
                     f"預估通勤時間：{estimated_minutes} 分鐘\n"
-                    f"參考天氣：{weather_text}\n"
+                    f"參考天氣：{weather_line}\n"
                     f"降雨機率：{rain_line}\n"
                     f"已套用天氣緩衝：{weather_buffer} 分鐘。"
                 )
