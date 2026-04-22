@@ -2,6 +2,14 @@
 import hashlib
 import hmac
 import json
+from app.tdx_bus import (
+    get_nearby_stops,
+    get_estimated_arrivals,
+    simplify_stop_list,
+    simplify_eta_list,
+    dedupe_stops_by_name,
+    choose_catchable_bus,
+)
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -19,9 +27,9 @@ from app.crud import (
     update_address_and_coords,
     upsert_override,
 )
-from app.google_maps import geocode_address
+from app.google_maps import geocode_address, estimate_walk_minutes
 from app.weather import get_commute_weather
-from app.service import calculate_departure_time, estimate_commute_minutes
+from app.service import calculate_departure_time, estimate_commute_minutes, get_bus_realtime_snapshot
 
 router = APIRouter()
 
@@ -272,6 +280,10 @@ async def line_webhook(
     body = await request.body()
 
     if not verify_line_signature(body, x_line_signature):
+        print(
+            f"[signature] invalid | has_header={bool(x_line_signature)} "
+            f"| secret_len={len(LINE_CHANNEL_SECRET)} | body_len={len(body)}"
+        )
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     payload = json.loads(body.decode("utf-8"))
@@ -468,6 +480,7 @@ async def line_webhook(
 
                 weather_info = await get_commute_weather(profile)
                 weather_buffer = weather_info.get("extra_buffer_minutes", 0)
+                bus_snapshot = await get_bus_realtime_snapshot(profile)
 
                 departure_time = await calculate_departure_time(
                     profile,
@@ -513,19 +526,199 @@ async def line_webhook(
                     f"wx={weather_text}, pop={pop}, buffer={weather_buffer}"
                 )
 
+                bus_lines = []
+
+                if bus_snapshot.get("available"):
+                    first_stop = bus_snapshot["first_stop"]
+                    walk_minutes = bus_snapshot.get("walk_minutes")
+                    arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
+                    chosen_bus = bus_snapshot.get("chosen_bus")
+                    valid_eta_list = bus_snapshot.get("valid_eta_list", [])
+
+                    bus_lines.append(f"最近站牌：{first_stop['stop_name']}")
+
+                    if walk_minutes is not None:
+                        bus_lines.append(f"步行到站牌：約 {walk_minutes} 分鐘")
+
+                    if arrival_at_stop_min is not None:
+                        bus_lines.append(f"預估抵達站牌時間：約 {arrival_at_stop_min} 分鐘後")
+
+                    if chosen_bus:
+                        chosen_label = chosen_bus["route_name"]
+                        if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
+                            chosen_label += f"({chosen_bus['subroute_name']})"
+
+                        bus_lines.append(
+                            f"目前最有機會趕上的車：{chosen_label}，約 {chosen_bus['eta_min']} 分鐘後到站"
+                        )
+                    else:
+                        bus_lines.append("目前清單中沒有明確能趕上的即時班次")
+
+                    if valid_eta_list:
+                        bus_lines.append("即時班次：")
+                        for eta in valid_eta_list[:3]:
+                            route_label = eta["route_name"]
+                            if eta.get("subroute_name") and eta["subroute_name"] != eta["route_name"]:
+                                route_label += f"({eta['subroute_name']})"
+
+                            eta_text = (
+                                f"{eta['eta_min']} 分鐘"
+                                if eta["eta_min"] is not None
+                                else "無即時時間"
+                            )
+                            bus_lines.append(f"{route_label}：{eta_text}")
+                else:
+                    bus_lines.append("即時公車資訊：目前無法取得")
+                
+                reply_parts = [
+                    "今日通勤建議：",
+                    f"到公司時間：{effective_arrival_time}",
+                    f"建議出門時間：{departure_time}",
+                    "建議方式：目前以 Google 大眾運輸估算為主",
+                    f"預估通勤時間：{estimated_minutes} 分鐘",
+                    f"今日天氣：{weather_line}",
+                    f"降雨機率：{rain_line}",
+                    f"說明：{note}",
+                    f"提醒：{buffer_note}",
+                    "",
+                ] + bus_lines
+
                 await reply_text(
                     reply_token,
-                    "今日通勤建議：\n"
-                    f"到公司時間：{effective_arrival_time}\n"
-                    f"建議出門時間：{departure_time}\n"
-                    "建議方式：目前以 Google 大眾運輸估算為主\n"
-                    f"預估通勤時間：{estimated_minutes} 分鐘\n"
-                    f"今日天氣：{weather_line}\n"
-                    f"降雨機率：{rain_line}\n"
-                    f"說明：{note}\n"
-                    f"提醒：{buffer_note}"
+                    "\n".join(reply_parts)
                 )
-                continue
+
+            if user_text == "測試公車":
+                    profile = get_profile(db, user.id)
+                    next_step = get_next_setup_step(profile)
+
+                    if next_step is not None:
+                        set_pending_field(db, user.id, next_step)
+                        await reply_text(
+                            reply_token,
+                            "請先完成基本設定。\n"
+                            f"{FIELD_PROMPTS[next_step]}"
+                        )
+                        continue
+
+                    if not profile.home_lat or not profile.home_lng or not profile.home_city:
+                        await reply_text(
+                            reply_token,
+                            "目前缺少住家座標或城市資料，請先重新設定住家位置。"
+                        )
+                        continue
+
+                    try:
+                        nearby_raw = await get_nearby_stops(
+                            city_name=profile.home_city,
+                            lat=profile.home_lat,
+                            lng=profile.home_lng,
+                            distance_m=500,
+                            top=8,
+                        )
+                        nearby_stops = simplify_stop_list(nearby_raw)
+                        nearby_stops = dedupe_stops_by_name(nearby_stops)
+
+                        if not nearby_stops:
+                            await reply_text(
+                                reply_token,
+                                "附近查不到公車站牌。"
+                            )
+                            continue
+
+                        first_stop = nearby_stops[0]
+
+                        walk_minutes = None
+                        if first_stop.get("lat") is not None and first_stop.get("lng") is not None:
+                            walk_minutes = await estimate_walk_minutes(
+                                profile.home_lat,
+                                profile.home_lng,
+                                first_stop["lat"],
+                                first_stop["lng"],
+                            )
+
+                        eta_raw = await get_estimated_arrivals(
+                            city_name=profile.home_city,
+                            stop_id=first_stop["stop_id"],
+                            top=20,
+                        )
+                        eta_list = simplify_eta_list(eta_raw)
+
+                        chosen_bus, valid_eta_list = choose_catchable_bus(
+                            eta_list=eta_list,
+                            walk_minutes=walk_minutes,
+                            safety_buffer_min=1,
+                        )
+
+                        message_lines = ["附近站牌測試："]
+                        for idx, stop in enumerate(nearby_stops[:5], start=1):
+                            message_lines.append(
+                                f"{idx}. {stop['stop_name']} | stop_id={stop['stop_id']} | uid={stop['stop_uid']}"
+                            )
+
+                        message_lines.append("")
+                        message_lines.append(f"最近站牌：{first_stop['stop_name']}")
+
+                        if walk_minutes is not None:
+                            message_lines.append(f"步行到站牌時間：約 {walk_minutes} 分鐘")
+                        else:
+                            message_lines.append("步行到站牌時間：無法估算")
+
+                        message_lines.append("安全緩衝：1 分鐘")
+
+                        if walk_minutes is not None:
+                            message_lines.append(f"預估抵達站牌時間：約 {walk_minutes + 1} 分鐘後")
+
+                        message_lines.append("")
+                        message_lines.append(f"最近站牌 ETA 測試：{first_stop['stop_name']}")
+
+                        added = 0
+                        for eta in valid_eta_list:
+                            eta_text = (
+                                f"{eta['eta_min']} 分鐘"
+                                if eta["eta_min"] is not None
+                                else "無即時時間"
+                            )
+
+                            route_label = eta["route_name"]
+                            if eta.get("subroute_name") and eta["subroute_name"] != eta["route_name"]:
+                                route_label += f"({eta['subroute_name']})"
+
+                            message_lines.append(
+                                f"{route_label}：{eta_text} | direction={eta.get('direction')}"
+                            )
+                            added += 1
+
+                            if added >= 5:
+                                break
+
+                        message_lines.append("")
+
+                        if chosen_bus:
+                            chosen_label = chosen_bus["route_name"]
+                            if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
+                                chosen_label += f"({chosen_bus['subroute_name']})"
+
+                            message_lines.append(
+                                f"你目前最有機會趕上的車：{chosen_label}，約 {chosen_bus['eta_min']} 分鐘後到站"
+                            )
+                        else:
+                            message_lines.append("目前清單中沒有明確能趕上的即時班次")
+
+                        await reply_text(
+                            reply_token,
+                            "\n".join(message_lines)
+                        )
+                        continue
+
+                    except Exception as e:
+                        print(f"[bus-test] failed: {e}")
+                        await reply_text(
+                            reply_token,
+                            f"測試公車失敗：{e}"
+                        )
+                        continue
+
 
             # 7. 明天幾點出門
             if user_text == "明天幾點出門":
