@@ -292,3 +292,261 @@ async def get_metro_snapshot(profile):
         "distance_km": nearest.get("distance_km"),
         "walk_minutes": walk_minutes,
     }
+
+from datetime import date
+
+
+def build_commute_option_template():
+    return {
+        "mode": None,
+        "available": False,
+        "catchable": False,
+        "summary": "",
+        "reason": "",
+        "walk_minutes": 0,
+        "wait_minutes": 0,
+        "transfer_minutes": 0,
+        "weather_buffer_minutes": 0,
+        "reliability_penalty_minutes": 0,
+        "baseline_minutes": 0,
+        "total_effective_minutes": 0,
+        "snapshot": {},
+    }
+
+
+async def build_bus_option(profile, baseline_minutes: int, weather_buffer_minutes: int):
+    option = build_commute_option_template()
+    option["mode"] = "bus"
+    option["baseline_minutes"] = baseline_minutes
+    option["weather_buffer_minutes"] = weather_buffer_minutes
+
+    bus_snapshot = await get_bus_realtime_snapshot(profile)
+    option["snapshot"] = bus_snapshot
+
+    if not bus_snapshot.get("available"):
+        option["reason"] = "bus_unavailable"
+        option["summary"] = "目前無法取得可用公車資訊"
+        return option
+
+    walk_minutes = bus_snapshot.get("walk_minutes") or 0
+    chosen_bus = bus_snapshot.get("chosen_bus")
+
+    if not chosen_bus or chosen_bus.get("eta_min") is None:
+        option["reason"] = "no_catchable_bus"
+        option["summary"] = "目前沒有明確趕得上的即時公車"
+        return option
+
+    wait_minutes = max(chosen_bus["eta_min"] - walk_minutes - 1, 0)
+    reliability_penalty = 3
+
+    option["available"] = True
+    option["catchable"] = True
+    option["walk_minutes"] = walk_minutes
+    option["wait_minutes"] = wait_minutes
+    option["reliability_penalty_minutes"] = reliability_penalty
+    option["total_effective_minutes"] = (
+        baseline_minutes
+        + weather_buffer_minutes
+        + reliability_penalty
+    )
+    option["reason"] = "catchable_bus_available"
+
+    route_label = chosen_bus["route_name"]
+    if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
+        route_label += f"({chosen_bus['subroute_name']})"
+
+    first_stop = bus_snapshot.get("first_stop", {})
+    option["summary"] = (
+        f"可搭上公車 {route_label}，"
+        f"最近站牌 {first_stop.get('stop_name', '未知站牌')}，"
+        f"步行約 {walk_minutes} 分鐘，"
+        f"等車約 {wait_minutes} 分鐘。"
+    )
+
+    return option
+
+
+async def build_metro_option(profile, baseline_minutes: int, weather_buffer_minutes: int):
+    option = build_commute_option_template()
+    option["mode"] = "metro"
+    option["baseline_minutes"] = baseline_minutes
+    option["weather_buffer_minutes"] = weather_buffer_minutes
+
+    metro_snapshot = await get_metro_snapshot(profile)
+    option["snapshot"] = metro_snapshot
+
+    if not metro_snapshot.get("available"):
+        option["reason"] = "metro_unavailable"
+        option["summary"] = "目前無法取得可用捷運資訊"
+        return option
+
+    walk_minutes = metro_snapshot.get("walk_minutes") or 0
+    wait_minutes = 3
+    transfer_minutes = 2
+    reliability_penalty = 1
+
+    option["available"] = True
+    option["catchable"] = True
+    option["walk_minutes"] = walk_minutes
+    option["wait_minutes"] = wait_minutes
+    option["transfer_minutes"] = transfer_minutes
+    option["reliability_penalty_minutes"] = reliability_penalty
+    option["total_effective_minutes"] = (
+        baseline_minutes
+        + weather_buffer_minutes
+        + reliability_penalty
+    )
+    option["reason"] = "metro_available"
+
+    station = metro_snapshot.get("station", {})
+    option["summary"] = (
+        f"可改搭捷運，最近捷運站 {station.get('name', '未知站名')}，"
+        f"步行約 {walk_minutes} 分鐘。"
+    )
+
+    return option
+
+
+async def build_bus_to_metro_option(profile, baseline_minutes: int, weather_buffer_minutes: int):
+    option = build_commute_option_template()
+    option["mode"] = "bus_to_metro"
+    option["baseline_minutes"] = baseline_minutes
+    option["weather_buffer_minutes"] = weather_buffer_minutes
+
+    bus_snapshot = await get_bus_realtime_snapshot(profile)
+    metro_snapshot = await get_metro_snapshot(profile)
+
+    option["snapshot"] = {
+        "bus_snapshot": bus_snapshot,
+        "metro_snapshot": metro_snapshot,
+    }
+
+    if not bus_snapshot.get("available"):
+        option["reason"] = "bus_unavailable"
+        option["summary"] = "第一段公車不可用"
+        return option
+
+    if not metro_snapshot.get("available"):
+        option["reason"] = "metro_unavailable"
+        option["summary"] = "第二段捷運不可用"
+        return option
+
+    chosen_bus = bus_snapshot.get("chosen_bus")
+    if not chosen_bus or chosen_bus.get("eta_min") is None:
+        option["reason"] = "no_catchable_bus"
+        option["summary"] = "目前沒有可銜接捷運的第一段公車"
+        return option
+
+    bus_walk_minutes = bus_snapshot.get("walk_minutes") or 0
+    bus_wait_minutes = max(chosen_bus["eta_min"] - bus_walk_minutes - 1, 0)
+    transfer_minutes = 5
+    reliability_penalty = 2
+
+    option["available"] = True
+    option["catchable"] = True
+    option["walk_minutes"] = bus_walk_minutes
+    option["wait_minutes"] = bus_wait_minutes
+    option["transfer_minutes"] = transfer_minutes
+    option["reliability_penalty_minutes"] = reliability_penalty
+    option["total_effective_minutes"] = (
+        baseline_minutes
+        + weather_buffer_minutes
+        + reliability_penalty
+    )
+    option["reason"] = "catchable_bus_then_transfer_metro"
+
+    route_label = chosen_bus["route_name"]
+    if chosen_bus.get("subroute_name") and chosen_bus["subroute_name"] != chosen_bus["route_name"]:
+        route_label += f"({chosen_bus['subroute_name']})"
+
+    station = metro_snapshot.get("station", {})
+    option["summary"] = (
+        f"可先搭公車 {route_label} 再轉捷運，"
+        f"公車步行約 {bus_walk_minutes} 分鐘，"
+        f"等車約 {bus_wait_minutes} 分鐘，"
+        f"轉乘捷運站參考 {station.get('name', '未知站名')}。"
+    )
+
+    return option
+
+
+async def choose_best_commute_option(profile, effective_arrival_time: str, weather_buffer_minutes: int):
+    baseline_minutes = await estimate_commute_minutes(
+        profile,
+        date.today(),
+        effective_arrival_time,
+    )
+
+    bus_option = await build_bus_option(
+        profile,
+        baseline_minutes=baseline_minutes,
+        weather_buffer_minutes=weather_buffer_minutes,
+    )
+    metro_option = await build_metro_option(
+        profile,
+        baseline_minutes=baseline_minutes,
+        weather_buffer_minutes=weather_buffer_minutes,
+    )
+    bus_to_metro_option = await build_bus_to_metro_option(
+        profile,
+        baseline_minutes=baseline_minutes,
+        weather_buffer_minutes=weather_buffer_minutes,
+    )
+
+    all_options = [bus_option, metro_option, bus_to_metro_option]
+    available_options = [opt for opt in all_options if opt["available"]]
+
+    if not available_options:
+        return {
+            "best_option": {
+                "mode": "unknown",
+                "available": False,
+                "summary": "目前無法明確判斷最佳通勤方式",
+                "reason": "no_available_options",
+                "total_effective_minutes": baseline_minutes + weather_buffer_minutes,
+            },
+            "all_options": all_options,
+            "baseline_minutes": baseline_minutes,
+        }
+
+    available_options.sort(key=lambda x: x["total_effective_minutes"])
+    best_option = available_options[0]
+
+    return {
+        "best_option": best_option,
+        "all_options": all_options,
+        "baseline_minutes": baseline_minutes,
+    }
+
+async def choose_commute_option_with_override(
+    profile,
+    effective_arrival_time: str,
+    weather_buffer_minutes: int,
+    mode_override: str | None,
+):
+    option_result = await choose_best_commute_option(
+        profile,
+        effective_arrival_time=effective_arrival_time,
+        weather_buffer_minutes=weather_buffer_minutes,
+    )
+
+    all_options = option_result["all_options"]
+    best_option = option_result["best_option"]
+
+    if not mode_override or mode_override == "auto":
+        return {
+            "best_option": best_option,
+            "selection_source": "auto",
+        }
+
+    for option in all_options:
+        if option.get("mode") == mode_override and option.get("available"):
+            return {
+                "best_option": option,
+                "selection_source": "manual",
+            }
+
+    return {
+        "best_option": best_option,
+        "selection_source": "fallback_auto",
+    }
