@@ -346,6 +346,22 @@ async def line_webhook(
                         lng=lng,
                     )
 
+                    update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
+                    set_pending_field(db, user.id, "preferred_arrival_time")
+
+                    check_profile = get_profile(db, user.id)
+                    print(
+                        f"[setup] office saved | office_address={check_profile.office_address} | "
+                        f"pending_field={check_profile.pending_field}"
+                    )
+
+                    await reply_text(
+                        reply_token,
+                        "已儲存公司位置。\n"
+                        f"{FIELD_PROMPTS['preferred_arrival_time']}"
+                    )
+                    continue
+
                     # 暫時先設 0，之後再改成系統自動算步行到站牌時間
                     update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
 
@@ -686,25 +702,21 @@ async def line_webhook(
                     )
                     continue
 
-                update_profile_field(db, user.id, current_step, value)
+                update_profile_field(db, user.id, "preferred_arrival_time", value)
+                set_pending_field(db, user.id, None)
 
                 updated_profile = get_profile(db, user.id)
-                next_step = get_next_setup_step(updated_profile)
 
-                if next_step is None:
-                    set_pending_field(db, user.id, None)
-                    await reply_text(
-                        reply_token,
-                        f"已儲存{FIELD_LABELS[current_step]}。\n\n"
-                        f"{format_profile_text(updated_profile, tomorrow_override_time)}"
-                    )
-                    continue
+                print(
+                    f"[setup] arrival saved | office_address={updated_profile.office_address} | "
+                    f"preferred_arrival_time={updated_profile.preferred_arrival_time} | "
+                    f"pending_field={updated_profile.pending_field}"
+                )
 
-                set_pending_field(db, user.id, next_step)
                 await reply_text(
                     reply_token,
-                    f"已儲存{FIELD_LABELS[current_step]}。\n"
-                    f"{FIELD_PROMPTS[next_step]}"
+                    f"已儲存到公司時間：{value}\n\n"
+                    f"{format_profile_text(updated_profile, tomorrow_override_time)}"
                 )
                 continue
 

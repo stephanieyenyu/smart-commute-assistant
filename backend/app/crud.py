@@ -124,16 +124,17 @@ def update_address_and_coords(
     db.refresh(profile)
     return profile
 
-
 def get_next_setup_step(profile: CommuteProfile | None):
     if profile is None:
         return "home_location"
 
-    if not profile.home_address:
+    if profile.home_address is None or not str(profile.home_address).strip():
         return "home_location"
-    if not profile.office_address:
+
+    if profile.office_address is None or not str(profile.office_address).strip():
         return "office_location"
-    if not profile.preferred_arrival_time:
+
+    if profile.preferred_arrival_time is None or not str(profile.preferred_arrival_time).strip():
         return "preferred_arrival_time"
 
     return None
