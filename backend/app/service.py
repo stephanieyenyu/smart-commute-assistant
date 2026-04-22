@@ -347,6 +347,7 @@ async def build_bus_option(profile, baseline_minutes: int, weather_buffer_minute
     option["total_effective_minutes"] = (
         baseline_minutes
         + weather_buffer_minutes
+        + wait_minutes
         + reliability_penalty
     )
     option["reason"] = "catchable_bus_available"
@@ -394,6 +395,8 @@ async def build_metro_option(profile, baseline_minutes: int, weather_buffer_minu
     option["total_effective_minutes"] = (
         baseline_minutes
         + weather_buffer_minutes
+        + wait_minutes
+        + transfer_minutes
         + reliability_penalty
     )
     option["reason"] = "metro_available"
@@ -451,6 +454,8 @@ async def build_bus_to_metro_option(profile, baseline_minutes: int, weather_buff
     option["total_effective_minutes"] = (
         baseline_minutes
         + weather_buffer_minutes
+        + bus_wait_minutes
+        + transfer_minutes
         + reliability_penalty
     )
     option["reason"] = "catchable_bus_then_transfer_metro"
@@ -549,4 +554,253 @@ async def choose_commute_option_with_override(
     return {
         "best_option": best_option,
         "selection_source": "fallback_auto",
+    }
+
+from datetime import datetime, timedelta, date
+
+
+def _combine_date_hhmm(target_date: date, hhmm: str) -> datetime:
+    t = datetime.strptime(hhmm, "%H:%M").time()
+    return datetime.combine(target_date, t)
+
+
+async def calculate_departure_time_by_mode(
+    profile,
+    target_date: date,
+    effective_arrival_time: str,
+    weather_buffer_minutes: int,
+    best_option: dict,
+):
+    baseline_minutes = await estimate_commute_minutes(
+        profile,
+        target_date,
+        effective_arrival_time,
+    )
+
+    arrival_dt = _combine_date_hhmm(target_date, effective_arrival_time)
+
+    mode = best_option.get("mode", "unknown")
+    mode_extra_minutes = 0
+    mode_note = "目前先以基礎通勤估算為主"
+
+    if mode == "bus":
+        wait_minutes = best_option.get("wait_minutes", 0) or 0
+        reliability_penalty = best_option.get("reliability_penalty_minutes", 3) or 0
+        mode_extra_minutes = wait_minutes + reliability_penalty
+        mode_note = f"已加入公車等待 {wait_minutes} 分鐘與公車穩定緩衝 {reliability_penalty} 分鐘"
+
+    elif mode == "metro":
+        wait_minutes = best_option.get("wait_minutes", 0) or 0
+        transfer_minutes = best_option.get("transfer_minutes", 0) or 0
+        reliability_penalty = best_option.get("reliability_penalty_minutes", 1) or 0
+        mode_extra_minutes = wait_minutes + transfer_minutes + reliability_penalty
+        mode_note = f"已加入捷運等待 {wait_minutes} 分鐘、進站/轉乘緩衝 {transfer_minutes} 分鐘與穩定緩衝 {reliability_penalty} 分鐘"
+
+    elif mode == "bus_to_metro":
+        wait_minutes = best_option.get("wait_minutes", 0) or 0
+        transfer_minutes = best_option.get("transfer_minutes", 0) or 0
+        reliability_penalty = best_option.get("reliability_penalty_minutes", 2) or 0
+        mode_extra_minutes = wait_minutes + transfer_minutes + reliability_penalty
+        mode_note = f"已加入第一段公車等待 {wait_minutes} 分鐘、轉乘緩衝 {transfer_minutes} 分鐘與混合方案緩衝 {reliability_penalty} 分鐘"
+
+    total_minutes = baseline_minutes + weather_buffer_minutes + mode_extra_minutes
+    departure_dt = arrival_dt - timedelta(minutes=total_minutes)
+    departure_time = departure_dt.strftime("%H:%M")
+
+    realtime_info = {
+        "used_realtime_adjustment": False,
+        "reason": "not_applied",
+        "latest_leave_time": None,
+    }
+
+    # 只有今天 + 公車模式，才額外套即時公車修正
+    if mode == "bus" and target_date == date.today():
+        try:
+            bus_snapshot = best_option.get("snapshot", {}) or await get_bus_realtime_snapshot(profile)
+            realtime_info = choose_departure_time_with_realtime_bus(
+                baseline_departure_time=departure_time,
+                bus_snapshot=bus_snapshot,
+            )
+            departure_time = realtime_info.get("final_departure_time", departure_time)
+        except Exception:
+            import traceback
+            print("[mode-departure] bus realtime adjustment failed")
+            print(traceback.format_exc())
+
+    return {
+        "departure_time": departure_time,
+        "baseline_minutes": baseline_minutes,
+        "mode_extra_minutes": mode_extra_minutes,
+        "total_minutes": total_minutes,
+        "mode_note": mode_note,
+        "realtime_info": realtime_info,
+    }
+
+from datetime import date
+
+from app.crud import (
+    get_profile,
+    get_next_setup_step,
+    get_override_for_date,
+    get_transport_mode_override,
+)
+
+
+REMINDER_MODE_LABELS = {
+    "bus": "公車優先",
+    "metro": "建議改搭捷運",
+    "bus_to_metro": "建議公車轉捷運",
+    "unknown": "目前無法明確判斷",
+}
+
+REMINDER_SELECTION_SOURCE_LABELS = {
+    "auto": "系統自動幫你選擇",
+    "manual": "已依照你今天指定的交通方式計算",
+    "fallback_auto": "你今天指定的交通方式目前不適合，所以改用系統自動幫你選擇",
+}
+
+REMINDER_TRANSPORT_MODE_NAME_MAP = {
+    None: "未指定，系統自動判斷",
+    "auto": "自動判斷",
+    "bus": "公車優先",
+    "metro": "捷運優先",
+    "bus_to_metro": "公車轉捷運",
+}
+
+
+async def build_today_reminder_payload(db, user_id: int, target_date: date | None = None):
+    if target_date is None:
+        target_date = date.today()
+
+    profile = get_profile(db, user_id)
+    next_step = get_next_setup_step(profile)
+
+    if next_step is not None:
+        return {
+            "ok": False,
+            "reason": "setup_incomplete",
+            "next_step": next_step,
+            "text": None,
+        }
+
+    effective_arrival_time = profile.preferred_arrival_time
+    override = get_override_for_date(db, user_id, target_date)
+    if override and override.target_arrival_time:
+        effective_arrival_time = override.target_arrival_time
+
+    weather_info = await get_commute_weather(profile)
+    weather_buffer = weather_info.get("extra_buffer_minutes", 0)
+
+    mode_override = get_transport_mode_override(db, user_id, target_date)
+
+    option_choice = await choose_commute_option_with_override(
+        profile,
+        effective_arrival_time=effective_arrival_time,
+        weather_buffer_minutes=weather_buffer,
+        mode_override=mode_override,
+    )
+
+    best_option = option_choice.get("best_option", {}) or {}
+    selection_source = option_choice.get("selection_source", "auto")
+
+    departure_calc = await calculate_departure_time_by_mode(
+        profile=profile,
+        target_date=target_date,
+        effective_arrival_time=effective_arrival_time,
+        weather_buffer_minutes=weather_buffer,
+        best_option=best_option,
+    )
+
+    final_departure_time = departure_calc["departure_time"]
+    mode_note = departure_calc.get("mode_note", "目前先以基礎通勤估算為主")
+
+    recommended_mode = best_option.get("mode", "unknown")
+    mode_text = REMINDER_MODE_LABELS.get(recommended_mode, "目前無法明確判斷")
+    option_summary = best_option.get("summary", "目前先以基礎通勤估算為主")
+
+    weather_text = weather_info.get("weather_text", "未知")
+    pop = weather_info.get("pop")
+    min_t = weather_info.get("temperature_min")
+    max_t = weather_info.get("temperature_max")
+    temperature = weather_info.get("temperature")
+
+    weather_line = weather_text
+    if temperature is not None:
+        weather_line += f"，{temperature}°C"
+    elif min_t is not None and max_t is not None:
+        weather_line += f"，{min_t}-{max_t}°C"
+
+    if pop is not None:
+        weather_line += f"，降雨機率 {pop}%"
+
+    selection_source_text = REMINDER_SELECTION_SOURCE_LABELS.get(selection_source, selection_source)
+    mode_override_text = REMINDER_TRANSPORT_MODE_NAME_MAP.get(mode_override, mode_override)
+
+    reminder_lines = [
+        "出門提醒：",
+        f"你今天建議於 {final_departure_time} 出門",
+        f"建議方式：{mode_text}",
+        f"到公司時間：{effective_arrival_time}",
+        f"方案摘要：{option_summary}",
+        f"出門時間依據：{mode_note}",
+        f"今日模式設定：{mode_override_text}",
+        f"套用方式：{selection_source_text}",
+        f"今天天氣：{weather_line}",
+    ]
+
+    if recommended_mode == "bus":
+        bus_data = best_option.get("snapshot", {}) or {}
+        first_stop = bus_data.get("first_stop", {}) or {}
+        chosen_bus = bus_data.get("chosen_bus")
+        walk_minutes = bus_data.get("walk_minutes")
+
+        if first_stop:
+            reminder_lines.append(f"最近站牌：{first_stop.get('stop_name', '未知站牌')}")
+        if walk_minutes is not None:
+            reminder_lines.append(f"步行到站牌：約 {walk_minutes} 分鐘")
+        if chosen_bus and chosen_bus.get("eta_min") is not None:
+            bus_label = chosen_bus.get("route_name", "未知路線")
+            subroute_name = chosen_bus.get("subroute_name")
+            if subroute_name and subroute_name != chosen_bus.get("route_name"):
+                bus_label += f"({subroute_name})"
+            reminder_lines.append(f"可搭班次：{bus_label}，約 {chosen_bus['eta_min']} 分鐘後到站")
+
+    elif recommended_mode == "metro":
+        metro_data = best_option.get("snapshot", {}) or {}
+        station = metro_data.get("station", {}) or {}
+        walk_minutes = metro_data.get("walk_minutes")
+
+        if station:
+            reminder_lines.append(f"最近捷運站：{station.get('name', '未知站名')}")
+        if walk_minutes is not None:
+            reminder_lines.append(f"步行到捷運站：約 {walk_minutes} 分鐘")
+
+    elif recommended_mode == "bus_to_metro":
+        mixed_data = best_option.get("snapshot", {}) or {}
+        bus_data = mixed_data.get("bus_snapshot", {}) or {}
+        metro_data = mixed_data.get("metro_snapshot", {}) or {}
+
+        first_stop = bus_data.get("first_stop", {}) or {}
+        chosen_bus = bus_data.get("chosen_bus")
+        bus_walk_minutes = bus_data.get("walk_minutes")
+        station = metro_data.get("station", {}) or {}
+
+        if first_stop:
+            reminder_lines.append(f"第一段公車站牌：{first_stop.get('stop_name', '未知站牌')}")
+        if bus_walk_minutes is not None:
+            reminder_lines.append(f"步行到公車站：約 {bus_walk_minutes} 分鐘")
+        if chosen_bus and chosen_bus.get("eta_min") is not None:
+            bus_label = chosen_bus.get("route_name", "未知路線")
+            subroute_name = chosen_bus.get("subroute_name")
+            if subroute_name and subroute_name != chosen_bus.get("route_name"):
+                bus_label += f"({subroute_name})"
+            reminder_lines.append(f"第一段公車：{bus_label}，約 {chosen_bus['eta_min']} 分鐘後到站")
+        if station:
+            reminder_lines.append(f"轉乘捷運：{station.get('name', '未知站名')}")
+
+    return {
+        "ok": True,
+        "departure_time": final_departure_time,
+        "recommended_mode": recommended_mode,
+        "text": "\n".join(reminder_lines),
     }
