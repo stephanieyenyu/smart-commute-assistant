@@ -1,4 +1,4 @@
-﻿from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date, DateTime, UniqueConstraint
+﻿from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date, DateTime, UniqueConstraint, Boolean, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -22,7 +22,6 @@ class CommuteProfile(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, index=True, nullable=False)
 
-    # 住家
     home_address = Column(String, nullable=True)
     home_lat = Column(Float, nullable=True)
     home_lng = Column(Float, nullable=True)
@@ -30,7 +29,6 @@ class CommuteProfile(Base):
     home_township = Column(String, nullable=True)
     home_place_name = Column(String, nullable=True)
 
-    # 公司
     office_address = Column(String, nullable=True)
     office_lat = Column(Float, nullable=True)
     office_lng = Column(Float, nullable=True)
@@ -38,27 +36,26 @@ class CommuteProfile(Base):
     office_township = Column(String, nullable=True)
     office_place_name = Column(String, nullable=True)
 
-    # 公車站
     selected_bus_stop_id = Column(String, nullable=True)
     selected_bus_stop_name = Column(String, nullable=True)
     selected_bus_stop_lat = Column(Float, nullable=True)
     selected_bus_stop_lng = Column(Float, nullable=True)
 
-    # 捷運站
     selected_metro_station_id = Column(String, nullable=True)
     selected_metro_station_name = Column(String, nullable=True)
     selected_metro_station_lat = Column(Float, nullable=True)
     selected_metro_station_lng = Column(Float, nullable=True)
 
-    # 步行 / 計算
     last_computed_walk_to_bus_stop_min = Column(Integer, nullable=True)
     last_computed_walk_to_metro_min = Column(Integer, nullable=True)
     walk_to_bus_stop_min = Column(Integer, nullable=True)
 
-    # 偏好 / 流程
     preferred_arrival_time = Column(String, nullable=True)
     preferred_mode = Column(String, nullable=True)
     pending_field = Column(String, nullable=True)
+
+    # 第二階段會用到
+    reminder_enabled = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -76,12 +73,14 @@ class CommuteOverride(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     target_date = Column(Date, index=True, nullable=False)
 
-    # 當日 / 次日臨時覆蓋到公司時間
     target_arrival_time = Column(String, nullable=True)
-
-    # 當日交通方式覆蓋
-    # 可存: auto / bus / metro / bus_to_metro
     transport_mode_override = Column(String, nullable=True)
+
+    # 第一階段提醒凍結欄位
+    frozen_departure_time = Column(String, nullable=True)
+    frozen_reminder_text = Column(Text, nullable=True)
+    reminder_prepared_at = Column(DateTime(timezone=True), nullable=True)
+    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -2,6 +2,13 @@
 
 from app.google_maps import estimate_transit_minutes
 from app.metro_basic import get_nearest_metro_station
+from app.weather import get_commute_weather
+from app.crud import (
+    get_profile,
+    get_next_setup_step,
+    get_override_for_date,
+    get_transport_mode_override,
+)
 
 DEFAULT_COMMUTE_MINUTES = 35
 DEFAULT_BUFFER_MINUTES = 10
@@ -804,3 +811,15 @@ async def build_today_reminder_payload(db, user_id: int, target_date: date | Non
         "recommended_mode": recommended_mode,
         "text": "\n".join(reminder_lines),
     }
+
+from datetime import date, datetime, time, timedelta, timezone
+
+from app.google_maps import estimate_transit_minutes
+from app.metro_basic import get_nearest_metro_station
+from app.weather import get_commute_weather
+from app.crud import (
+    get_profile,
+    get_next_setup_step,
+    get_override_for_date,
+    get_transport_mode_override,
+)

@@ -1,4 +1,5 @@
-﻿from sqlalchemy.orm import Session
+﻿from datetime import datetime
+from sqlalchemy.orm import Session
 
 from app.models import User, CommuteProfile, CommuteOverride
 
@@ -20,7 +21,11 @@ def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
     if profile:
         return profile
 
-    profile = CommuteProfile(user_id=user_id, pending_field="home_location")
+    profile = CommuteProfile(
+        user_id=user_id,
+        pending_field="home_location",
+        reminder_enabled=True,
+    )
     db.add(profile)
     db.commit()
     db.refresh(profile)
@@ -95,7 +100,6 @@ def get_next_setup_step(profile: CommuteProfile) -> str | None:
 def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile = get_profile(db, user_id)
 
-    # 清空住家
     profile.home_address = None
     profile.home_lat = None
     profile.home_lng = None
@@ -103,7 +107,6 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile.home_township = None
     profile.home_place_name = None
 
-    # 清空公司
     profile.office_address = None
     profile.office_lat = None
     profile.office_lng = None
@@ -111,7 +114,6 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile.office_township = None
     profile.office_place_name = None
 
-    # 清空已選站點
     profile.selected_bus_stop_id = None
     profile.selected_bus_stop_name = None
     profile.selected_bus_stop_lat = None
@@ -122,17 +124,14 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile.selected_metro_station_lat = None
     profile.selected_metro_station_lng = None
 
-    # 清空計算欄位
     profile.last_computed_walk_to_bus_stop_min = None
     profile.last_computed_walk_to_metro_min = None
     profile.walk_to_bus_stop_min = None
 
-    # 保留 preferred_mode 也可以，這裡先清空
     profile.preferred_mode = None
-
-    # 重新走設定流程
     profile.preferred_arrival_time = None
     profile.pending_field = "home_location"
+    profile.reminder_enabled = True
 
     db.commit()
     db.refresh(profile)
@@ -146,55 +145,89 @@ def get_override_for_date(db: Session, user_id: int, target_date):
     ).first()
 
 
-def upsert_override(db: Session, user_id: int, target_date, target_arrival_time: str):
-    override = db.query(CommuteOverride).filter(
-        CommuteOverride.user_id == user_id,
-        CommuteOverride.target_date == target_date,
-    ).first()
-
+def get_or_create_override(db: Session, user_id: int, target_date):
+    override = get_override_for_date(db, user_id, target_date)
     if override:
-        override.target_arrival_time = target_arrival_time
-    else:
-        override = CommuteOverride(
-            user_id=user_id,
-            target_date=target_date,
-            target_arrival_time=target_arrival_time,
-        )
-        db.add(override)
+        return override
 
+    override = CommuteOverride(
+        user_id=user_id,
+        target_date=target_date,
+    )
+    db.add(override)
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def upsert_override(db: Session, user_id: int, target_date, target_arrival_time: str):
+    override = get_or_create_override(db, user_id, target_date)
+    override.target_arrival_time = target_arrival_time
     db.commit()
     db.refresh(override)
     return override
 
 
 def upsert_transport_mode_override(db: Session, user_id: int, target_date, mode: str):
-    override = db.query(CommuteOverride).filter(
-        CommuteOverride.user_id == user_id,
-        CommuteOverride.target_date == target_date,
-    ).first()
-
-    if override:
-        override.transport_mode_override = mode
-    else:
-        override = CommuteOverride(
-            user_id=user_id,
-            target_date=target_date,
-            transport_mode_override=mode,
-        )
-        db.add(override)
-
+    override = get_or_create_override(db, user_id, target_date)
+    override.transport_mode_override = mode
     db.commit()
     db.refresh(override)
     return override
 
 
 def get_transport_mode_override(db: Session, user_id: int, target_date):
-    override = db.query(CommuteOverride).filter(
-        CommuteOverride.user_id == user_id,
-        CommuteOverride.target_date == target_date,
-    ).first()
-
+    override = get_override_for_date(db, user_id, target_date)
     if not override:
         return None
-
     return override.transport_mode_override
+
+
+def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
+    profile = get_profile(db, user_id)
+    profile.reminder_enabled = enabled
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def get_reminder_enabled(db: Session, user_id: int) -> bool:
+    profile = get_profile(db, user_id)
+    return bool(profile.reminder_enabled)
+
+
+def save_frozen_reminder(
+    db: Session,
+    user_id: int,
+    target_date,
+    frozen_departure_time: str,
+    frozen_reminder_text: str,
+    prepared_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.frozen_departure_time = frozen_departure_time
+    override.frozen_reminder_text = frozen_reminder_text
+    override.reminder_prepared_at = prepared_at
+    override.reminder_sent_at = None
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_reminder_sent(db: Session, user_id: int, target_date, sent_at: datetime):
+    override = get_or_create_override(db, user_id, target_date)
+    override.reminder_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def clear_today_reminder_state_db(db: Session, user_id: int, target_date):
+    override = get_or_create_override(db, user_id, target_date)
+    override.frozen_departure_time = None
+    override.frozen_reminder_text = None
+    override.reminder_prepared_at = None
+    override.reminder_sent_at = None
+    db.commit()
+    db.refresh(override)
+    return override
