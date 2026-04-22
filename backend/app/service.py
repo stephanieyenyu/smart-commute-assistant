@@ -59,3 +59,71 @@ async def calculate_departure_time(
     )
 
     return departure_time.strftime("%H:%M")
+
+from app.google_maps import estimate_walk_minutes
+from app.tdx_bus import (
+    get_nearby_stops,
+    get_estimated_arrivals,
+    simplify_stop_list,
+    simplify_eta_list,
+    dedupe_stops_by_name,
+    choose_catchable_bus,
+)
+
+
+async def get_bus_realtime_snapshot(profile):
+    if not profile.home_lat or not profile.home_lng or not profile.home_city:
+        return {
+            "available": False,
+            "reason": "missing_home_location",
+        }
+
+    nearby_raw = await get_nearby_stops(
+        city_name=profile.home_city,
+        lat=profile.home_lat,
+        lng=profile.home_lng,
+        distance_m=500,
+        top=8,
+    )
+    nearby_stops = simplify_stop_list(nearby_raw)
+    nearby_stops = dedupe_stops_by_name(nearby_stops)
+
+    if not nearby_stops:
+        return {
+            "available": False,
+            "reason": "no_stops",
+        }
+
+    first_stop = nearby_stops[0]
+
+    walk_minutes = None
+    if first_stop.get("lat") is not None and first_stop.get("lng") is not None:
+        walk_minutes = await estimate_walk_minutes(
+            profile.home_lat,
+            profile.home_lng,
+            first_stop["lat"],
+            first_stop["lng"],
+        )
+
+    eta_raw = await get_estimated_arrivals(
+        city_name=profile.home_city,
+        stop_id=first_stop["stop_id"],
+        top=20,
+    )
+    eta_list = simplify_eta_list(eta_raw)
+
+    chosen_bus, valid_eta_list = choose_catchable_bus(
+        eta_list=eta_list,
+        walk_minutes=walk_minutes,
+        safety_buffer_min=1,
+    )
+
+    return {
+        "available": True,
+        "first_stop": first_stop,
+        "nearby_stops": nearby_stops,
+        "walk_minutes": walk_minutes,
+        "arrival_at_stop_min": (walk_minutes + 1) if walk_minutes is not None else None,
+        "chosen_bus": chosen_bus,
+        "valid_eta_list": valid_eta_list[:5],
+    }

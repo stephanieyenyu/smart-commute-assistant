@@ -201,3 +201,56 @@ async def estimate_transit_minutes(
 
     print(f"[routes] estimated_minutes={minutes}")
     return minutes
+
+async def estimate_walk_minutes(
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+):
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": "routes.duration",
+    }
+
+    body = {
+        "origin": {
+            "location": {
+                "latLng": {
+                    "latitude": origin_lat,
+                    "longitude": origin_lng,
+                }
+            }
+        },
+        "destination": {
+            "location": {
+                "latLng": {
+                    "latitude": dest_lat,
+                    "longitude": dest_lng,
+                }
+            }
+        },
+        "travelMode": "WALK",
+    }
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(ROUTES_URL, headers=headers, json=body)
+        response.raise_for_status()
+        data = response.json()
+
+    routes = data.get("routes", [])
+    if not routes:
+        print("[walk] no routes")
+        return None
+
+    duration_str = routes[0].get("duration")
+    if not duration_str or not duration_str.endswith("s"):
+        print(f"[walk] unexpected duration={duration_str}")
+        return None
+
+    seconds = float(duration_str[:-1])
+    minutes = round(seconds / 60)
+
+    print(f"[walk] estimated_minutes={minutes}")
+    return minutes
