@@ -1,106 +1,79 @@
-﻿import httpx
-from datetime import datetime, timezone
+﻿from datetime import datetime, timedelta, timezone
+import math
+
+import httpx
+
 from app.config import GOOGLE_MAPS_API_KEY
+from app.address_utils import (
+    normalize_city_name,
+    normalize_township_name,
+    extract_city_from_text,
+)
 
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
 
-def _normalize_city_name(name: str | None) -> str | None:
-    if not name:
+def _find_component(components: list[dict], target_types: list[str]) -> dict | None:
+    for component in components:
+        comp_types = component.get("types", [])
+        if any(t in comp_types for t in target_types):
+            return component
+    return None
+
+
+def _extract_city_from_components(components: list[dict]) -> str | None:
+    city_component = _find_component(components, ["administrative_area_level_1"])
+    if city_component:
+        city_value = city_component.get("long_name") or city_component.get("short_name")
+        return normalize_city_name(city_value)
+
+    locality_component = _find_component(components, ["locality"])
+    if locality_component:
+        city_value = locality_component.get("long_name") or locality_component.get("short_name")
+        return normalize_city_name(city_value)
+
+    return None
+
+
+def _extract_township_from_components(components: list[dict]) -> str | None:
+    township_targets = [
+        "administrative_area_level_2",
+        "administrative_area_level_3",
+        "sublocality_level_1",
+        "sublocality",
+        "locality",
+    ]
+
+    component = _find_component(components, township_targets)
+    if not component:
         return None
 
-    mapping = {
-        "台北市": "臺北市",
-        "台中市": "臺中市",
-        "台南市": "臺南市",
-        "台東縣": "臺東縣",
-        "Taipei City": "臺北市",
-        "New Taipei City": "新北市",
-        "Taoyuan City": "桃園市",
-        "Taichung City": "臺中市",
-        "Tainan City": "臺南市",
-        "Kaohsiung City": "高雄市",
-        "Keelung City": "基隆市",
-        "Hsinchu City": "新竹市",
-        "Chiayi City": "嘉義市",
-        "Hsinchu County": "新竹縣",
-        "Miaoli County": "苗栗縣",
-        "Changhua County": "彰化縣",
-        "Nantou County": "南投縣",
-        "Yunlin County": "雲林縣",
-        "Chiayi County": "嘉義縣",
-        "Pingtung County": "屏東縣",
-        "Yilan County": "宜蘭縣",
-        "Hualien County": "花蓮縣",
-        "Taitung County": "臺東縣",
-        "Penghu County": "澎湖縣",
-        "Kinmen County": "金門縣",
-        "Lienchiang County": "連江縣",
-    }
-    return mapping.get(name, name)
+    value = component.get("long_name") or component.get("short_name")
+    return normalize_township_name(value)
 
 
-def _normalize_township_name(name: str | None) -> str | None:
-    if not name:
+def _parse_duration_to_minutes(duration_str: str | None) -> int | None:
+    if not duration_str:
         return None
 
-    mapping = {
-        "Daan District": "大安區",
-        "Da’an District": "大安區",
-        "Shilin District": "士林區",
-        "Zhongshan District": "中山區",
-        "Songshan District": "松山區",
-        "Xinyi District": "信義區",
-        "Zhongzheng District": "中正區",
-        "Datong District": "大同區",
-        "Wanhua District": "萬華區",
-        "Neihu District": "內湖區",
-        "Nangang District": "南港區",
-        "Wenshan District": "文山區",
-        "Beitou District": "北投區",
-    }
-    return mapping.get(name, name)
+    try:
+        seconds = int(float(duration_str.replace("s", "").strip()))
+        return max(1, math.ceil(seconds / 60))
+    except Exception:
+        return None
 
 
-def _extract_city_and_township(address_components: list[dict]) -> tuple[str | None, str | None]:
-    city = None
-    township = None
-
-    for comp in address_components:
-        long_name = comp.get("long_name")
-        short_name = comp.get("short_name")
-        types = comp.get("types", [])
-
-        if city is None and "administrative_area_level_1" in types:
-            city = long_name or short_name
-
-        if township is None and (
-            "administrative_area_level_3" in types
-            or "sublocality_level_1" in types
-            or "locality" in types
-        ):
-            township = long_name or short_name
-
-    if township is None:
-        for comp in address_components:
-            long_name = comp.get("long_name")
-            short_name = comp.get("short_name")
-            types = comp.get("types", [])
-
-            if "administrative_area_level_2" in types:
-                candidate = long_name or short_name
-                if candidate:
-                    township = candidate
-                    break
-
-    city = _normalize_city_name(city)
-    township = _normalize_township_name(township)
-
-    return city, township
+def _ensure_taipei_tz(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone(timedelta(hours=8)))
+    return dt
 
 
-async def geocode_address(address: str):
+async def geocode_address(address: str) -> dict:
+    if not GOOGLE_MAPS_API_KEY:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY is missing")
+
     params = {
         "address": address,
         "key": GOOGLE_MAPS_API_KEY,
@@ -108,57 +81,83 @@ async def geocode_address(address: str):
         "region": "tw",
     }
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(8.0, connect=3.0),
+        verify=False,
+    ) as client:
         response = await client.get(GEOCODE_URL, params=params)
+        if response.status_code >= 400:
+            print(f"[geocode] failed status={response.status_code} body={response.text}")
         response.raise_for_status()
         data = response.json()
 
-    status = data.get("status")
-    if status != "OK":
-        print(f"[geocode] status={status}")
-        return None
-
     results = data.get("results", [])
     if not results:
-        print("[geocode] no results")
-        return None
+        raise ValueError("No geocoding result")
 
     first = results[0]
-    location = first["geometry"]["location"]
-    formatted_address = first.get("formatted_address")
-    address_components = first.get("address_components", [])
+    formatted_address = first.get("formatted_address") or address
+    geometry = first.get("geometry", {}).get("location", {})
+    lat = geometry.get("lat")
+    lng = geometry.get("lng")
+    components = first.get("address_components", [])
 
-    city, township = _extract_city_and_township(address_components)
+    city = (
+        _extract_city_from_components(components)
+        or extract_city_from_text(formatted_address)
+        or extract_city_from_text(address)
+    )
+    township = _extract_township_from_components(components)
+    place_name = first.get("formatted_address") or address
 
-    print(f"[geocode] address={address}")
-    print(f"[geocode] formatted_address={formatted_address}")
-    print(f"[geocode] city={city}, township={township}")
-
-    return {
+    result = {
         "formatted_address": formatted_address,
-        "lat": location["lat"],
-        "lng": location["lng"],
+        "lat": lat,
+        "lng": lng,
         "city": city,
         "township": township,
-        "place_name": formatted_address,
+        "place_name": place_name,
     }
+
+    print(
+        f"[geocode] address={address} | formatted_address={formatted_address} | "
+        f"city={city} | township={township}"
+    )
+    return result
 
 
 async def estimate_transit_minutes(
-    origin_lat: float,
-    origin_lng: float,
-    dest_lat: float,
-    dest_lng: float,
-    arrival_datetime: datetime,
-):
+    origin_lat: float | None = None,
+    origin_lng: float | None = None,
+    destination_lat: float | None = None,
+    destination_lng: float | None = None,
+    arrival_datetime: datetime | None = None,
+    **kwargs,
+) -> int:
+    if not GOOGLE_MAPS_API_KEY:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY is missing")
+
+    if origin_lat is None:
+        origin_lat = kwargs.get("home_lat") or kwargs.get("src_lat") or kwargs.get("orig_lat")
+    if origin_lng is None:
+        origin_lng = kwargs.get("home_lng") or kwargs.get("src_lng") or kwargs.get("orig_lng")
+    if destination_lat is None:
+        destination_lat = kwargs.get("office_lat") or kwargs.get("dest_lat")
+    if destination_lng is None:
+        destination_lng = kwargs.get("office_lng") or kwargs.get("dest_lng")
+    if arrival_datetime is None:
+        arrival_datetime = kwargs.get("arrival_time")
+
+    if None in [origin_lat, origin_lng, destination_lat, destination_lng, arrival_datetime]:
+        raise ValueError("estimate_transit_minutes missing required arguments")
+
+    arrival_datetime = _ensure_taipei_tz(arrival_datetime)
+
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "routes.duration",
+        "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
     }
-
-    if arrival_datetime.tzinfo is None:
-        arrival_datetime = arrival_datetime.replace(tzinfo=timezone.utc)
 
     body = {
         "origin": {
@@ -172,46 +171,65 @@ async def estimate_transit_minutes(
         "destination": {
             "location": {
                 "latLng": {
-                    "latitude": dest_lat,
-                    "longitude": dest_lng,
+                    "latitude": destination_lat,
+                    "longitude": destination_lng,
                 }
             }
         },
         "travelMode": "TRANSIT",
         "arrivalTime": arrival_datetime.isoformat(),
+        "languageCode": "zh-TW",
+        "units": "METRIC",
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(8.0, connect=3.0),
+        verify=False,
+    ) as client:
         response = await client.post(ROUTES_URL, headers=headers, json=body)
+        if response.status_code >= 400:
+            print(f"[routes] estimate failed: status={response.status_code} body={response.text}")
         response.raise_for_status()
         data = response.json()
 
     routes = data.get("routes", [])
     if not routes:
-        print("[routes] no routes")
-        return None
+        raise ValueError("No transit routes returned")
 
-    duration_str = routes[0].get("duration")
-    if not duration_str or not duration_str.endswith("s"):
-        print(f"[routes] unexpected duration={duration_str}")
-        return None
-
-    seconds = float(duration_str[:-1])
-    minutes = round(seconds / 60)
+    minutes = _parse_duration_to_minutes(routes[0].get("duration"))
+    if minutes is None:
+        raise ValueError("Invalid transit duration")
 
     print(f"[routes] estimated_minutes={minutes}")
     return minutes
 
-async def estimate_walk_minutes(
-    origin_lat: float,
-    origin_lng: float,
-    dest_lat: float,
-    dest_lng: float,
-):
+
+async def estimate_walking_minutes(
+    origin_lat: float | None = None,
+    origin_lng: float | None = None,
+    destination_lat: float | None = None,
+    destination_lng: float | None = None,
+    **kwargs,
+) -> int:
+    if not GOOGLE_MAPS_API_KEY:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY is missing")
+
+    if origin_lat is None:
+        origin_lat = kwargs.get("home_lat") or kwargs.get("src_lat") or kwargs.get("orig_lat")
+    if origin_lng is None:
+        origin_lng = kwargs.get("home_lng") or kwargs.get("src_lng") or kwargs.get("orig_lng")
+    if destination_lat is None:
+        destination_lat = kwargs.get("office_lat") or kwargs.get("dest_lat")
+    if destination_lng is None:
+        destination_lng = kwargs.get("office_lng") or kwargs.get("dest_lng")
+
+    if None in [origin_lat, origin_lng, destination_lat, destination_lng]:
+        raise ValueError("estimate_walking_minutes missing required arguments")
+
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "routes.duration",
+        "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
     }
 
     body = {
@@ -226,31 +244,33 @@ async def estimate_walk_minutes(
         "destination": {
             "location": {
                 "latLng": {
-                    "latitude": dest_lat,
-                    "longitude": dest_lng,
+                    "latitude": destination_lat,
+                    "longitude": destination_lng,
                 }
             }
         },
         "travelMode": "WALK",
+        "languageCode": "zh-TW",
+        "units": "METRIC",
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(8.0, connect=3.0),
+        verify=False,
+    ) as client:
         response = await client.post(ROUTES_URL, headers=headers, json=body)
+        if response.status_code >= 400:
+            print(f"[walk] estimate failed: status={response.status_code} body={response.text}")
         response.raise_for_status()
         data = response.json()
 
     routes = data.get("routes", [])
     if not routes:
-        print("[walk] no routes")
-        return None
+        raise ValueError("No walking routes returned")
 
-    duration_str = routes[0].get("duration")
-    if not duration_str or not duration_str.endswith("s"):
-        print(f"[walk] unexpected duration={duration_str}")
-        return None
-
-    seconds = float(duration_str[:-1])
-    minutes = round(seconds / 60)
+    minutes = _parse_duration_to_minutes(routes[0].get("duration"))
+    if minutes is None:
+        raise ValueError("Invalid walking duration")
 
     print(f"[walk] estimated_minutes={minutes}")
     return minutes

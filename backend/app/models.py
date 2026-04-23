@@ -1,4 +1,15 @@
-﻿from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date, DateTime, UniqueConstraint, Boolean, Text
+﻿from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -53,8 +64,6 @@ class CommuteProfile(Base):
     preferred_arrival_time = Column(String, nullable=True)
     preferred_mode = Column(String, nullable=True)
     pending_field = Column(String, nullable=True)
-
-    # 第二階段會用到
     reminder_enabled = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -76,11 +85,13 @@ class CommuteOverride(Base):
     target_arrival_time = Column(String, nullable=True)
     transport_mode_override = Column(String, nullable=True)
 
-    # 第一階段提醒凍結欄位
+    frozen_plan_key = Column(String, nullable=True)
     frozen_departure_time = Column(String, nullable=True)
     frozen_reminder_text = Column(Text, nullable=True)
     reminder_prepared_at = Column(DateTime(timezone=True), nullable=True)
-    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
+
+    last_sent_plan_key = Column(String, nullable=True)
+    last_sent_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
