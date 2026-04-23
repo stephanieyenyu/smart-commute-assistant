@@ -1,49 +1,112 @@
-﻿from math import radians, sin, cos, sqrt, atan2
+﻿import time
+
+import httpx
+
+from app.config import TDX_CLIENT_ID, TDX_CLIENT_SECRET
+
+TDX_TOKEN_URL = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
+TDX_API_BASE = "https://tdx.transportdata.tw/api/basic/v2"
+
+_token_cache = {
+    "access_token": None,
+    "expire_at": 0.0,
+}
 
 
-def get_candidate_metro_stations():
-    # 先做一版台北北線常用站，之後再慢慢擴充
-    return [
-        {"name": "芝山", "lat": 25.10306, "lng": 121.52251},
-        {"name": "士林", "lat": 25.08895, "lng": 121.52598},
-        {"name": "明德", "lat": 25.10982, "lng": 121.51896},
-        {"name": "石牌", "lat": 25.11452, "lng": 121.51599},
-        {"name": "劍潭", "lat": 25.08487, "lng": 121.52508},
-        {"name": "圓山", "lat": 25.07135, "lng": 121.52012},
-        {"name": "民權西路", "lat": 25.06291, "lng": 121.51927},
-        {"name": "雙連", "lat": 25.05782, "lng": 121.52066},
-        {"name": "中山", "lat": 25.05269, "lng": 121.52219},
-        {"name": "台北車站", "lat": 25.04776, "lng": 121.51706},
-    ]
+async def _get_access_token() -> str:
+    now = time.time()
+    if _token_cache["access_token"] and now < _token_cache["expire_at"]:
+        return _token_cache["access_token"]
 
+    if not TDX_CLIENT_ID or not TDX_CLIENT_SECRET:
+        raise RuntimeError("TDX_CLIENT_ID or TDX_CLIENT_SECRET is missing")
 
-def haversine_km(lat1, lng1, lat2, lng2):
-    r = 6371
-    dlat = radians(lat2 - lat1)
-    dlng = radians(lng2 - lng1)
-
-    a = (
-        sin(dlat / 2) ** 2
-        + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
-    )
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    return r * c
-
-
-def get_nearest_metro_station(lat: float, lng: float):
-    stations = get_candidate_metro_stations()
-
-    best_station = None
-    best_distance = None
-
-    for station in stations:
-        distance = haversine_km(lat, lng, station["lat"], station["lng"])
-
-        if best_distance is None or distance < best_distance:
-            best_distance = distance
-            best_station = station
-
-    return {
-        "station": best_station,
-        "distance_km": best_distance,
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": TDX_CLIENT_ID,
+        "client_secret": TDX_CLIENT_SECRET,
     }
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), verify=False) as client:
+        response = await client.post(TDX_TOKEN_URL, data=data)
+        response.raise_for_status()
+        payload = response.json()
+
+    access_token = payload["access_token"]
+    expires_in = int(payload.get("expires_in", 3600))
+
+    _token_cache["access_token"] = access_token
+    _token_cache["expire_at"] = now + max(300, expires_in - 60)
+    return access_token
+
+
+def _station_name(station: dict) -> str:
+    station_name = station.get("StationName", {}) or {}
+    if isinstance(station_name, dict):
+        return station_name.get("Zh_tw") or station_name.get("En") or "未知站名"
+    return station.get("name") or "未知站名"
+
+
+def _station_lat(station: dict):
+    return (
+        station.get("lat")
+        or station.get("latitude")
+        or station.get("StationPosition", {}).get("PositionLat")
+    )
+
+
+def _station_lng(station: dict):
+    return (
+        station.get("lng")
+        or station.get("longitude")
+        or station.get("StationPosition", {}).get("PositionLon")
+    )
+
+
+def _distance_sq(lat1, lng1, lat2, lng2):
+    if None in [lat1, lng1, lat2, lng2]:
+        return 999999999
+    return (lat1 - lat2) ** 2 + (lng1 - lng2) ** 2
+
+
+async def get_nearby_metro_stations(lat: float, lng: float, distance_m: int = 1500, top: int = 8):
+    token = await _get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    path = "/Rail/Metro/Station/NearBy"
+    params = {
+        "$spatialFilter": f"nearby({lat},{lng},{distance_m})",
+        "$top": top,
+        "$format": "JSON",
+    }
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), verify=False) as client:
+        response = await client.get(f"{TDX_API_BASE}{path}", params=params, headers=headers)
+        if response.status_code >= 400:
+            print(f"[metro] nearby lookup failed status={response.status_code} body={response.text}")
+        response.raise_for_status()
+        return response.json()
+
+
+def normalize_station(station: dict) -> dict:
+    return {
+        "id": station.get("StationID"),
+        "name": _station_name(station),
+        "lat": _station_lat(station),
+        "lng": _station_lng(station),
+        "raw": station,
+    }
+
+
+def get_best_station_from_raw(raw_stations: list[dict], lat: float, lng: float) -> dict | None:
+    if not raw_stations:
+        return None
+
+    normalized = [normalize_station(s) for s in raw_stations]
+    normalized.sort(key=lambda s: _distance_sq(lat, lng, s.get("lat"), s.get("lng")))
+    return normalized[0]
+
+
+async def get_nearest_metro_station_async(lat: float, lng: float):
+    raw_stations = await get_nearby_metro_stations(lat, lng)
+    return get_best_station_from_raw(raw_stations, lat, lng)

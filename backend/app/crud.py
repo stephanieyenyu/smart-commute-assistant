@@ -4,6 +4,13 @@ from sqlalchemy.orm import Session
 from app.models import User, CommuteProfile, CommuteOverride
 
 
+def _clear_override_reminder_fields(override: CommuteOverride):
+    override.frozen_plan_key = None
+    override.frozen_departure_time = None
+    override.frozen_reminder_text = None
+    override.reminder_prepared_at = None
+
+
 def get_or_create_user(db: Session, line_user_id: str) -> User:
     user = db.query(User).filter(User.line_user_id == line_user_id).first()
     if user:
@@ -69,7 +76,7 @@ def update_address_and_coords(
     profile = get_profile(db, user_id)
 
     if field_prefix not in ["home", "office"]:
-        raise ValueError("field_prefix 必須是 home 或 office")
+        raise ValueError("field_prefix must be home or office")
 
     setattr(profile, f"{field_prefix}_address", address)
     setattr(profile, f"{field_prefix}_lat", lat)
@@ -77,6 +84,20 @@ def update_address_and_coords(
     setattr(profile, f"{field_prefix}_city", city)
     setattr(profile, f"{field_prefix}_township", township)
     setattr(profile, f"{field_prefix}_place_name", place_name)
+
+    if field_prefix == "home":
+        profile.selected_bus_stop_id = None
+        profile.selected_bus_stop_name = None
+        profile.selected_bus_stop_lat = None
+        profile.selected_bus_stop_lng = None
+
+        profile.selected_metro_station_id = None
+        profile.selected_metro_station_name = None
+        profile.selected_metro_station_lat = None
+        profile.selected_metro_station_lng = None
+
+        profile.last_computed_walk_to_bus_stop_min = None
+        profile.last_computed_walk_to_metro_min = None
 
     db.commit()
     db.refresh(profile)
@@ -163,6 +184,7 @@ def get_or_create_override(db: Session, user_id: int, target_date):
 def upsert_override(db: Session, user_id: int, target_date, target_arrival_time: str):
     override = get_or_create_override(db, user_id, target_date)
     override.target_arrival_time = target_arrival_time
+    _clear_override_reminder_fields(override)
     db.commit()
     db.refresh(override)
     return override
@@ -171,6 +193,7 @@ def upsert_override(db: Session, user_id: int, target_date, target_arrival_time:
 def upsert_transport_mode_override(db: Session, user_id: int, target_date, mode: str):
     override = get_or_create_override(db, user_id, target_date)
     override.transport_mode_override = mode
+    _clear_override_reminder_fields(override)
     db.commit()
     db.refresh(override)
     return override
@@ -191,32 +214,35 @@ def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
     return profile
 
 
-def get_reminder_enabled(db: Session, user_id: int) -> bool:
-    profile = get_profile(db, user_id)
-    return bool(profile.reminder_enabled)
-
-
 def save_frozen_reminder(
     db: Session,
     user_id: int,
     target_date,
+    plan_key: str,
     frozen_departure_time: str,
     frozen_reminder_text: str,
     prepared_at: datetime,
 ):
     override = get_or_create_override(db, user_id, target_date)
+    override.frozen_plan_key = plan_key
     override.frozen_departure_time = frozen_departure_time
     override.frozen_reminder_text = frozen_reminder_text
     override.reminder_prepared_at = prepared_at
-    override.reminder_sent_at = None
     db.commit()
     db.refresh(override)
     return override
 
 
-def mark_reminder_sent(db: Session, user_id: int, target_date, sent_at: datetime):
+def mark_reminder_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    plan_key: str,
+    sent_at: datetime,
+):
     override = get_or_create_override(db, user_id, target_date)
-    override.reminder_sent_at = sent_at
+    override.last_sent_plan_key = plan_key
+    override.last_sent_at = sent_at
     db.commit()
     db.refresh(override)
     return override
@@ -224,10 +250,7 @@ def mark_reminder_sent(db: Session, user_id: int, target_date, sent_at: datetime
 
 def clear_today_reminder_state_db(db: Session, user_id: int, target_date):
     override = get_or_create_override(db, user_id, target_date)
-    override.frozen_departure_time = None
-    override.frozen_reminder_text = None
-    override.reminder_prepared_at = None
-    override.reminder_sent_at = None
+    _clear_override_reminder_fields(override)
     db.commit()
     db.refresh(override)
     return override
