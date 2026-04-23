@@ -4,7 +4,6 @@ import math
 import time
 from datetime import date, datetime, timedelta
 
-
 from app.address_utils import extract_city_from_text
 from app.google_maps import estimate_transit_minutes, estimate_walking_minutes
 from app.metro_basic import get_nearest_metro_station_async
@@ -20,9 +19,11 @@ from app.crud import (
     get_next_setup_step,
     get_override_for_date,
     get_transport_mode_override,
+    save_frozen_reminder,
 )
 
 DEFAULT_COMMUTE_MINUTES = 56
+
 _TRANSIT_CACHE = {}
 _BUS_CACHE = {}
 _METRO_CACHE = {}
@@ -162,6 +163,8 @@ async def estimate_commute_minutes(profile, target_date: date, arrival_time_str:
     except Exception as e:
         print(f"[routes] estimate failed: {e}")
         return DEFAULT_COMMUTE_MINUTES
+
+
 async def calculate_departure_time(
     profile,
     target_date: date,
@@ -178,56 +181,6 @@ async def calculate_departure_time(
         minutes=baseline_minutes + weather_buffer_minutes
     )
     return departure_dt.strftime("%H:%M")
-
-
-async def calculate_departure_time_by_mode_fast(
-    target_date: date,
-    effective_arrival_time: str,
-    baseline_minutes: int,
-    weather_buffer_minutes: int,
-    best_option: dict,
-):
-    arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
-
-    mode = best_option.get("mode", "unknown")
-    mode_extra_minutes = 0
-    mode_note = "目前先以基礎通勤估算為主"
-
-    if mode == "bus":
-        wait_minutes = best_option.get("wait_minutes", 0) or 0
-        reliability_penalty = best_option.get("reliability_penalty_minutes", 3) or 0
-        mode_extra_minutes = wait_minutes + reliability_penalty
-        mode_note = f"已加入公車等待 {wait_minutes} 分鐘與公車穩定緩衝 {reliability_penalty} 分鐘"
-
-    elif mode == "metro":
-        wait_minutes = best_option.get("wait_minutes", 0) or 0
-        transfer_minutes = best_option.get("transfer_minutes", 0) or 0
-        reliability_penalty = best_option.get("reliability_penalty_minutes", 1) or 0
-        mode_extra_minutes = wait_minutes + transfer_minutes + reliability_penalty
-        mode_note = f"已加入捷運等待 {wait_minutes} 分鐘、進站/轉乘緩衝 {transfer_minutes} 分鐘與穩定緩衝 {reliability_penalty} 分鐘"
-
-    elif mode == "bus_to_metro":
-        wait_minutes = best_option.get("wait_minutes", 0) or 0
-        transfer_minutes = best_option.get("transfer_minutes", 0) or 0
-        reliability_penalty = best_option.get("reliability_penalty_minutes", 2) or 0
-        mode_extra_minutes = wait_minutes + transfer_minutes + reliability_penalty
-        mode_note = f"已加入第一段公車等待 {wait_minutes} 分鐘、轉乘緩衝 {transfer_minutes} 分鐘與混合方案緩衝 {reliability_penalty} 分鐘"
-
-    total_minutes = baseline_minutes + weather_buffer_minutes + mode_extra_minutes
-    departure_dt = arrival_dt - timedelta(minutes=total_minutes)
-
-    return {
-        "departure_time": departure_dt.strftime("%H:%M"),
-        "baseline_minutes": baseline_minutes,
-        "mode_extra_minutes": mode_extra_minutes,
-        "total_minutes": total_minutes,
-        "mode_note": mode_note,
-        "realtime_info": {
-            "used_realtime_adjustment": False,
-            "reason": "not_applied",
-            "latest_leave_time": None,
-        },
-    }
 
 
 async def calculate_departure_time_by_mode_fast(
@@ -470,6 +423,10 @@ async def choose_commute_option_with_override(
         walk_minutes = bus_snapshot.get("walk_minutes")
         arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
 
+        print(f"[bus-debug] first_stop={first_stop.get('stop_name')}, walk_minutes={walk_minutes}, arrival_at_stop_min={arrival_at_stop_min}")
+        print(f"[bus-debug] chosen_bus={chosen_bus}")
+        print(f"[bus-debug] valid_eta_list={bus_snapshot.get('valid_eta_list')}")
+
         if chosen_bus and chosen_bus.get("eta_min") is not None:
             wait_minutes = max(0, chosen_bus["eta_min"] - (arrival_at_stop_min or 0))
             chosen_label = chosen_bus.get("route_name", "未知路線")
@@ -605,7 +562,6 @@ async def _hydrate_option_snapshot(profile, best_option: dict) -> dict:
 def _build_weather_line(weather_info: dict) -> str:
     weather_text = weather_info.get("weather_text", "未知")
     weather_description = weather_info.get("weather_description")
-    pop = weather_info.get("pop")
     temperature = weather_info.get("temperature")
     min_t = weather_info.get("temperature_min")
     max_t = weather_info.get("temperature_max")
@@ -617,9 +573,6 @@ def _build_weather_line(weather_info: dict) -> str:
         line += f"，{temperature}°C"
     elif min_t is not None and max_t is not None:
         line += f"，{min_t}-{max_t}°C"
-
-    if pop is not None and "降雨機率" not in line:
-        pass
 
     return line
 
@@ -635,7 +588,7 @@ def _build_buffer_note(weather_buffer: int) -> str:
     return "今日天氣穩定，未額外增加天氣緩衝。"
 
 
-def _build_detail_lines(profile, recommended_mode: str, best_option: dict) -> list[str]:
+def _build_detail_lines(recommended_mode: str, best_option: dict) -> list[str]:
     detail_lines: list[str] = []
 
     if recommended_mode == "bus":
@@ -796,7 +749,7 @@ async def _compute_today_plan(
     mode_override_text = TRANSPORT_MODE_NAME_MAP.get(mode_override, mode_override)
     selection_source_text = SELECTION_SOURCE_NAME_MAP.get(selection_source, selection_source)
 
-    detail_lines = _build_detail_lines(profile, recommended_mode, best_option)
+    detail_lines = _build_detail_lines(recommended_mode, best_option)
 
     return {
         "ok": True,
@@ -849,7 +802,7 @@ def _format_today_commute_text(plan: dict, header: str = "今日通勤建議："
     return "\n".join(reply_parts)
 
 
-def _format_departure_reminder_text(plan: dict) -> str:
+def _build_reminder_payload_from_plan(plan: dict) -> dict:
     reminder_lines = [
         "出門提醒：",
         f"你今天建議於 {plan['final_departure_time']} 出門",
@@ -919,39 +872,7 @@ def _format_departure_reminder_text(plan: dict) -> str:
             if station_name:
                 reminder_lines.append(f"轉乘捷運：{station_name}")
 
-    return "\n".join(reminder_lines)
-
-
-async def build_today_commute_payload(
-    db,
-    user_id: int,
-    target_date: date | None = None,
-    force_mode_override: str | None = None,
-):
-    plan = await _compute_today_plan(
-        db=db,
-        user_id=user_id,
-        target_date=target_date,
-        force_mode_override=force_mode_override,
-    )
-    if not plan.get("ok"):
-        return plan
-
-    plan["text"] = _format_today_commute_text(plan, header="今日通勤建議：")
-    return plan
-
-
-async def build_today_reminder_payload(db, user_id: int, target_date: date | None = None):
-    plan = await _compute_today_plan(
-        db=db,
-        user_id=user_id,
-        target_date=target_date,
-        force_mode_override=None,
-    )
-    if not plan.get("ok"):
-        return plan
-
-    text = _format_departure_reminder_text(plan)
+    text = "\n".join(reminder_lines)
     plan_key = hashlib.sha1(
         f"{plan['target_date'].isoformat()}|{plan['effective_arrival_time']}|{plan['final_departure_time']}|{plan['mode_override']}|{text}".encode("utf-8")
     ).hexdigest()
@@ -963,3 +884,69 @@ async def build_today_reminder_payload(db, user_id: int, target_date: date | Non
         "recommended_mode": plan["recommended_mode"],
         "text": text,
     }
+
+
+async def build_today_commute_payload(
+    db,
+    user_id: int,
+    target_date: date | None = None,
+    force_mode_override: str | None = None,
+    header: str = "今日通勤建議：",
+):
+    plan = await _compute_today_plan(
+        db=db,
+        user_id=user_id,
+        target_date=target_date,
+        force_mode_override=force_mode_override,
+    )
+    if not plan.get("ok"):
+        return plan
+
+    plan["text"] = _format_today_commute_text(plan, header=header)
+    return plan
+
+
+async def build_today_reminder_payload(
+    db,
+    user_id: int,
+    target_date: date | None = None,
+    plan: dict | None = None,
+):
+    if plan is None:
+        plan = await _compute_today_plan(
+            db=db,
+            user_id=user_id,
+            target_date=target_date,
+            force_mode_override=None,
+        )
+    if not plan.get("ok"):
+        return plan
+
+    return _build_reminder_payload_from_plan(plan)
+
+
+async def freeze_today_reminder_payload(
+    db,
+    user_id: int,
+    target_date: date | None = None,
+    plan: dict | None = None,
+):
+    payload = await build_today_reminder_payload(
+        db=db,
+        user_id=user_id,
+        target_date=target_date,
+        plan=plan,
+    )
+    if not payload.get("ok"):
+        return payload
+
+    save_frozen_reminder(
+        db=db,
+        user_id=user_id,
+        target_date=target_date or date.today(),
+        plan_key=payload["plan_key"],
+        frozen_departure_time=payload["departure_time"],
+        frozen_reminder_text=payload["text"],
+        prepared_at=datetime.now(),
+    )
+    return payload

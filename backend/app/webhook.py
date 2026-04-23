@@ -30,9 +30,9 @@ from app.service import (
     calculate_departure_time,
     build_today_commute_payload,
     build_today_reminder_payload,
+    freeze_today_reminder_payload,
     get_metro_snapshot,
 )
-
 from app.reminder_scheduler import clear_today_reminder_state_for_user
 
 router = APIRouter()
@@ -381,13 +381,11 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["enable_reminder"]:
                 set_reminder_enabled(db, user.id, True)
-                clear_today_reminder_state_for_user(user.id)
                 await reply_text(reply_token, "已開啟自動提醒。")
                 continue
 
             if command_text in COMMAND_ALIASES["disable_reminder"]:
                 set_reminder_enabled(db, user.id, False)
-                clear_today_reminder_state_for_user(user.id)
                 await reply_text(reply_token, "已關閉自動提醒。")
                 continue
 
@@ -400,24 +398,40 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["set_mode_auto"]:
                 upsert_transport_mode_override(db, user.id, today_date, "auto")
                 clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-after-mode-auto] failed: {e}")
                 await reply_text(reply_token, "已設定今天交通方式為：自動判斷")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus"]:
                 upsert_transport_mode_override(db, user.id, today_date, "bus")
                 clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-after-mode-bus] failed: {e}")
                 await reply_text(reply_token, "已設定今天交通方式為：公車優先")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_metro"]:
                 upsert_transport_mode_override(db, user.id, today_date, "metro")
                 clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-after-mode-metro] failed: {e}")
                 await reply_text(reply_token, "已設定今天交通方式為：捷運優先")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus_to_metro"]:
                 upsert_transport_mode_override(db, user.id, today_date, "bus_to_metro")
                 clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-after-mode-bus-to-metro] failed: {e}")
                 await reply_text(reply_token, "已設定今天交通方式為：公車轉捷運")
                 continue
 
@@ -440,6 +454,7 @@ async def line_webhook(
                         user_id=user.id,
                         target_date=today_date,
                         force_mode_override="bus",
+                        header="公車測試：",
                     )
                     if not payload.get("ok"):
                         await reply_text(reply_token, "目前無法建立公車測試資料。")
@@ -495,9 +510,14 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["test_reminder"]:
                 try:
-                    payload = await build_today_reminder_payload(db, user.id, today_date)
-                    if not payload.get("ok"):
-                        next_step = payload.get("next_step")
+                    plan = await build_today_commute_payload(
+                        db=db,
+                        user_id=user.id,
+                        target_date=today_date,
+                        force_mode_override=None,
+                    )
+                    if not plan.get("ok"):
+                        next_step = plan.get("next_step")
                         if next_step:
                             set_pending_field(db, user.id, next_step)
                             await reply_text(reply_token, "請先完成基本設定後，才能測試提醒。\n" + FIELD_PROMPTS[next_step])
@@ -505,7 +525,17 @@ async def line_webhook(
                             await reply_text(reply_token, "目前無法建立提醒。")
                         continue
 
-                    await reply_text(reply_token, payload["text"].replace("出門提醒：", "出門提醒測試：", 1))
+                    frozen_payload = await freeze_today_reminder_payload(
+                        db=db,
+                        user_id=user.id,
+                        target_date=today_date,
+                        plan=plan,
+                    )
+                    if not frozen_payload.get("ok"):
+                        await reply_text(reply_token, "目前無法建立提醒。")
+                        continue
+
+                    await reply_text(reply_token, frozen_payload["text"].replace("出門提醒：", "出門提醒測試：", 1))
                     continue
 
                 except Exception as e:
@@ -527,17 +557,24 @@ async def line_webhook(
 
                     profile = ensure_profile_defaults_for_calc(db, user.id, profile)
 
-                    payload = await build_today_commute_payload(
+                    plan = await build_today_commute_payload(
                         db=db,
                         user_id=user.id,
                         target_date=today_date,
                         force_mode_override=None,
                     )
-                    if not payload.get("ok"):
+                    if not plan.get("ok"):
                         await reply_text(reply_token, "今天通勤建議目前無法建立。")
                         continue
 
-                    await reply_text(reply_token, payload["text"])
+                    await freeze_today_reminder_payload(
+                        db=db,
+                        user_id=user.id,
+                        target_date=today_date,
+                        plan=plan,
+                    )
+
+                    await reply_text(reply_token, plan["text"])
                     continue
 
                 except Exception as e:
@@ -562,26 +599,26 @@ async def line_webhook(
                     db, user.id, tomorrow_date, profile.preferred_arrival_time
                 )
 
-                weather_info = await build_today_commute_payload(
+                tomorrow_plan = await build_today_commute_payload(
                     db=db,
                     user_id=user.id,
                     target_date=tomorrow_date,
                     force_mode_override=None,
                 )
 
-                if not weather_info.get("ok"):
+                if not tomorrow_plan.get("ok"):
                     await reply_text(reply_token, "明天出門時間目前無法估算。")
                     continue
 
                 await reply_text(
                     reply_token,
-                    f"明天建議 {weather_info['final_departure_time']} 出門。\n"
-                    f"到公司時間：{weather_info['effective_arrival_time']}\n"
-                    f"預估通勤時間：{weather_info['baseline_minutes']} 分鐘\n"
-                    f"參考天氣：{weather_info['weather_line']}\n"
-                    f"降雨機率：{weather_info['rain_line']}\n"
+                    f"明天建議 {tomorrow_plan['final_departure_time']} 出門。\n"
+                    f"到公司時間：{tomorrow_plan['effective_arrival_time']}\n"
+                    f"預估通勤時間：{tomorrow_plan['baseline_minutes']} 分鐘\n"
+                    f"參考天氣：{tomorrow_plan['weather_line']}\n"
+                    f"降雨機率：{tomorrow_plan['rain_line']}\n"
                     f"說明：{'已套用明天覆蓋到公司時間：' + effective_arrival_time if used_override else '目前使用預設到公司時間：' + effective_arrival_time}\n"
-                    f"已套用天氣緩衝：{weather_info['weather_buffer']} 分鐘。"
+                    f"已套用天氣緩衝：{tomorrow_plan['weather_buffer']} 分鐘。"
                 )
                 continue
 
@@ -660,6 +697,10 @@ async def line_webhook(
                 if current_step == "override_today_arrival_time":
                     upsert_override(db, user.id, today_date, value)
                     clear_today_reminder_state_for_user(user.id)
+                    try:
+                        await freeze_today_reminder_payload(db, user.id, today_date)
+                    except Exception as e:
+                        print(f"[freeze-after-edit-today] failed: {e}")
                     set_pending_field(db, user.id, None)
                     await reply_text(reply_token, f"已儲存今天到公司時間：{value}\n你現在可以傳送：今天通勤建議 或 測試提醒")
                     continue
@@ -682,6 +723,10 @@ async def line_webhook(
 
                 update_profile_field(db, user.id, "preferred_arrival_time", value)
                 clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-after-save-arrival] failed: {e}")
                 set_pending_field(db, user.id, None)
 
                 updated_profile = get_profile(db, user.id)
