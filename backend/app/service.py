@@ -10,7 +10,6 @@ from app.metro_basic import get_nearest_metro_station_async
 from app.tdx_bus import (
     get_nearby_stops,
     get_estimated_arrivals,
-    simplify_stop_list,
     simplify_eta_list,
 )
 from app.weather import get_commute_weather
@@ -29,38 +28,14 @@ _BUS_CACHE = {}
 _METRO_CACHE = {}
 
 TRANSIT_CACHE_SECONDS = 180
-BUS_CACHE_SECONDS = 120
+BUS_CACHE_SECONDS = 60
 METRO_CACHE_SECONDS = 180
 
 MODE_LABELS = {
-    "bus": "公車優先",
+    "google_transit": "目前以 Google 大眾運輸估算為主",
+    "bus": "今天搭公車",
     "metro": "建議改搭捷運",
-    "bus_to_metro": "建議公車轉捷運",
-    "unknown": "目前無法明確判斷",
-}
-
-MODE_REASON_LABELS = {
-    "catchable_bus_available": "目前有趕得上的公車",
-    "metro_available": "目前搭捷運比較穩",
-    "catchable_bus_then_transfer_metro": "目前適合先搭公車再轉捷運",
-    "no_catchable_bus": "目前沒有明確能趕上的班次",
-    "fallback_baseline_only": "目前先用基本通勤時間估算",
-    "metro_fallback_no_realtime": "即時乘車資料暫時不足，先依通勤時間與天氣估算",
-    "unknown": "目前還無法明確判斷",
-}
-
-TRANSPORT_MODE_NAME_MAP = {
-    None: "未指定，系統自動判斷",
-    "auto": "自動判斷",
-    "bus": "公車優先",
-    "metro": "捷運優先",
-    "bus_to_metro": "公車轉捷運",
-}
-
-SELECTION_SOURCE_NAME_MAP = {
-    "auto": "系統自動判斷",
-    "manual": "已依照你今天指定的交通方式計算",
-    "fallback_auto": "你今天指定的交通方式目前不適合，所以改用系統自動幫你選擇",
+    "bus_to_metro": "今天搭公車轉捷運",
 }
 
 
@@ -73,7 +48,7 @@ async def safe_call(coro):
     try:
         return await coro
     except Exception as e:
-        print(f"[safe_call] failed: {e}")
+        print(f"[safe-call] error={e}")
         return None
 
 
@@ -95,7 +70,7 @@ def _dedupe_stops_by_name(stops: list[dict]) -> list[dict]:
     seen = set()
     deduped = []
     for stop in stops:
-        name = stop.get("stop_name")
+        name = stop.get("stop_name") or stop.get("stop_id") or stop.get("stop_uid")
         if not name or name in seen:
             continue
         seen.add(name)
@@ -116,16 +91,12 @@ async def _fetch_arrivals_for_stop(city_name: str, stop: dict) -> list[dict]:
     stop_uid = stop.get("stop_uid")
     stop_id = stop.get("stop_id")
 
-    try:
-        raw_eta = await get_estimated_arrivals(
-            city_name=city_name,
-            stop_uid=stop_uid,
-            stop_id=stop_id,
-        )
-        return simplify_eta_list(raw_eta)
-    except Exception as e:
-        print(f"[bus-arrivals] failed city={city_name}, stop={stop}, error={e}")
-        return []
+    raw_eta = await get_estimated_arrivals(
+        city_name=city_name,
+        stop_uid=stop_uid,
+        stop_id=stop_id,
+    )
+    return simplify_eta_list(raw_eta)
 
 
 async def estimate_commute_minutes(profile, target_date: date, arrival_time_str: str) -> int:
@@ -171,15 +142,9 @@ async def calculate_departure_time(
     effective_arrival_time: str,
     weather_buffer_minutes: int = 0,
 ) -> str:
-    baseline_minutes = await estimate_commute_minutes(
-        profile,
-        target_date,
-        effective_arrival_time,
-    )
+    baseline_minutes = await estimate_commute_minutes(profile, target_date, effective_arrival_time)
     arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
-    departure_dt = arrival_dt - timedelta(
-        minutes=baseline_minutes + weather_buffer_minutes
-    )
+    departure_dt = arrival_dt - timedelta(minutes=baseline_minutes + weather_buffer_minutes)
     return departure_dt.strftime("%H:%M")
 
 
@@ -192,9 +157,9 @@ async def calculate_departure_time_by_mode_fast(
 ):
     arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
 
-    mode = best_option.get("mode", "unknown")
+    mode = best_option.get("mode", "google_transit")
     mode_extra_minutes = 0
-    mode_note = "目前先以基礎通勤估算為主"
+    mode_note = "目前先以 Google 大眾運輸估算為主"
 
     if mode == "bus":
         wait_minutes = best_option.get("wait_minutes", 0) or 0
@@ -225,11 +190,6 @@ async def calculate_departure_time_by_mode_fast(
         "mode_extra_minutes": mode_extra_minutes,
         "total_minutes": total_minutes,
         "mode_note": mode_note,
-        "realtime_info": {
-            "used_realtime_adjustment": False,
-            "reason": "not_applied",
-            "latest_leave_time": None,
-        },
     }
 
 
@@ -240,10 +200,7 @@ async def get_bus_realtime_snapshot(profile):
         city_name = _city_from_profile(profile)
 
         if home_lat is None or home_lng is None or not city_name:
-            return {
-                "available": False,
-                "reason": "missing_home_data",
-            }
+            return {"available": False, "reason": "city_or_coords_missing"}
 
         cache_key = f"{home_lat}|{home_lng}|{city_name}"
         now = time.time()
@@ -251,29 +208,25 @@ async def get_bus_realtime_snapshot(profile):
         if cached and now - cached[0] <= BUS_CACHE_SECONDS:
             return cached[1]
 
-        raw_stops = await get_nearby_stops(
+        nearby_stops = await get_nearby_stops(
             city_name=city_name,
             lat=home_lat,
             lng=home_lng,
             distance_m=500,
             top=8,
         )
-        nearby_stops = simplify_stop_list(raw_stops)
         nearby_stops = _dedupe_stops_by_name(nearby_stops)
 
         if not nearby_stops:
-            result = {
-                "available": False,
-                "reason": "no_nearby_stops",
-            }
+            result = {"available": False, "reason": "no_nearby_stops"}
             _BUS_CACHE[cache_key] = (now, result)
             return result
 
         first_stop = nearby_stops[0]
-
-        walk_minutes = None
         stop_lat = first_stop.get("lat")
         stop_lng = first_stop.get("lng")
+
+        walk_minutes = None
         if stop_lat is not None and stop_lng is not None:
             try:
                 walk_minutes = await estimate_walking_minutes(
@@ -284,11 +237,11 @@ async def get_bus_realtime_snapshot(profile):
                 )
             except Exception as e:
                 print(f"[bus-walk] estimate failed: {e}")
-                try:
-                    distance_km = _haversine_km(home_lat, home_lng, stop_lat, stop_lng)
-                    walk_minutes = max(1, round(distance_km / 5 * 60))
-                except Exception:
-                    walk_minutes = None
+
+        if walk_minutes is None:
+            dist_m = first_stop.get("distance_m")
+            if dist_m is not None:
+                walk_minutes = max(1, round(dist_m / 80))
 
         arrival_at_stop_min = (walk_minutes or 0) + 1
         valid_eta_list = await _fetch_arrivals_for_stop(city_name, first_stop)
@@ -300,6 +253,10 @@ async def get_bus_realtime_snapshot(profile):
             if eta_min is not None and eta_min >= arrival_at_stop_min:
                 chosen_bus = eta
                 break
+
+        print(f"[bus-debug] first_stop={first_stop.get('stop_name')}, walk_minutes={walk_minutes}, arrival_at_stop_min={arrival_at_stop_min}")
+        print(f"[bus-debug] chosen_bus={chosen_bus}")
+        print(f"[bus-debug] valid_eta_list={valid_eta_list}")
 
         result = {
             "available": True,
@@ -316,10 +273,7 @@ async def get_bus_realtime_snapshot(profile):
 
     except Exception as e:
         print(f"[bus-snapshot] failed: {e}")
-        return {
-            "available": False,
-            "reason": "exception",
-        }
+        return {"available": False, "reason": "exception"}
 
 
 async def get_metro_snapshot(profile):
@@ -328,10 +282,7 @@ async def get_metro_snapshot(profile):
         home_lng = getattr(profile, "home_lng", None)
 
         if home_lat is None or home_lng is None:
-            return {
-                "available": False,
-                "reason": "missing_home_coords",
-            }
+            return {"available": False, "reason": "coords_missing"}
 
         cache_key = f"{home_lat}|{home_lng}"
         now = time.time()
@@ -340,20 +291,14 @@ async def get_metro_snapshot(profile):
             return cached[1]
 
         station = await get_nearest_metro_station_async(home_lat, home_lng)
-
         if not station:
-            result = {
-                "available": False,
-                "reason": "no_station_found",
-            }
+            result = {"available": False, "reason": "no_station"}
             _METRO_CACHE[cache_key] = (now, result)
             return result
 
+        walk_minutes = None
         station_lat = station.get("lat")
         station_lng = station.get("lng")
-
-        walk_minutes = None
-        distance_km = None
 
         if station_lat is not None and station_lng is not None:
             try:
@@ -366,12 +311,15 @@ async def get_metro_snapshot(profile):
             except Exception as e:
                 print(f"[metro-walk] estimate failed: {e}")
 
+        distance_km = None
+        if station_lat is not None and station_lng is not None:
             try:
                 distance_km = _haversine_km(home_lat, home_lng, station_lat, station_lng)
-                if walk_minutes is None:
-                    walk_minutes = max(1, round(distance_km / 5 * 60))
             except Exception:
                 distance_km = None
+
+        if walk_minutes is None and distance_km is not None:
+            walk_minutes = max(1, round(distance_km * 1000 / 80))
 
         result = {
             "available": True,
@@ -384,10 +332,7 @@ async def get_metro_snapshot(profile):
 
     except Exception as e:
         print(f"[metro-snapshot] failed: {e}")
-        return {
-            "available": False,
-            "reason": "exception",
-        }
+        return {"available": False, "reason": "exception"}
 
 
 async def choose_commute_option_with_override(
@@ -396,283 +341,179 @@ async def choose_commute_option_with_override(
     weather_buffer_minutes: int,
     mode_override: str | None = None,
 ):
-    if mode_override == "bus":
-        bus_snapshot = await safe_call(get_bus_realtime_snapshot(profile))
-        metro_snapshot = None
-    elif mode_override == "metro":
-        metro_snapshot = await safe_call(get_metro_snapshot(profile))
-        bus_snapshot = None
-    elif mode_override == "bus_to_metro":
-        bus_snapshot, metro_snapshot = await asyncio.gather(
-            safe_call(get_bus_realtime_snapshot(profile)),
-            safe_call(get_metro_snapshot(profile)),
-        )
-    else:
-        bus_snapshot, metro_snapshot = await asyncio.gather(
-            safe_call(get_bus_realtime_snapshot(profile)),
-            safe_call(get_metro_snapshot(profile)),
-        )
+    bus_snapshot, metro_snapshot = await asyncio.gather(
+        safe_call(get_bus_realtime_snapshot(profile)),
+        safe_call(get_metro_snapshot(profile)),
+    )
+
+    chosen_bus = None
+    if bus_snapshot and bus_snapshot.get("available"):
+        chosen_bus = bus_snapshot.get("chosen_bus")
+
+    metro_available = bool(metro_snapshot and metro_snapshot.get("available"))
+
+    google_option = {
+        "mode": "google_transit",
+        "reason": "google_transit",
+        "summary": "目前以 Google 大眾運輸估算為主",
+        "snapshot": {
+            "bus_snapshot": bus_snapshot or {},
+            "metro_snapshot": metro_snapshot or {},
+        },
+    }
 
     bus_option = None
-    metro_option = None
-    bus_to_metro_option = None
-
-    if bus_snapshot and bus_snapshot.get("available"):
+    if bus_snapshot and bus_snapshot.get("available") and chosen_bus:
         first_stop = bus_snapshot.get("first_stop", {}) or {}
-        chosen_bus = bus_snapshot.get("chosen_bus")
         walk_minutes = bus_snapshot.get("walk_minutes")
-        arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
+        eta_min = chosen_bus.get("eta_min")
+        bus_label = chosen_bus.get("route_name", "無路線資訊")
+        subroute = chosen_bus.get("subroute_name")
+        if subroute and subroute != chosen_bus.get("route_name"):
+            bus_label += f"({subroute})"
 
-        print(f"[bus-debug] first_stop={first_stop.get('stop_name')}, walk_minutes={walk_minutes}, arrival_at_stop_min={arrival_at_stop_min}")
-        print(f"[bus-debug] chosen_bus={chosen_bus}")
-        print(f"[bus-debug] valid_eta_list={bus_snapshot.get('valid_eta_list')}")
+        wait_minutes = max(0, (eta_min or 0) - (bus_snapshot.get("arrival_at_stop_min") or 0))
+        bus_option = {
+            "mode": "bus",
+            "reason": "bus_available",
+            "summary": f"可搭上公車 {bus_label}，最近站牌 {first_stop.get('stop_name', '無法識別站牌')}，步行約 {walk_minutes or '無法估算'} 分鐘，等車約 {wait_minutes} 分鐘。",
+            "wait_minutes": wait_minutes,
+            "reliability_penalty_minutes": 3,
+            "snapshot": bus_snapshot,
+        }
 
-        if chosen_bus and chosen_bus.get("eta_min") is not None:
-            wait_minutes = max(0, chosen_bus["eta_min"] - (arrival_at_stop_min or 0))
-            chosen_label = chosen_bus.get("route_name", "未知路線")
-            subroute_name = chosen_bus.get("subroute_name")
-            if subroute_name and subroute_name != chosen_bus.get("route_name"):
-                chosen_label += f"({subroute_name})"
-
-            bus_option = {
-                "mode": "bus",
-                "reason": "catchable_bus_available",
-                "summary": f"可搭上公車 {chosen_label}，最近站牌 {first_stop.get('stop_name', '未知站牌')}，步行約 {walk_minutes} 分鐘，等車約 {wait_minutes} 分鐘。",
-                "wait_minutes": wait_minutes,
-                "reliability_penalty_minutes": 3,
-                "snapshot": bus_snapshot,
-            }
-        else:
-            bus_option = {
-                "mode": "bus",
-                "reason": "no_catchable_bus",
-                "summary": f"附近有公車站牌 {first_stop.get('stop_name', '未知站牌')}，但目前沒有明確能趕上的班次。",
-                "wait_minutes": 0,
-                "reliability_penalty_minutes": 3,
-                "snapshot": bus_snapshot,
-            }
-
-    if metro_snapshot and metro_snapshot.get("available"):
+    metro_option = None
+    if metro_available:
         station = metro_snapshot.get("station", {}) or {}
         walk_minutes = metro_snapshot.get("walk_minutes")
-        station_name = station.get("name", "未知站名")
         metro_option = {
             "mode": "metro",
             "reason": "metro_available",
-            "summary": f"可改搭捷運，最近捷運站 {station_name}，步行約 {walk_minutes} 分鐘。",
+            "summary": f"可改搭捷運，最近捷運站 {station.get('name', '無法識別捷運站')}，步行約 {walk_minutes or '無法估算'} 分鐘。",
             "wait_minutes": 3,
             "transfer_minutes": 2,
             "reliability_penalty_minutes": 1,
             "snapshot": metro_snapshot,
         }
 
-    if (
-        bus_snapshot and bus_snapshot.get("available")
-        and metro_snapshot and metro_snapshot.get("available")
-        and bus_snapshot.get("chosen_bus")
-    ):
-        station = metro_snapshot.get("station", {}) or {}
-        station_name = station.get("name", "未知站名")
-        bus_to_metro_option = {
-            "mode": "bus_to_metro",
-            "reason": "catchable_bus_then_transfer_metro",
-            "summary": f"可先搭公車再轉捷運，轉乘捷運站 {station_name}。",
-            "wait_minutes": 3,
-            "transfer_minutes": 5,
-            "reliability_penalty_minutes": 2,
-            "snapshot": {
-                "bus_snapshot": bus_snapshot,
-                "metro_snapshot": metro_snapshot,
-            },
-        }
-
-    selection_source = "auto"
-
     if mode_override == "bus":
-        if bus_option and bus_option.get("reason") == "catchable_bus_available":
+        if bus_option:
             return {"best_option": bus_option, "selection_source": "manual"}
-        selection_source = "fallback_auto"
+        if metro_option:
+            return {"best_option": metro_option, "selection_source": "fallback_auto"}
+        return {"best_option": google_option, "selection_source": "fallback_auto"}
 
-    elif mode_override == "metro":
+    if mode_override == "metro":
         if metro_option:
             return {"best_option": metro_option, "selection_source": "manual"}
-        selection_source = "fallback_auto"
+        if bus_option:
+            return {"best_option": bus_option, "selection_source": "fallback_auto"}
+        return {"best_option": google_option, "selection_source": "fallback_auto"}
 
-    elif mode_override == "bus_to_metro":
-        if bus_to_metro_option:
-            return {"best_option": bus_to_metro_option, "selection_source": "manual"}
-        selection_source = "fallback_auto"
-
-    if bus_option and bus_option.get("reason") == "catchable_bus_available":
-        return {"best_option": bus_option, "selection_source": selection_source}
-
-    if metro_option:
-        return {"best_option": metro_option, "selection_source": selection_source}
-
-    if bus_to_metro_option:
-        return {"best_option": bus_to_metro_option, "selection_source": selection_source}
-
-    if bus_option:
-        return {"best_option": bus_option, "selection_source": selection_source}
-
-    return {
-        "best_option": {
-            "mode": "metro",
-            "reason": "metro_fallback_no_realtime",
-            "summary": "即時乘車資料暫時不足，先依通勤時間與天氣估算，建議改搭捷運或其他大眾運輸並提早出門。",
-            "wait_minutes": 3,
-            "transfer_minutes": 2,
-            "reliability_penalty_minutes": 1,
-            "snapshot": {},
-        },
-        "selection_source": selection_source,
-    }
-
-
-async def _hydrate_option_snapshot(profile, best_option: dict) -> dict:
-    mode = best_option.get("mode")
-    snapshot = best_option.get("snapshot")
-
-    if mode == "bus":
-        if not snapshot or not snapshot.get("first_stop"):
-            new_snapshot = await safe_call(get_bus_realtime_snapshot(profile))
-            if new_snapshot and new_snapshot.get("available"):
-                best_option["snapshot"] = new_snapshot
-
-    elif mode == "metro":
-        if not snapshot or not snapshot.get("station"):
-            new_snapshot = await safe_call(get_metro_snapshot(profile))
-            if new_snapshot and new_snapshot.get("available"):
-                best_option["snapshot"] = new_snapshot
-
-    elif mode == "bus_to_metro":
-        if not snapshot:
-            bus_snapshot, metro_snapshot = await asyncio.gather(
-                safe_call(get_bus_realtime_snapshot(profile)),
-                safe_call(get_metro_snapshot(profile)),
-            )
-            best_option["snapshot"] = {
-                "bus_snapshot": bus_snapshot or {},
-                "metro_snapshot": metro_snapshot or {},
+    if mode_override == "bus_to_metro":
+        if bus_option and metro_option:
+            combo_option = {
+                "mode": "bus_to_metro",
+                "reason": "bus_to_metro_available",
+                "summary": f"可先搭公車再轉捷運，轉乘捷運站 {metro_snapshot.get('station', {}).get('name', '無法識別捷運站')}。",
+                "wait_minutes": 3,
+                "transfer_minutes": 5,
+                "reliability_penalty_minutes": 2,
+                "snapshot": {
+                    "bus_snapshot": bus_snapshot,
+                    "metro_snapshot": metro_snapshot,
+                },
             }
+            return {"best_option": combo_option, "selection_source": "manual"}
+        if metro_option:
+            return {"best_option": metro_option, "selection_source": "fallback_auto"}
+        if bus_option:
+            return {"best_option": bus_option, "selection_source": "fallback_auto"}
+        return {"best_option": google_option, "selection_source": "fallback_auto"}
 
-    return best_option
-
-
-def _build_weather_line(weather_info: dict) -> str:
-    weather_text = weather_info.get("weather_text", "未知")
-    weather_description = weather_info.get("weather_description")
-    temperature = weather_info.get("temperature")
-    min_t = weather_info.get("temperature_min")
-    max_t = weather_info.get("temperature_max")
-
-    line = f"{weather_text}"
-    if weather_description:
-        line += f"，{weather_description}"
-    if temperature is not None:
-        line += f"，{temperature}°C"
-    elif min_t is not None and max_t is not None:
-        line += f"，{min_t}-{max_t}°C"
-
-    return line
+    # auto
+    if metro_option:
+        return {"best_option": metro_option, "selection_source": "auto"}
+    if bus_option:
+        return {"best_option": bus_option, "selection_source": "auto"}
+    return {"best_option": google_option, "selection_source": "auto"}
 
 
-def _build_rain_line(weather_info: dict) -> str:
+def _weather_line(weather_info: dict) -> str:
+    text = weather_info.get("weather_text") or "無即時資訊"
+    temp = weather_info.get("temperature")
+    temp_min = weather_info.get("temperature_min")
+    temp_max = weather_info.get("temperature_max")
+
+    if temp is not None:
+        return f"{text}，{temp}°C"
+    if temp_min is not None and temp_max is not None:
+        return f"{text}，{temp_min}-{temp_max}°C"
+    return text
+
+
+def _rain_line(weather_info: dict) -> str:
     pop = weather_info.get("pop")
-    return f"{pop}%" if pop is not None else "未知"
+    return f"{pop}%" if pop is not None else "無即時資訊"
 
 
-def _build_buffer_note(weather_buffer: int) -> str:
+def _buffer_note(weather_buffer: int) -> str:
     if weather_buffer > 0:
         return f"今日天氣已額外增加 {weather_buffer} 分鐘緩衝。"
     return "今日天氣穩定，未額外增加天氣緩衝。"
 
 
-def _build_detail_lines(recommended_mode: str, best_option: dict) -> list[str]:
-    detail_lines: list[str] = []
+def _build_bus_detail_lines(bus_snapshot: dict) -> list[str]:
+    lines: list[str] = []
+    first_stop = bus_snapshot.get("first_stop", {}) or {}
+    stop_name = first_stop.get("stop_name") or "無法識別站牌"
+    walk_minutes = bus_snapshot.get("walk_minutes")
+    arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
+    chosen_bus = bus_snapshot.get("chosen_bus")
+    valid_eta_list = bus_snapshot.get("valid_eta_list", []) or []
 
-    if recommended_mode == "bus":
-        bus_data = best_option.get("snapshot", {}) or {}
-        first_stop = bus_data.get("first_stop", {}) or {}
-        chosen_bus = bus_data.get("chosen_bus")
-        walk_minutes = bus_data.get("walk_minutes")
-        arrival_at_stop_min = bus_data.get("arrival_at_stop_min")
-        valid_eta_list = bus_data.get("valid_eta_list", []) or []
+    lines.append(f"最近站牌：{stop_name}")
+    lines.append(f"步行到站牌：約 {walk_minutes if walk_minutes is not None else '無法估算'} 分鐘")
+    lines.append(f"預估抵達站牌時間：約 {arrival_at_stop_min if arrival_at_stop_min is not None else '無法估算'} 分鐘後")
 
-        if first_stop:
-            detail_lines.append(f"最近站牌：{first_stop.get('stop_name', '未知站牌')}")
-        if walk_minutes is not None:
-            detail_lines.append(f"步行到站牌：約 {walk_minutes} 分鐘")
-        if arrival_at_stop_min is not None:
-            detail_lines.append(f"預估抵達站牌時間：約 {arrival_at_stop_min} 分鐘後")
+    if chosen_bus:
+        route_label = chosen_bus.get("route_name", "無路線資訊")
+        subroute_name = chosen_bus.get("subroute_name")
+        if subroute_name and subroute_name != chosen_bus.get("route_name"):
+            route_label += f"({subroute_name})"
+        lines.append(f"目前最有機會趕上的車：{route_label}，約 {chosen_bus.get('eta_min', '無即時資訊')} 分鐘後到站")
+    else:
+        lines.append("目前清單中沒有明確能趕上的即時班次")
 
-        if chosen_bus:
-            chosen_label = chosen_bus.get("route_name", "未知路線")
-            subroute_name = chosen_bus.get("subroute_name")
-            if subroute_name and subroute_name != chosen_bus.get("route_name"):
-                chosen_label += f"({subroute_name})"
-            eta_min = chosen_bus.get("eta_min")
-            if eta_min is not None:
-                detail_lines.append(f"目前最有機會趕上的車：{chosen_label}，約 {eta_min} 分鐘後到站")
+    lines.append("即時班次：")
+    if valid_eta_list:
+        for eta in valid_eta_list[:5]:
+            route_label = eta.get("route_name", "無路線資訊")
+            subroute_name = eta.get("subroute_name")
+            if subroute_name and subroute_name != eta.get("route_name"):
+                route_label += f"({subroute_name})"
+            eta_text = f"{eta['eta_min']} 分鐘" if eta.get("eta_min") is not None else "無即時資訊"
+            lines.append(f"{route_label}：{eta_text}")
+    else:
+        lines.append("無即時資訊")
 
-        if valid_eta_list:
-            detail_lines.append("即時班次：")
-            for eta in valid_eta_list[:3]:
-                route_label = eta.get("route_name", "未知路線")
-                subroute_name = eta.get("subroute_name")
-                if subroute_name and subroute_name != eta.get("route_name"):
-                    route_label += f"({subroute_name})"
-                eta_min = eta.get("eta_min")
-                eta_text = f"{eta_min} 分鐘" if eta_min is not None else "無即時時間"
-                detail_lines.append(f"{route_label}：{eta_text}")
+    return lines
 
-    elif recommended_mode == "metro":
-        metro_data = best_option.get("snapshot", {}) or {}
-        station = metro_data.get("station", {}) or {}
-        walk_minutes = metro_data.get("walk_minutes")
-        distance_km = metro_data.get("distance_km")
 
-        if station:
-            station_name = station.get("name")
-            if station_name:
-                detail_lines.append(f"最近捷運站：{station_name}")
-        if distance_km is not None:
-            detail_lines.append(f"直線距離：約 {distance_km:.2f} 公里")
-        if walk_minutes is not None:
-            detail_lines.append(f"步行到捷運站：約 {walk_minutes} 分鐘")
+def _build_metro_detail_lines(metro_snapshot: dict) -> list[str]:
+    lines: list[str] = []
+    station = metro_snapshot.get("station", {}) or {}
+    station_name = station.get("name") or "無法識別捷運站"
+    distance_km = metro_snapshot.get("distance_km")
+    walk_minutes = metro_snapshot.get("walk_minutes")
 
-    elif recommended_mode == "bus_to_metro":
-        mixed_data = best_option.get("snapshot", {}) or {}
-        bus_data = mixed_data.get("bus_snapshot", {}) or {}
-        metro_data = mixed_data.get("metro_snapshot", {}) or {}
-
-        first_stop = bus_data.get("first_stop", {}) or {}
-        chosen_bus = bus_data.get("chosen_bus")
-        bus_walk_minutes = bus_data.get("walk_minutes")
-        station = metro_data.get("station", {}) or {}
-        metro_walk_minutes = metro_data.get("walk_minutes")
-
-        if first_stop:
-            detail_lines.append(f"第一段公車站牌：{first_stop.get('stop_name', '未知站牌')}")
-        if bus_walk_minutes is not None:
-            detail_lines.append(f"步行到公車站：約 {bus_walk_minutes} 分鐘")
-        if chosen_bus:
-            chosen_label = chosen_bus.get("route_name", "未知路線")
-            subroute_name = chosen_bus.get("subroute_name")
-            if subroute_name and subroute_name != chosen_bus.get("route_name"):
-                chosen_label += f"({subroute_name})"
-            eta_min = chosen_bus.get("eta_min")
-            if eta_min is not None:
-                detail_lines.append(f"第一段公車：{chosen_label}，約 {eta_min} 分鐘後到站")
-        if station:
-            station_name = station.get("name")
-            if station_name:
-                detail_lines.append(f"轉乘捷運：{station_name}")
-        if metro_walk_minutes is not None:
-            detail_lines.append(f"捷運步行參考：約 {metro_walk_minutes} 分鐘")
-        detail_lines.append("轉乘緩衝：5 分鐘")
-
-    return detail_lines
+    lines.append(f"最近捷運站：{station_name}")
+    if distance_km is not None:
+        lines.append(f"直線距離：約 {distance_km:.2f} 公里")
+    else:
+        lines.append("直線距離：無法估算")
+    lines.append(f"步行到捷運站：約 {walk_minutes if walk_minutes is not None else '無法估算'} 分鐘")
+    return lines
 
 
 async def _compute_today_plan(
@@ -686,21 +527,15 @@ async def _compute_today_plan(
 
     profile = get_profile(db, user_id)
     next_step = get_next_setup_step(profile)
-
     if next_step is not None:
-        return {
-            "ok": False,
-            "reason": "setup_incomplete",
-            "next_step": next_step,
-        }
+        return {"ok": False, "reason": "setup_incomplete", "next_step": next_step}
 
     effective_arrival_time = profile.preferred_arrival_time
     override = get_override_for_date(db, user_id, target_date)
+    used_override = False
     if override and override.target_arrival_time:
         effective_arrival_time = override.target_arrival_time
         used_override = True
-    else:
-        used_override = False
 
     weather_info, baseline_minutes = await asyncio.gather(
         get_commute_weather(profile),
@@ -712,13 +547,12 @@ async def _compute_today_plan(
     mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
 
     option_choice = await choose_commute_option_with_override(
-        profile,
+        profile=profile,
         effective_arrival_time=effective_arrival_time,
         weather_buffer_minutes=weather_buffer,
         mode_override=mode_override,
     )
     best_option = option_choice.get("best_option", {}) or {}
-    best_option = await _hydrate_option_snapshot(profile, best_option)
     selection_source = option_choice.get("selection_source", "auto")
 
     departure_calc = await calculate_departure_time_by_mode_fast(
@@ -728,15 +562,9 @@ async def _compute_today_plan(
         weather_buffer_minutes=weather_buffer,
         best_option=best_option,
     )
+
     final_departure_time = departure_calc["departure_time"]
-
-    recommended_mode = best_option.get("mode", "unknown")
-    mode_reason = best_option.get("reason", "unknown")
-    option_summary = best_option.get("summary", "目前先以基礎通勤時間估算。")
-
-    weather_line = _build_weather_line(weather_info)
-    rain_line = _build_rain_line(weather_info)
-    buffer_note = _build_buffer_note(weather_buffer)
+    recommended_mode = best_option.get("mode", "google_transit")
 
     note = (
         f"已套用今天覆蓋到公司時間：{effective_arrival_time}"
@@ -744,135 +572,113 @@ async def _compute_today_plan(
         else f"目前使用預設到公司時間：{effective_arrival_time}"
     )
 
-    mode_text = MODE_LABELS.get(recommended_mode, "目前無法明確判斷")
-    mode_reason_text = MODE_REASON_LABELS.get(mode_reason, mode_reason)
-    mode_override_text = TRANSPORT_MODE_NAME_MAP.get(mode_override, mode_override)
-    selection_source_text = SELECTION_SOURCE_NAME_MAP.get(selection_source, selection_source)
-
-    detail_lines = _build_detail_lines(recommended_mode, best_option)
-
     return {
         "ok": True,
         "profile": profile,
         "target_date": target_date,
         "effective_arrival_time": effective_arrival_time,
-        "used_override": used_override,
         "weather_info": weather_info,
         "weather_buffer": weather_buffer,
-        "weather_line": weather_line,
-        "rain_line": rain_line,
         "baseline_minutes": baseline_minutes,
-        "mode_override": mode_override,
-        "selection_source": selection_source,
-        "selection_source_text": selection_source_text,
         "best_option": best_option,
+        "selection_source": selection_source,
         "recommended_mode": recommended_mode,
-        "mode_text": mode_text,
-        "mode_reason": mode_reason,
-        "mode_reason_text": mode_reason_text,
-        "option_summary": option_summary,
-        "mode_override_text": mode_override_text,
-        "buffer_note": buffer_note,
-        "note": note,
-        "departure_calc": departure_calc,
         "final_departure_time": final_departure_time,
-        "detail_lines": detail_lines,
+        "departure_calc": departure_calc,
+        "note": note,
+        "mode_override": mode_override,
     }
 
 
 def _format_today_commute_text(plan: dict, header: str = "今日通勤建議：") -> str:
-    reply_parts = [
+    weather_info = plan["weather_info"]
+    best_option = plan["best_option"]
+    recommended_mode = plan["recommended_mode"]
+
+    lines = [
         header,
         f"到公司時間：{plan['effective_arrival_time']}",
         f"建議出門時間：{plan['final_departure_time']}",
-        f"建議方式：{plan['mode_text']}",
+        f"建議方式：{MODE_LABELS.get(recommended_mode, '目前以 Google 大眾運輸估算為主')}",
         f"預估通勤時間：{plan['baseline_minutes']} 分鐘",
-        f"出門時間依據：{plan['departure_calc'].get('mode_note', '目前先以基礎通勤估算為主')}",
-        f"今日天氣：{plan['weather_line']}",
-        f"降雨機率：{plan['rain_line']}",
+        f"今日天氣：{_weather_line(weather_info)}",
+        f"降雨機率：{_rain_line(weather_info)}",
         f"說明：{plan['note']}",
-        f"今日模式設定：{plan['mode_override_text']}",
-        f"套用方式：{plan['selection_source_text']}",
-        f"模式判斷：{plan['mode_reason_text']}",
-        f"方案摘要：{plan['option_summary']}",
-        f"提醒：{plan['buffer_note']}",
-        "",
-    ] + plan["detail_lines"]
+    ]
 
-    return "\n".join(reply_parts)
+    if recommended_mode in {"bus", "metro", "bus_to_metro"}:
+        lines.append(f"模式判斷：{best_option.get('reason', 'google_transit')}")
+        lines.append(f"方案摘要：{best_option.get('summary', '目前以 Google 大眾運輸估算為主')}")
+
+    lines.append(f"提醒：{_buffer_note(plan['weather_buffer'])}")
+    lines.append("")
+
+    if recommended_mode == "google_transit":
+        snapshot = best_option.get("snapshot", {}) or {}
+        bus_snapshot = snapshot.get("bus_snapshot") or {}
+        metro_snapshot = snapshot.get("metro_snapshot") or {}
+        if bus_snapshot.get("available"):
+            lines.extend(_build_bus_detail_lines(bus_snapshot))
+        elif metro_snapshot.get("available"):
+            lines.extend(_build_metro_detail_lines(metro_snapshot))
+        else:
+            lines.append("無即時資訊")
+    elif recommended_mode == "bus":
+        lines.extend(_build_bus_detail_lines(best_option.get("snapshot", {}) or {}))
+    elif recommended_mode == "metro":
+        lines.extend(_build_metro_detail_lines(best_option.get("snapshot", {}) or {}))
+    elif recommended_mode == "bus_to_metro":
+        snapshot = best_option.get("snapshot", {}) or {}
+        bus_snapshot = snapshot.get("bus_snapshot") or {}
+        metro_snapshot = snapshot.get("metro_snapshot") or {}
+        if bus_snapshot.get("available"):
+            lines.extend(_build_bus_detail_lines(bus_snapshot))
+        if metro_snapshot.get("available"):
+            lines.append("")
+            lines.extend(_build_metro_detail_lines(metro_snapshot))
+
+    return "\n".join(lines)
 
 
 def _build_reminder_payload_from_plan(plan: dict) -> dict:
-    reminder_lines = [
+    weather_info = plan["weather_info"]
+    best_option = plan["best_option"]
+    recommended_mode = plan["recommended_mode"]
+
+    lines = [
         "出門提醒：",
         f"你今天建議於 {plan['final_departure_time']} 出門",
-        f"建議方式：{plan['mode_text']}",
+        f"建議方式：{MODE_LABELS.get(recommended_mode, '目前以 Google 大眾運輸估算為主')}",
         f"到公司時間：{plan['effective_arrival_time']}",
-        f"方案摘要：{plan['option_summary']}",
-        f"出門時間依據：{plan['departure_calc'].get('mode_note', '目前先以基礎通勤估算為主')}",
-        f"今日模式設定：{plan['mode_override_text']}",
-        f"套用方式：{plan['selection_source_text']}",
-        f"今天天氣：{plan['weather_line']}，降雨機率 {plan['rain_line']}",
+        f"方案摘要：{best_option.get('summary', '目前以 Google 大眾運輸估算為主')}",
+        f"出門時間依據：{plan['departure_calc'].get('mode_note', '目前以 Google 大眾運輸估算為主')}",
+        f"今天天氣：{_weather_line(weather_info)}，降雨機率 {_rain_line(weather_info)}",
     ]
 
-    recommended_mode = plan["recommended_mode"]
-    best_option = plan["best_option"]
-
-    if recommended_mode == "bus":
-        bus_data = best_option.get("snapshot", {}) or {}
-        first_stop = bus_data.get("first_stop", {}) or {}
-        chosen_bus = bus_data.get("chosen_bus")
-        walk_minutes = bus_data.get("walk_minutes")
-
-        if first_stop:
-            reminder_lines.append(f"最近站牌：{first_stop.get('stop_name', '未知站牌')}")
-        if walk_minutes is not None:
-            reminder_lines.append(f"步行到站牌：約 {walk_minutes} 分鐘")
-        if chosen_bus and chosen_bus.get("eta_min") is not None:
-            bus_label = chosen_bus.get("route_name", "未知路線")
-            subroute_name = chosen_bus.get("subroute_name")
-            if subroute_name and subroute_name != chosen_bus.get("route_name"):
-                bus_label += f"({subroute_name})"
-            reminder_lines.append(f"可搭班次：{bus_label}，約 {chosen_bus['eta_min']} 分鐘後到站")
-
+    if recommended_mode == "google_transit":
+        snapshot = best_option.get("snapshot", {}) or {}
+        bus_snapshot = snapshot.get("bus_snapshot") or {}
+        metro_snapshot = snapshot.get("metro_snapshot") or {}
+        if bus_snapshot.get("available"):
+            lines.extend(_build_bus_detail_lines(bus_snapshot))
+        elif metro_snapshot.get("available"):
+            lines.extend(_build_metro_detail_lines(metro_snapshot))
+        else:
+            lines.append("無即時資訊")
+    elif recommended_mode == "bus":
+        lines.extend(_build_bus_detail_lines(best_option.get("snapshot", {}) or {}))
     elif recommended_mode == "metro":
-        metro_data = best_option.get("snapshot", {}) or {}
-        station = metro_data.get("station", {}) or {}
-        walk_minutes = metro_data.get("walk_minutes")
-
-        if station:
-            station_name = station.get("name")
-            if station_name:
-                reminder_lines.append(f"最近捷運站：{station_name}")
-        if walk_minutes is not None:
-            reminder_lines.append(f"步行到捷運站：約 {walk_minutes} 分鐘")
-
+        lines.extend(_build_metro_detail_lines(best_option.get("snapshot", {}) or {}))
     elif recommended_mode == "bus_to_metro":
-        mixed_data = best_option.get("snapshot", {}) or {}
-        bus_data = mixed_data.get("bus_snapshot", {}) or {}
-        metro_data = mixed_data.get("metro_snapshot", {}) or {}
+        snapshot = best_option.get("snapshot", {}) or {}
+        bus_snapshot = snapshot.get("bus_snapshot") or {}
+        metro_snapshot = snapshot.get("metro_snapshot") or {}
+        if bus_snapshot.get("available"):
+            lines.extend(_build_bus_detail_lines(bus_snapshot))
+        if metro_snapshot.get("available"):
+            lines.extend(_build_metro_detail_lines(metro_snapshot))
 
-        first_stop = bus_data.get("first_stop", {}) or {}
-        chosen_bus = bus_data.get("chosen_bus")
-        bus_walk_minutes = bus_data.get("walk_minutes")
-        station = metro_data.get("station", {}) or {}
-
-        if first_stop:
-            reminder_lines.append(f"第一段公車站牌：{first_stop.get('stop_name', '未知站牌')}")
-        if bus_walk_minutes is not None:
-            reminder_lines.append(f"步行到公車站：約 {bus_walk_minutes} 分鐘")
-        if chosen_bus and chosen_bus.get("eta_min") is not None:
-            bus_label = chosen_bus.get("route_name", "未知路線")
-            subroute_name = chosen_bus.get("subroute_name")
-            if subroute_name and subroute_name != chosen_bus.get("route_name"):
-                bus_label += f"({subroute_name})"
-            reminder_lines.append(f"第一段公車：{bus_label}，約 {chosen_bus['eta_min']} 分鐘後到站")
-        if station:
-            station_name = station.get("name")
-            if station_name:
-                reminder_lines.append(f"轉乘捷運：{station_name}")
-
-    text = "\n".join(reminder_lines)
+    text = "\n".join(lines)
     plan_key = hashlib.sha1(
         f"{plan['target_date'].isoformat()}|{plan['effective_arrival_time']}|{plan['final_departure_time']}|{plan['mode_override']}|{text}".encode("utf-8")
     ).hexdigest()
@@ -881,7 +687,7 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
         "ok": True,
         "plan_key": plan_key,
         "departure_time": plan["final_departure_time"],
-        "recommended_mode": plan["recommended_mode"],
+        "recommended_mode": recommended_mode,
         "text": text,
     }
 
