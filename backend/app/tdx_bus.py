@@ -13,7 +13,6 @@ _TOKEN_CACHE: dict[str, Any] = {
     "expires_at": 0,
 }
 
-# 快取
 _CITY_STOP_PAGE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _NEARBY_STOPS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _ETA_CACHE: dict[str, tuple[float, list[dict]]] = {}
@@ -30,58 +29,53 @@ BUS_API_COOLDOWN_SECONDS = 120
 
 
 CITY_EN_MAP = {
-    "台北市": "Taipei",
     "臺北市": "Taipei",
+    "台北市": "Taipei",
+    "Taipei City": "Taipei",
+    "Taipei": "Taipei",
     "新北市": "NewTaipei",
+    "New Taipei City": "NewTaipei",
+    "NewTaipei": "NewTaipei",
     "桃園市": "Taoyuan",
-    "台中市": "Taichung",
+    "Taoyuan City": "Taoyuan",
+    "Taoyuan": "Taoyuan",
     "臺中市": "Taichung",
-    "台南市": "Tainan",
+    "台中市": "Taichung",
+    "Taichung City": "Taichung",
+    "Taichung": "Taichung",
     "臺南市": "Tainan",
+    "台南市": "Tainan",
+    "Tainan City": "Tainan",
+    "Tainan": "Tainan",
     "高雄市": "Kaohsiung",
+    "Kaohsiung City": "Kaohsiung",
+    "Kaohsiung": "Kaohsiung",
     "基隆市": "Keelung",
+    "Keelung": "Keelung",
     "新竹市": "Hsinchu",
-    "新竹縣": "HsinchuCounty",
-    "苗栗縣": "MiaoliCounty",
-    "彰化縣": "ChanghuaCounty",
-    "南投縣": "NantouCounty",
-    "雲林縣": "YunlinCounty",
-    "嘉義市": "Chiayi",
-    "嘉義縣": "ChiayiCounty",
-    "屏東縣": "PingtungCounty",
-    "宜蘭縣": "YilanCounty",
-    "花蓮縣": "HualienCounty",
-    "台東縣": "TaitungCounty",
-    "臺東縣": "TaitungCounty",
-    "澎湖縣": "PenghuCounty",
-    "金門縣": "KinmenCounty",
-    "連江縣": "LienchiangCounty",
+    "Hsinchu City": "Hsinchu",
+    "Hsinchu": "Hsinchu",
 }
 
 
 def normalize_city_en(city_name: str | None) -> str | None:
     if not city_name:
         return None
-
-    city_name = city_name.strip()
-    if city_name in CITY_EN_MAP:
-        return CITY_EN_MAP[city_name]
-
-    return city_name
+    return CITY_EN_MAP.get(city_name.strip(), city_name.strip())
 
 
 async def get_access_token() -> str:
     now = time.time()
-    cached_token = _TOKEN_CACHE.get("access_token")
+    token = _TOKEN_CACHE.get("access_token")
     expires_at = _TOKEN_CACHE.get("expires_at", 0)
 
-    if cached_token and now < expires_at - 60:
-        return cached_token
+    if token and now < expires_at - 60:
+        return token
 
     if not TDX_CLIENT_ID or not TDX_CLIENT_SECRET:
-        raise RuntimeError("TDX_CLIENT_ID or TDX_CLIENT_SECRET is missing")
+        raise RuntimeError("TDX credentials missing")
 
-    form_data = {
+    data = {
         "grant_type": "client_credentials",
         "client_id": TDX_CLIENT_ID,
         "client_secret": TDX_CLIENT_SECRET,
@@ -90,29 +84,24 @@ async def get_access_token() -> str:
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
         response = await client.post(
             TDX_AUTH_URL,
-            data=form_data,
+            data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         response.raise_for_status()
         payload = response.json()
 
-    access_token = payload["access_token"]
-    expires_in = int(payload.get("expires_in", 3600))
-
-    _TOKEN_CACHE["access_token"] = access_token
-    _TOKEN_CACHE["expires_at"] = now + expires_in
-    return access_token
+    _TOKEN_CACHE["access_token"] = payload["access_token"]
+    _TOKEN_CACHE["expires_at"] = now + int(payload.get("expires_in", 3600))
+    return _TOKEN_CACHE["access_token"]
 
 
 async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
     global _BUS_API_COOLDOWN_UNTIL
 
-    now = time.time()
-    if now < _BUS_API_COOLDOWN_UNTIL:
+    if time.time() < _BUS_API_COOLDOWN_UNTIL:
         raise RuntimeError("TDX bus API cooldown active")
 
     token = await get_access_token()
-
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -125,19 +114,14 @@ async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
 
         if response.status_code == 429:
             _BUS_API_COOLDOWN_UNTIL = time.time() + BUS_API_COOLDOWN_SECONDS
-            print(
-                f"[tdx] GET {path} hit 429, enter cooldown {BUS_API_COOLDOWN_SECONDS}s, body={response.text}"
-            )
-
+            print(f"[tdx-bus] 429 cooldown={BUS_API_COOLDOWN_SECONDS}s path={path} body={response.text}")
         elif response.status_code >= 400:
-            print(f"[tdx] GET {path} failed status={response.status_code} body={response.text}")
+            print(f"[tdx-bus] status={response.status_code} path={path} body={response.text}")
 
         response.raise_for_status()
         data = response.json()
 
-    if isinstance(data, list):
-        return data
-    return []
+    return data if isinstance(data, list) else []
 
 
 def _distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -164,23 +148,32 @@ def simplify_stop_list(raw_stops: list[dict]) -> list[dict]:
     simplified: list[dict] = []
 
     for stop in raw_stops or []:
+        # 已經是簡化格式
+        if "stop_name" in stop and ("stop_uid" in stop or "stop_id" in stop):
+            simplified.append({
+                "stop_uid": stop.get("stop_uid"),
+                "stop_id": stop.get("stop_id"),
+                "stop_name": stop.get("stop_name") or "無法識別站牌",
+                "lat": stop.get("lat"),
+                "lng": stop.get("lng"),
+                "distance_m": stop.get("distance_m"),
+            })
+            continue
+
         stop_name_obj = stop.get("StopName") or {}
         stop_position = stop.get("StopPosition") or {}
-
         if not stop_position:
             stop_position = stop.get("StationPosition") or {}
 
-        name_zh = stop_name_obj.get("Zh_tw") or stop_name_obj.get("En") or "未知站牌"
-
-        lat = stop_position.get("PositionLat")
-        lng = stop_position.get("PositionLon")
+        name_zh = stop_name_obj.get("Zh_tw") or stop_name_obj.get("En") or "無法識別站牌"
 
         simplified.append({
             "stop_uid": stop.get("StopUID"),
             "stop_id": stop.get("StopID"),
             "stop_name": name_zh,
-            "lat": lat,
-            "lng": lng,
+            "lat": stop_position.get("PositionLat"),
+            "lng": stop_position.get("PositionLon"),
+            "distance_m": stop.get("distance_m"),
         })
 
     return _dedupe_by_uid_or_id(simplified)
@@ -193,7 +186,7 @@ def simplify_eta_list(raw_eta_list: list[dict]) -> list[dict]:
         route_name_obj = item.get("RouteName") or {}
         subroute_name_obj = item.get("SubRouteName") or {}
 
-        route_name = route_name_obj.get("Zh_tw") or route_name_obj.get("En") or "未知路線"
+        route_name = route_name_obj.get("Zh_tw") or route_name_obj.get("En") or "無路線資訊"
         subroute_name = subroute_name_obj.get("Zh_tw") or subroute_name_obj.get("En")
 
         estimate_time = item.get("EstimateTime")
@@ -225,7 +218,7 @@ def simplify_eta_list(raw_eta_list: list[dict]) -> list[dict]:
 
 
 async def _get_city_stop_page(city_en: str, page: int) -> list[dict]:
-    cache_key = f"{city_en}|page|{page}"
+    cache_key = f"{city_en}|{page}"
     now = time.time()
     cached = _CITY_STOP_PAGE_CACHE.get(cache_key)
     if cached and now - cached[0] <= CITY_STOP_PAGE_CACHE_SECONDS:
@@ -237,14 +230,14 @@ async def _get_city_stop_page(city_en: str, page: int) -> list[dict]:
         "$format": "JSON",
     }
 
-    raw_rows: list[dict] = []
+    rows: list[dict] = []
     try:
-        raw_rows = await tdx_get(f"/Bus/Stop/City/{city_en}", params=params)
+        rows = await tdx_get(f"/Bus/Stop/City/{city_en}", params=params)
     except Exception as e:
-        print(f"[bus-page] stop city failed: city={city_en}, page={page}, error={e}")
-        raw_rows = []
+        print(f"[bus-page] city={city_en} page={page} error={e}")
+        rows = []
 
-    simplified = simplify_stop_list(raw_rows)
+    simplified = simplify_stop_list(rows)
     _CITY_STOP_PAGE_CACHE[cache_key] = (now, simplified)
     return simplified
 
@@ -270,7 +263,6 @@ async def get_nearby_stops(
 
     for page in range(CITY_STOPS_MAX_PAGES):
         page_stops = await _get_city_stop_page(city_en, page)
-
         if not page_stops:
             break
 
@@ -293,11 +285,7 @@ async def get_nearby_stops(
     nearby_candidates.sort(key=lambda x: x.get("distance_m", 999999))
     result = nearby_candidates[:top]
 
-    print(
-        f"[bus-nearby] city={city_en} pages_checked={CITY_STOPS_MAX_PAGES} "
-        f"nearby_found={len(result)}"
-    )
-
+    print(f"[bus-nearby] city={city_en} pages_checked={CITY_STOPS_MAX_PAGES} nearby_found={len(result)}")
     _NEARBY_STOPS_CACHE[cache_key] = (now, result)
     return result
 
@@ -308,10 +296,7 @@ async def get_estimated_arrivals(
     stop_id: str | None = None,
 ) -> list[dict]:
     city_en = normalize_city_en(city_name)
-    if not city_en:
-        return []
-
-    if not stop_uid and not stop_id:
+    if not city_en or (not stop_uid and not stop_id):
         return []
 
     cache_key = f"{city_en}|{stop_uid}|{stop_id}"
@@ -320,21 +305,18 @@ async def get_estimated_arrivals(
     if cached and now - cached[0] <= ETA_CACHE_SECONDS:
         return cached[1]
 
-    params = {
-        "$format": "JSON",
-    }
-
+    params = {"$format": "JSON"}
     if stop_uid:
         params["$filter"] = f"StopUID eq '{stop_uid}'"
     else:
         params["$filter"] = f"StopID eq '{stop_id}'"
 
-    result: list[dict] = []
+    rows: list[dict] = []
     try:
-        result = await tdx_get(f"/Bus/EstimatedTimeOfArrival/City/{city_en}", params=params)
+        rows = await tdx_get(f"/Bus/EstimatedTimeOfArrival/City/{city_en}", params=params)
     except Exception as e:
-        print(f"[bus-eta] failed city={city_en}, stop_uid={stop_uid}, stop_id={stop_id}, error={e}")
-        result = []
+        print(f"[bus-eta] city={city_en} stop_uid={stop_uid} stop_id={stop_id} error={e}")
+        rows = []
 
-    _ETA_CACHE[cache_key] = (now, result)
-    return result
+    _ETA_CACHE[cache_key] = (now, rows)
+    return rows

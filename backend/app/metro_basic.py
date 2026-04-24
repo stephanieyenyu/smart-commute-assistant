@@ -15,8 +15,6 @@ _TOKEN_CACHE: dict[str, Any] = {
 
 _METRO_NEARBY_CACHE: dict[str, tuple[float, dict | None]] = {}
 METRO_CACHE_SECONDS = 180
-
-# 關鍵修正：TDX 這個 Nearby API 最大搜尋半徑為 1000 公尺
 MAX_NEARBY_RADIUS_M = 1000
 
 
@@ -28,11 +26,14 @@ def _distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 async def get_access_token() -> str:
     now = time.time()
-    if _TOKEN_CACHE["access_token"] and now < _TOKEN_CACHE["expires_at"] - 60:
-        return _TOKEN_CACHE["access_token"]
+    token = _TOKEN_CACHE.get("access_token")
+    expires_at = _TOKEN_CACHE.get("expires_at", 0)
+
+    if token and now < expires_at - 60:
+        return token
 
     if not TDX_CLIENT_ID or not TDX_CLIENT_SECRET:
-        raise RuntimeError("TDX_CLIENT_ID or TDX_CLIENT_SECRET is missing")
+        raise RuntimeError("TDX credentials missing")
 
     data = {
         "grant_type": "client_credentials",
@@ -49,42 +50,32 @@ async def get_access_token() -> str:
         response.raise_for_status()
         payload = response.json()
 
-    access_token = payload["access_token"]
-    expires_in = int(payload.get("expires_in", 3600))
-
-    _TOKEN_CACHE["access_token"] = access_token
-    _TOKEN_CACHE["expires_at"] = now + expires_in
-
-    return access_token
+    _TOKEN_CACHE["access_token"] = payload["access_token"]
+    _TOKEN_CACHE["expires_at"] = now + int(payload.get("expires_in", 3600))
+    return _TOKEN_CACHE["access_token"]
 
 
 async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
     token = await get_access_token()
-
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
     }
-
     url = f"{TDX_BASE_URL}{path}"
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
         response = await client.get(url, headers=headers, params=params)
-
         if response.status_code >= 400:
-            print(f"[metro] nearby lookup failed status={response.status_code} body={response.text}")
-
+            print(f"[metro-api] status={response.status_code} path={path} body={response.text}")
         response.raise_for_status()
         data = response.json()
 
-    if isinstance(data, list):
-        return data
-    return []
+    return data if isinstance(data, list) else []
 
 
-def _extract_station_name(station: dict) -> str:
+def _station_name(station: dict) -> str:
     station_name_obj = station.get("StationName") or {}
-    return station_name_obj.get("Zh_tw") or station_name_obj.get("En") or "未知站名"
+    return station_name_obj.get("Zh_tw") or station_name_obj.get("En") or "無法識別捷運站"
 
 
 async def get_nearest_metro_station_async(
@@ -92,10 +83,9 @@ async def get_nearest_metro_station_async(
     lng: float,
     radius_m: int = 1000,
 ) -> dict | None:
-    # 關鍵修正：不允許超過 TDX Nearby 上限
     radius_m = min(radius_m, MAX_NEARBY_RADIUS_M)
-
     cache_key = f"{round(lat, 4)}|{round(lng, 4)}|{radius_m}"
+
     now = time.time()
     cached = _METRO_NEARBY_CACHE.get(cache_key)
     if cached and now - cached[0] <= METRO_CACHE_SECONDS:
@@ -107,26 +97,24 @@ async def get_nearest_metro_station_async(
         "$format": "JSON",
     }
 
-    result: list[dict] = []
     try:
-        result = await tdx_get("/Rail/Metro/Station/NearBy", params=params)
+        rows = await tdx_get("/Rail/Metro/Station/NearBy", params=params)
     except Exception as e:
-        print(f"[metro-snapshot] failed: {e}")
+        print(f"[metro-nearby] error={e}")
         _METRO_NEARBY_CACHE[cache_key] = (now, None)
         return None
 
-    if not result:
+    if not rows:
         _METRO_NEARBY_CACHE[cache_key] = (now, None)
         return None
 
     best_station = None
     best_distance = None
 
-    for station in result:
-        station_position = station.get("StationPosition") or {}
-        station_lat = station_position.get("PositionLat")
-        station_lng = station_position.get("PositionLon")
-
+    for station in rows:
+        pos = station.get("StationPosition") or {}
+        station_lat = pos.get("PositionLat")
+        station_lng = pos.get("PositionLon")
         if station_lat is None or station_lng is None:
             continue
 
@@ -135,7 +123,7 @@ async def get_nearest_metro_station_async(
             best_distance = dist
             best_station = {
                 "id": station.get("StationID"),
-                "name": _extract_station_name(station),
+                "name": _station_name(station),
                 "lat": station_lat,
                 "lng": station_lng,
                 "distance_m": dist,
