@@ -6,9 +6,10 @@ from linebot.v3.webhook import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent, FollowEvent
 
+from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET
-from app.line_client import reply_text
 from app.db import SessionLocal
+from app.line_client import reply_text
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
@@ -18,193 +19,148 @@ from app.crud import (
     update_profile_field,
     update_address_and_coords,
     upsert_override,
+    get_next_setup_step,
+    reset_profile_for_reconfigure,
+    upsert_transport_mode_override,
+    get_transport_mode_override,
+    set_reminder_enabled,
 )
 from app.google_maps import geocode_address
-from app.weather import get_today_weather_by_city
-from app.service import calculate_departure_time, estimate_commute_minutes
+from app.service import (
+    calculate_departure_time,
+    build_today_commute_payload,
+    freeze_today_reminder_payload,
+    get_bus_realtime_snapshot,
+    get_metro_snapshot,
+)
+from app.reminder_scheduler import clear_today_reminder_state_for_user
 
 router = APIRouter()
-
-FIELD_LABELS = {
-    "home_location": "住家位置",
-    "office_location": "公司位置",
-    "preferred_arrival_time": "到公司時間",
-    "override_tomorrow_arrival_time": "明天到公司時間",
-}
 
 FIELD_PROMPTS = {
     "home_location": (
         "請傳送住家位置。\n"
-        "方法：\n"
-        "1. 若你有做快捷鍵，請點「傳送住家位置」或「傳送位置」\n"
-        "2. 或直接使用 LINE 的位置傳送功能送出住家位置\n"
-        "3. 若暫時不方便傳位置，也可以直接輸入完整住家地址"
+        "1. 傳 LINE 位置\n"
+        "2. 或直接輸入完整地址\n"
+        "3. 中英文地址都可以"
     ),
     "office_location": (
         "請傳送公司位置。\n"
-        "方法：\n"
-        "1. 若你有做快捷鍵，請點「傳送公司位置」或「傳送位置」\n"
-        "2. 或直接使用 LINE 的位置傳送功能送出公司位置\n"
-        "3. 若暫時不方便傳位置，也可以直接輸入完整公司地址"
+        "1. 傳 LINE 位置\n"
+        "2. 或直接輸入完整地址\n"
+        "3. 中英文地址都可以"
     ),
     "preferred_arrival_time": "請直接輸入到公司時間，格式 HH:MM，例如 08:30",
+    "override_today_arrival_time": "請直接輸入今天新的到公司時間，格式 HH:MM，例如 15:30",
     "override_tomorrow_arrival_time": "請直接輸入明天新的到公司時間，格式 HH:MM，例如 09:30",
 }
 
+<<<<<<< HEAD
 parser = WebhookParser(LINE_CHANNEL_SECRET)
+=======
+TRANSPORT_MODE_NAME_MAP = {
+    None: "自動判斷",
+    "auto": "自動判斷",
+    "bus": "公車優先",
+    "metro": "捷運優先",
+    "bus_to_metro": "公車轉捷運",
+}
+
+COMMAND_ALIASES = {
+    "view_settings": {"查看設定"},
+    "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
+    "tomorrow_departure": {"明天幾點出門"},
+    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間"},
+    "edit_tomorrow_arrival": {"修改明天到公司時間"},
+    "reset": {"重新設定"},
+    "send_home_location": {"傳送住家位置", "設定住家位置"},
+    "send_office_location": {"傳送公司位置", "設定公司位置"},
+    "test_bus": {"測試公車", "公車測試"},
+    "test_metro": {"測試捷運", "捷運測試"},
+    "test_reminder": {"測試提醒"},
+    "set_mode_auto": {"今天自動判斷", "今天交通自動"},
+    "set_mode_bus": {"今天搭公車", "今天坐公車"},
+    "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
+    "set_mode_bus_to_metro": {"今天搭公車轉捷運", "今天公車轉捷運"},
+    "view_mode_today": {"查看今天交通方式"},
+    "enable_reminder": {"開啟自動提醒"},
+    "disable_reminder": {"關閉自動提醒"},
+    "view_reminder_setting": {"查看提醒設定"},
+}
+
+READY_MENU_TEXT = (
+    "您目前設定已完成。\n"
+    "可傳送：\n"
+    "查看設定\n"
+    "今天通勤建議\n"
+    "明天幾點出門\n"
+    "修改明天到公司時間\n"
+    "重新設定\n"
+    "傳送住家位置\n"
+    "傳送公司位置\n"
+    "測試公車\n"
+    "測試捷運\n"
+    "今天自動判斷\n"
+    "今天搭公車\n"
+    "今天搭捷運\n"
+    "今天搭公車轉捷運\n"
+    "查看今天交通方式"
+)
 
 
-def format_profile_text(profile, tomorrow_override_time: str | None = None) -> str:
+def normalize_user_text(text: str) -> str:
+    if not text:
+        return ""
+    return text.strip().replace("\u3000", " ").replace("\n", "").replace("\r", "").replace(" ", "")
+
+
+def verify_line_signature(body: bytes, x_line_signature: str | None) -> bool:
+    if not x_line_signature or not LINE_CHANNEL_SECRET:
+        return False
+
+    digest = hmac.new(
+        LINE_CHANNEL_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).digest()
+    signature = base64.b64encode(digest).decode("utf-8")
+    return hmac.compare_digest(signature, x_line_signature)
+>>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
+
+
+def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None) -> str:
     home_address = profile.home_address or "尚未設定"
     office_address = profile.office_address or "尚未設定"
     preferred_arrival_time = profile.preferred_arrival_time or "尚未設定"
+    reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
 
     text = (
         "您目前設定如下：\n"
         f"住家位置：{home_address}\n"
         f"公司位置：{office_address}\n"
-        f"到公司時間：{preferred_arrival_time}"
+        f"到公司時間：{preferred_arrival_time}\n"
+        f"自動提醒：{reminder_status}"
     )
-
+    if today_override_time:
+        text += f"\n今天覆蓋到公司時間：{today_override_time}"
     if tomorrow_override_time:
         text += f"\n明天覆蓋到公司時間：{tomorrow_override_time}"
-
     return text
 
 
 def validate_pending_input(field_name: str, user_text: str):
-    if field_name in ["preferred_arrival_time", "override_tomorrow_arrival_time"]:
+    if field_name in {"preferred_arrival_time", "override_today_arrival_time", "override_tomorrow_arrival_time"}:
         value = user_text.strip()
         try:
             datetime.strptime(value, "%H:%M")
             return value, None
         except ValueError:
             return None, "時間格式錯誤，請輸入 HH:MM，例如 08:30"
-
-    return None, "未知的設定欄位。"
-
-
-def get_effective_arrival_time(db, user_id: int, target_date: date, default_arrival_time: str):
-    override = get_override_for_date(db, user_id, target_date)
-    if override:
-        return override.target_arrival_time, True
-    return default_arrival_time, False
+    return None, "未知欄位"
 
 
 def infer_city_from_text(text: str | None) -> str | None:
-    if not text:
-        return None
-
-    if "台北市" in text or "臺北市" in text:
-        return "臺北市"
-    if "台中市" in text or "臺中市" in text:
-        return "臺中市"
-    if "台南市" in text or "臺南市" in text:
-        return "臺南市"
-    if "高雄市" in text:
-        return "高雄市"
-    if "新北市" in text:
-        return "新北市"
-    if "桃園市" in text:
-        return "桃園市"
-    if "基隆市" in text:
-        return "基隆市"
-    if "新竹市" in text:
-        return "新竹市"
-    if "新竹縣" in text:
-        return "新竹縣"
-    if "苗栗縣" in text:
-        return "苗栗縣"
-    if "彰化縣" in text:
-        return "彰化縣"
-    if "南投縣" in text:
-        return "南投縣"
-    if "雲林縣" in text:
-        return "雲林縣"
-    if "嘉義市" in text:
-        return "嘉義市"
-    if "嘉義縣" in text:
-        return "嘉義縣"
-    if "屏東縣" in text:
-        return "屏東縣"
-    if "宜蘭縣" in text:
-        return "宜蘭縣"
-    if "台東縣" in text or "臺東縣" in text:
-        return "臺東縣"
-    if "花蓮縣" in text:
-        return "花蓮縣"
-    if "澎湖縣" in text:
-        return "澎湖縣"
-    if "金門縣" in text:
-        return "金門縣"
-    if "連江縣" in text:
-        return "連江縣"
-
-    return None
-
-
-def select_city_name(profile) -> str | None:
-    city_name = profile.home_city
-    if not city_name:
-        city_name = profile.office_city
-    if not city_name:
-        city_name = infer_city_from_text(profile.home_address)
-    if not city_name:
-        city_name = infer_city_from_text(profile.office_address)
-
-    print(f"[weather] selected_city_name={city_name}")
-    return city_name
-
-
-def get_next_setup_step(profile) -> str | None:
-    if not profile.home_address:
-        return "home_location"
-    if not profile.office_address:
-        return "office_location"
-    if not profile.preferred_arrival_time:
-        return "preferred_arrival_time"
-    return None
-
-
-def reset_profile_for_reconfigure(db, user_id: int):
-    profile = get_or_create_profile(db, user_id)
-
-    profile.home_address = None
-    profile.home_lat = None
-    profile.home_lng = None
-    profile.home_city = None
-
-    profile.office_address = None
-    profile.office_lat = None
-    profile.office_lng = None
-    profile.office_city = None
-
-    profile.preferred_arrival_time = None
-
-    # 先維持 0，之後你再改成系統自動算到站牌步行時間
-    profile.walk_to_bus_stop_min = 0
-
-    if hasattr(profile, "selected_bus_stop_id"):
-        profile.selected_bus_stop_id = None
-    if hasattr(profile, "selected_bus_stop_name"):
-        profile.selected_bus_stop_name = None
-    if hasattr(profile, "selected_bus_stop_lat"):
-        profile.selected_bus_stop_lat = None
-    if hasattr(profile, "selected_bus_stop_lng"):
-        profile.selected_bus_stop_lng = None
-
-    profile.pending_field = "home_location"
-
-    db.commit()
-    db.refresh(profile)
-    return profile
-
-
-def ensure_profile_defaults_for_calc(db, user_id: int, profile):
-    if profile.walk_to_bus_stop_min is None:
-        update_profile_field(db, user_id, "walk_to_bus_stop_min", 0)
-        profile = get_profile(db, user_id)
-    return profile
+    return extract_city_from_text(text)
 
 
 async def save_location_or_address(
@@ -219,16 +175,18 @@ async def save_location_or_address(
     try:
         geocode_result = await geocode_address(raw_address)
     except Exception as e:
-        print(f"[location/address] geocode failed: {e}")
+        print(f"[geocode] error={e}")
 
     normalized_address = raw_address
     city = infer_city_from_text(raw_address)
+    township = None
+    place_name = None
 
     if geocode_result:
         normalized_address = geocode_result.get("formatted_address") or raw_address
         city = geocode_result.get("city") or city
-
-        # 如果原本沒有 lat/lng，就用 geocode 回來的
+        township = geocode_result.get("township")
+        place_name = geocode_result.get("place_name")
         if lat is None:
             lat = geocode_result.get("lat")
         if lng is None:
@@ -242,6 +200,8 @@ async def save_location_or_address(
         lat,
         lng,
         city,
+        township,
+        place_name,
     )
 
 
@@ -262,22 +222,32 @@ async def line_webhook(
 
     try:
         for event in events:
+<<<<<<< HEAD
             line_user_id = event.source.user_id
 
+=======
+            event_type = event.get("type")
+            source = event.get("source", {})
+            line_user_id = source.get("userId")
+>>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
             if not line_user_id:
                 continue
 
             user = get_or_create_user(db, line_user_id=line_user_id)
-            profile = get_or_create_profile(db, user.id)
+            get_or_create_profile(db, user.id)
 
             if isinstance(event, FollowEvent):
                 set_pending_field(db, user.id, "home_location")
+<<<<<<< HEAD
                 reply_token = event.reply_token
                 await reply_text(
                     reply_token,
                     "歡迎使用智慧通勤助理。\n"
                     f"{FIELD_PROMPTS['home_location']}"
                 )
+=======
+                await reply_text(event.get("replyToken"), "歡迎使用智慧通勤助理。\n" + FIELD_PROMPTS["home_location"])
+>>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
                 continue
 
             if not isinstance(event, MessageEvent):
@@ -286,8 +256,12 @@ async def line_webhook(
             message = event.message
             reply_token = event.reply_token
 
+<<<<<<< HEAD
             # 1. 先處理 location message
             if isinstance(message, LocationMessageContent):
+=======
+            if message_type == "location":
+>>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
                 profile = get_profile(db, user.id)
                 current_step = profile.pending_field or get_next_setup_step(profile)
 
@@ -298,413 +272,362 @@ async def line_webhook(
                 raw_address = address or title or "未命名位置"
 
                 if current_step == "home_location":
-                    await save_location_or_address(
-                        db,
-                        user.id,
-                        "home",
-                        raw_address,
-                        lat=lat,
-                        lng=lng,
-                    )
+                    await save_location_or_address(db, user.id, "home", raw_address, lat=lat, lng=lng)
+                    clear_today_reminder_state_for_user(user.id)
                     set_pending_field(db, user.id, "office_location")
-                    await reply_text(
-                        reply_token,
-                        "已儲存住家位置。\n"
-                        f"{FIELD_PROMPTS['office_location']}"
-                    )
+                    await reply_text(reply_token, "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"])
                     continue
 
                 if current_step == "office_location":
-                    await save_location_or_address(
-                        db,
-                        user.id,
-                        "office",
-                        raw_address,
-                        lat=lat,
-                        lng=lng,
-                    )
-
-                    update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
+                    await save_location_or_address(db, user.id, "office", raw_address, lat=lat, lng=lng)
+                    clear_today_reminder_state_for_user(user.id)
                     set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_text(
-                        reply_token,
-                        "已儲存公司位置。\n"
-                        f"{FIELD_PROMPTS['preferred_arrival_time']}"
-                    )
+                    await reply_text(reply_token, "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"])
                     continue
 
-                await reply_text(
-                    reply_token,
-                    "目前不需要位置資訊。\n"
-                    "可傳送：查看設定、今天通勤建議、明天幾點出門、修改明天到公司時間、重新設定"
-                )
+                await reply_text(reply_token, READY_MENU_TEXT)
                 continue
 
+<<<<<<< HEAD
             # 2. 其他非文字、非位置訊息直接略過
             if not isinstance(message, TextMessageContent):
                 continue
 
             user_text = message.text.strip()
+=======
+            if message_type != "text":
+                continue
+
+            user_text = message.get("text", "").strip()
+            command_text = normalize_user_text(user_text)
+            print(f"[debug] user_text={repr(user_text)} | command_text={repr(command_text)}")
+>>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
 
             today_date = date.today()
             tomorrow_date = today_date + timedelta(days=1)
 
+            today_override = get_override_for_date(db, user.id, today_date)
+            today_override_time = today_override.target_arrival_time if today_override and today_override.target_arrival_time else None
             tomorrow_override = get_override_for_date(db, user.id, tomorrow_date)
-            tomorrow_override_time = (
-                tomorrow_override.target_arrival_time if tomorrow_override else None
-            )
+            tomorrow_override_time = tomorrow_override.target_arrival_time if tomorrow_override and tomorrow_override.target_arrival_time else None
 
-            # 3. 可直接切回位置設定的指令
-            if user_text in ["傳送住家位置", "設定住家位置"]:
+            if command_text in {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is None:
+                    await reply_text(reply_token, "你好，我是智慧通勤助理。\n" + READY_MENU_TEXT)
+                else:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, "你好，我是智慧通勤助理。\n" + FIELD_PROMPTS[next_step])
+                continue
+
+            if command_text in COMMAND_ALIASES["send_home_location"]:
                 set_pending_field(db, user.id, "home_location")
                 await reply_text(reply_token, FIELD_PROMPTS["home_location"])
                 continue
 
-            if user_text in ["傳送公司位置", "設定公司位置"]:
+            if command_text in COMMAND_ALIASES["send_office_location"]:
                 set_pending_field(db, user.id, "office_location")
                 await reply_text(reply_token, FIELD_PROMPTS["office_location"])
                 continue
 
-            # 4. 重新設定
-            if user_text == "重新設定":
+            if command_text in COMMAND_ALIASES["reset"]:
                 reset_profile_for_reconfigure(db, user.id)
-                await reply_text(
-                    reply_token,
-                    "好的，現在開始重新設定。\n"
-                    f"{FIELD_PROMPTS['home_location']}"
-                )
+                clear_today_reminder_state_for_user(user.id)
+                await reply_text(reply_token, "好的，現在開始重新設定。\n" + FIELD_PROMPTS["home_location"])
                 continue
 
-            # 5. 查看設定
-            if user_text == "查看設定":
+            if command_text in COMMAND_ALIASES["view_settings"]:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
-
                 if next_step is None:
                     set_pending_field(db, user.id, None)
-                    await reply_text(
-                        reply_token,
-                        format_profile_text(profile, tomorrow_override_time),
-                    )
-                    continue
-
-                set_pending_field(db, user.id, next_step)
-                await reply_text(
-                    reply_token,
-                    f"{format_profile_text(profile, tomorrow_override_time)}\n\n"
-                    "尚未完成設定。\n"
-                    f"{FIELD_PROMPTS[next_step]}"
-                )
+                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time))
+                else:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time) + "\n\n" + FIELD_PROMPTS[next_step])
                 continue
 
-            # 6. 今天通勤建議
-            if user_text == "今天通勤建議":
-                profile = get_profile(db, user.id)
-                next_step = get_next_setup_step(profile)
-
-                if next_step is not None:
-                    set_pending_field(db, user.id, next_step)
-                    await reply_text(
-                        reply_token,
-                        "請先完成基本設定。\n"
-                        f"{FIELD_PROMPTS[next_step]}"
-                    )
-                    continue
-
-                profile = ensure_profile_defaults_for_calc(db, user.id, profile)
-
-                effective_arrival_time, used_override = get_effective_arrival_time(
-                    db,
-                    user.id,
-                    today_date,
-                    profile.preferred_arrival_time,
-                )
-
-                estimated_minutes = await estimate_commute_minutes(
-                    profile,
-                    today_date,
-                    effective_arrival_time,
-                )
-
-                city_name = select_city_name(profile)
-                weather_info = await get_today_weather_by_city(city_name)
-                weather_buffer = weather_info["extra_buffer_minutes"]
-
-                departure_time = await calculate_departure_time(
-                    profile,
-                    today_date,
-                    effective_arrival_time,
-                    weather_buffer_minutes=weather_buffer,
-                )
-
-                note = (
-                    f"已套用今天覆蓋到公司時間：{effective_arrival_time}"
-                    if used_override
-                    else f"目前使用預設到公司時間：{effective_arrival_time}"
-                )
-
-                weather_text = weather_info["weather_text"]
-                pop = weather_info["pop"]
-                min_t = weather_info["temperature_min"]
-                max_t = weather_info["temperature_max"]
-
-                weather_line = f"{weather_text}"
-                if min_t is not None and max_t is not None:
-                    weather_line += f"，{min_t}-{max_t}°C"
-
-                rain_line = f"{pop}%" if pop is not None else "未知"
-
-                buffer_note = (
-                    f"今日天氣已額外增加 {weather_buffer} 分鐘緩衝。"
-                    if weather_buffer > 0
-                    else "今日天氣穩定，未額外增加天氣緩衝。"
-                )
-
-                print(
-                    "[today] "
-                    f"arrival={effective_arrival_time}, "
-                    f"estimated_minutes={estimated_minutes}, "
-                    f"weather_text={weather_text}, pop={pop}, "
-                    f"weather_buffer={weather_buffer}, departure={departure_time}"
-                )
-
-                await reply_text(
-                    reply_token,
-                    "今日通勤建議：\n"
-                    f"到公司時間：{effective_arrival_time}\n"
-                    f"建議出門時間：{departure_time}\n"
-                    "建議方式：目前以 Google 大眾運輸估算為主\n"
-                    f"預估通勤時間：{estimated_minutes} 分鐘\n"
-                    f"今日天氣：{weather_line}\n"
-                    f"降雨機率：{rain_line}\n"
-                    f"說明：{note}\n"
-                    f"提醒：{buffer_note}"
-                )
+            if command_text in COMMAND_ALIASES["enable_reminder"]:
+                set_reminder_enabled(db, user.id, True)
+                await reply_text(reply_token, "已開啟自動提醒。")
                 continue
 
-            # 7. 明天幾點出門
-            if user_text == "明天幾點出門":
-                profile = get_profile(db, user.id)
-                next_step = get_next_setup_step(profile)
-
-                if next_step is not None:
-                    set_pending_field(db, user.id, next_step)
-                    await reply_text(
-                        reply_token,
-                        "請先完成基本設定。\n"
-                        f"{FIELD_PROMPTS[next_step]}"
-                    )
-                    continue
-
-                profile = ensure_profile_defaults_for_calc(db, user.id, profile)
-
-                effective_arrival_time, used_override = get_effective_arrival_time(
-                    db,
-                    user.id,
-                    tomorrow_date,
-                    profile.preferred_arrival_time,
-                )
-
-                estimated_minutes = await estimate_commute_minutes(
-                    profile,
-                    tomorrow_date,
-                    effective_arrival_time,
-                )
-
-                city_name = select_city_name(profile)
-                weather_info = await get_today_weather_by_city(city_name)
-                weather_buffer = weather_info["extra_buffer_minutes"]
-
-                departure_time = await calculate_departure_time(
-                    profile,
-                    tomorrow_date,
-                    effective_arrival_time,
-                    weather_buffer_minutes=weather_buffer,
-                )
-
-                note = (
-                    f"已套用明天覆蓋到公司時間：{effective_arrival_time}"
-                    if used_override
-                    else f"目前使用預設到公司時間：{effective_arrival_time}"
-                )
-
-                weather_text = weather_info["weather_text"]
-                pop = weather_info["pop"]
-                rain_line = f"{pop}%" if pop is not None else "未知"
-
-                print(
-                    "[tomorrow] "
-                    f"arrival={effective_arrival_time}, "
-                    f"estimated_minutes={estimated_minutes}, "
-                    f"weather_text={weather_text}, pop={pop}, "
-                    f"weather_buffer={weather_buffer}, departure={departure_time}"
-                )
-
-                await reply_text(
-                    reply_token,
-                    f"明天建議 {departure_time} 出門。\n"
-                    f"{note}\n"
-                    f"預估通勤時間：{estimated_minutes} 分鐘\n"
-                    f"參考天氣：{weather_text}\n"
-                    f"降雨機率：{rain_line}\n"
-                    f"已套用天氣緩衝：{weather_buffer} 分鐘。"
-                )
+            if command_text in COMMAND_ALIASES["disable_reminder"]:
+                set_reminder_enabled(db, user.id, False)
+                await reply_text(reply_token, "已關閉自動提醒。")
                 continue
 
-            # 8. 修改明天到公司時間
-            if user_text == "修改明天到公司時間":
+            if command_text in COMMAND_ALIASES["view_reminder_setting"]:
+                profile = get_profile(db, user.id)
+                await reply_text(reply_token, f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}")
+                continue
+
+            if command_text in COMMAND_ALIASES["set_mode_auto"]:
+                upsert_transport_mode_override(db, user.id, today_date, "auto")
+                clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-auto] error={e}")
+                await reply_text(reply_token, "已設定今天交通方式為：自動判斷")
+                continue
+
+            if command_text in COMMAND_ALIASES["set_mode_bus"]:
+                upsert_transport_mode_override(db, user.id, today_date, "bus")
+                clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-bus] error={e}")
+                await reply_text(reply_token, "已設定今天交通方式為：公車優先")
+                continue
+
+            if command_text in COMMAND_ALIASES["set_mode_metro"]:
+                upsert_transport_mode_override(db, user.id, today_date, "metro")
+                clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-metro] error={e}")
+                await reply_text(reply_token, "已設定今天交通方式為：捷運優先")
+                continue
+
+            if command_text in COMMAND_ALIASES["set_mode_bus_to_metro"]:
+                upsert_transport_mode_override(db, user.id, today_date, "bus_to_metro")
+                clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-bus-to-metro] error={e}")
+                await reply_text(reply_token, "已設定今天交通方式為：公車轉捷運")
+                continue
+
+            if command_text in COMMAND_ALIASES["view_mode_today"]:
+                current_mode = get_transport_mode_override(db, user.id, today_date) or "auto"
+                await reply_text(reply_token, f"今天交通方式設定：{TRANSPORT_MODE_NAME_MAP.get(current_mode, '自動判斷')}")
+                continue
+
+            if command_text in COMMAND_ALIASES["test_bus"]:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
-
                 if next_step is not None:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(
-                        reply_token,
-                        "請先完成基本設定，之後才能修改明天到公司時間。\n"
-                        f"{FIELD_PROMPTS[next_step]}"
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    continue
+
+                bus_snapshot = await get_bus_realtime_snapshot(profile)
+                if not bus_snapshot.get("available"):
+                    await reply_text(reply_token, "附近站牌測試：\n無即時資訊")
+                    continue
+
+                nearby_stops = bus_snapshot.get("nearby_stops", []) or []
+                first_stop = bus_snapshot.get("first_stop", {}) or {}
+                valid_eta_list = bus_snapshot.get("valid_eta_list", []) or []
+
+                lines = ["附近站牌測試："]
+                for idx, stop in enumerate(nearby_stops[:5], start=1):
+                    lines.append(
+                        f"{idx}. {stop.get('stop_name', '無法識別站牌')} | "
+                        f"stop_id={stop.get('stop_id', '無即時資訊')} | "
+                        f"uid={stop.get('stop_uid', '無即時資訊')}"
                     )
+
+                lines.append("")
+                lines.append(f"最近站牌 ETA 測試：{first_stop.get('stop_name', '無法識別站牌')}")
+
+                if valid_eta_list:
+                    for eta in valid_eta_list[:5]:
+                        route_label = eta.get("route_name", "無路線資訊")
+                        subroute_name = eta.get("subroute_name")
+                        if subroute_name and subroute_name != eta.get("route_name"):
+                            route_label += f"({subroute_name})"
+                        eta_text = f"{eta['eta_min']} 分鐘" if eta.get("eta_min") is not None else "無即時資訊"
+                        lines.append(f"{route_label}：{eta_text}")
+                else:
+                    lines.append("無即時資訊")
+
+                await reply_text(reply_token, "\n".join(lines))
+                continue
+
+            if command_text in COMMAND_ALIASES["test_metro"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    continue
+
+                metro_snapshot = await get_metro_snapshot(profile)
+                if not metro_snapshot.get("available"):
+                    await reply_text(reply_token, "捷運測試：\n無即時資訊")
+                    continue
+
+                station = metro_snapshot.get("station", {}) or {}
+                distance_km = metro_snapshot.get("distance_km")
+                walk_minutes = metro_snapshot.get("walk_minutes")
+
+                lines = [
+                    "捷運測試：",
+                    f"最近捷運站：{station.get('name', '無法識別捷運站')}",
+                    f"直線距離：約 {distance_km:.2f} 公里" if distance_km is not None else "直線距離：無法估算",
+                    f"步行到捷運站：約 {walk_minutes if walk_minutes is not None else '無法估算'} 分鐘",
+                ]
+                await reply_text(reply_token, "\n".join(lines))
+                continue
+
+            if command_text in COMMAND_ALIASES["test_reminder"]:
+                await reply_text(reply_token, READY_MENU_TEXT)
+                continue
+
+            if command_text in COMMAND_ALIASES["today_commute"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    continue
+
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=today_date,
+                    force_mode_override=None,
+                    header="今日通勤建議：",
+                )
+                if not payload.get("ok"):
+                    await reply_text(reply_token, "今日通勤建議：\n無法建立通勤建議")
+                    continue
+
+                try:
+                    await freeze_today_reminder_payload(
+                        db=db,
+                        user_id=user.id,
+                        target_date=today_date,
+                        plan=payload,
+                    )
+                except Exception as e:
+                    print(f"[freeze-today-commute] error={e}")
+
+                await reply_text(reply_token, payload["text"])
+                continue
+
+            if command_text in COMMAND_ALIASES["tomorrow_departure"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    continue
+
+                effective_arrival_time = profile.preferred_arrival_time
+                override = get_override_for_date(db, user.id, tomorrow_date)
+                if override and override.target_arrival_time:
+                    effective_arrival_time = override.target_arrival_time
+
+                departure_time = await calculate_departure_time(profile, tomorrow_date, effective_arrival_time)
+                await reply_text(reply_token, f"明天建議 {departure_time} 出門。")
+                continue
+
+            if command_text in COMMAND_ALIASES["edit_today_arrival"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    continue
+
+                set_pending_field(db, user.id, "override_today_arrival_time")
+                await reply_text(reply_token, FIELD_PROMPTS["override_today_arrival_time"])
+                continue
+
+            if command_text in COMMAND_ALIASES["edit_tomorrow_arrival"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
                     continue
 
                 set_pending_field(db, user.id, "override_tomorrow_arrival_time")
-                await reply_text(
-                    reply_token,
-                    FIELD_PROMPTS["override_tomorrow_arrival_time"]
-                )
+                await reply_text(reply_token, FIELD_PROMPTS["override_tomorrow_arrival_time"])
                 continue
 
-            # 9. 若正在等待位置，但使用者傳的是文字地址，也接受
             profile = get_profile(db, user.id)
             current_step = profile.pending_field or get_next_setup_step(profile)
 
-            if current_step in ["home_location", "office_location"]:
+            if current_step in {"home_location", "office_location"}:
                 typed_address = user_text.strip()
-
                 if not typed_address:
-                    await reply_text(
-                        reply_token,
-                        f"內容不能是空白。\n{FIELD_PROMPTS[current_step]}"
-                    )
+                    await reply_text(reply_token, FIELD_PROMPTS[current_step])
+                    continue
+
+                if not looks_like_address(typed_address):
+                    await reply_text(reply_token, FIELD_PROMPTS[current_step])
                     continue
 
                 try:
                     if current_step == "home_location":
-                        await save_location_or_address(
-                            db,
-                            user.id,
-                            "home",
-                            typed_address,
-                        )
+                        await save_location_or_address(db, user.id, "home", typed_address)
+                        clear_today_reminder_state_for_user(user.id)
                         set_pending_field(db, user.id, "office_location")
-                        await reply_text(
-                            reply_token,
-                            "已儲存住家位置。\n"
-                            f"{FIELD_PROMPTS['office_location']}"
-                        )
+                        await reply_text(reply_token, "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"])
                         continue
 
                     if current_step == "office_location":
-                        await save_location_or_address(
-                            db,
-                            user.id,
-                            "office",
-                            typed_address,
-                        )
-                        update_profile_field(db, user.id, "walk_to_bus_stop_min", 0)
+                        await save_location_or_address(db, user.id, "office", typed_address)
+                        clear_today_reminder_state_for_user(user.id)
                         set_pending_field(db, user.id, "preferred_arrival_time")
-                        await reply_text(
-                            reply_token,
-                            "已儲存公司位置。\n"
-                            f"{FIELD_PROMPTS['preferred_arrival_time']}"
-                        )
+                        await reply_text(reply_token, "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"])
                         continue
                 except Exception as e:
-                    print(f"[text address] save failed: {e}")
-                    await reply_text(
-                        reply_token,
-                        "地址辨識失敗，請重新輸入更完整地址，或直接傳送位置。"
-                    )
+                    print(f"[text-address] error={e}")
+                    await reply_text(reply_token, "地址辨識失敗，請重新輸入完整地址或直接傳送位置。")
                     continue
 
-            # 10. 若正在等待文字欄位，就把這次輸入當答案
-            if current_step in ["preferred_arrival_time", "override_tomorrow_arrival_time"]:
+            if current_step in {"preferred_arrival_time", "override_today_arrival_time", "override_tomorrow_arrival_time"}:
                 value, error_message = validate_pending_input(current_step, user_text)
-
                 if error_message:
-                    await reply_text(
-                        reply_token,
-                        f"{error_message}\n{FIELD_PROMPTS[current_step]}"
-                    )
+                    await reply_text(reply_token, error_message + "\n" + FIELD_PROMPTS[current_step])
+                    continue
+
+                if current_step == "override_today_arrival_time":
+                    upsert_override(db, user.id, today_date, value)
+                    clear_today_reminder_state_for_user(user.id)
+                    try:
+                        await freeze_today_reminder_payload(db, user.id, today_date)
+                    except Exception as e:
+                        print(f"[freeze-today-override] error={e}")
+                    set_pending_field(db, user.id, None)
+                    await reply_text(reply_token, f"已儲存今天到公司時間：{value}")
                     continue
 
                 if current_step == "override_tomorrow_arrival_time":
-                    upsert_override(
-                        db,
-                        user.id,
-                        tomorrow_date,
-                        value,
-                    )
+                    upsert_override(db, user.id, tomorrow_date, value)
                     set_pending_field(db, user.id, None)
-
-                    refreshed_profile = get_profile(db, user.id)
-                    refreshed_profile = ensure_profile_defaults_for_calc(db, user.id, refreshed_profile)
-
-                    departure_time = await calculate_departure_time(
-                        refreshed_profile,
-                        tomorrow_date,
-                        value,
-                    )
-
-                    await reply_text(
-                        reply_token,
-                        f"已儲存明天到公司時間：{value}\n"
-                        f"明天建議 {departure_time} 出門。"
-                    )
+                    departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, value)
+                    await reply_text(reply_token, f"已儲存明天到公司時間：{value}\n明天建議 {departure_time} 出門。")
                     continue
 
-                update_profile_field(db, user.id, current_step, value)
+                update_profile_field(db, user.id, "preferred_arrival_time", value)
+                clear_today_reminder_state_for_user(user.id)
+                set_pending_field(db, user.id, None)
+
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-preferred-arrival] error={e}")
 
                 updated_profile = get_profile(db, user.id)
-                next_step = get_next_setup_step(updated_profile)
-
-                if next_step is None:
-                    set_pending_field(db, user.id, None)
-                    await reply_text(
-                        reply_token,
-                        f"已儲存{FIELD_LABELS[current_step]}。\n\n"
-                        f"{format_profile_text(updated_profile, tomorrow_override_time)}"
-                    )
-                    continue
-
-                set_pending_field(db, user.id, next_step)
-                await reply_text(
-                    reply_token,
-                    f"已儲存{FIELD_LABELS[current_step]}。\n"
-                    f"{FIELD_PROMPTS[next_step]}"
-                )
+                await reply_text(reply_token, f"已儲存到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}")
                 continue
 
-            # 11. 其他未知訊息
             next_step = get_next_setup_step(profile)
-
             if next_step is None:
-                await reply_text(
-                    reply_token,
-                    "您目前設定已完成。\n"
-                    "可傳送：\n"
-                    "查看設定\n"
-                    "今天通勤建議\n"
-                    "明天幾點出門\n"
-                    "修改明天到公司時間\n"
-                    "重新設定\n"
-                    "傳送住家位置\n"
-                    "傳送公司位置"
-                )
+                await reply_text(reply_token, READY_MENU_TEXT)
             else:
                 set_pending_field(db, user.id, next_step)
-                await reply_text(
-                    reply_token,
-                    f"尚未完成設定。\n{FIELD_PROMPTS[next_step]}"
-                )
+                await reply_text(reply_token, FIELD_PROMPTS[next_step])
 
     finally:
         db.close()
