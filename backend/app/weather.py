@@ -1,113 +1,232 @@
-﻿import httpx
-from app.config import CWA_API_KEY
+﻿import os
+from datetime import datetime
+from typing import Any
 
-CWA_FORECAST_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
+import httpx
 
-
-def normalize_city_name(city_name: str | None) -> str | None:
-    if not city_name:
-        return None
-
-    mapping = {
-        "台北市": "臺北市",
-        "台中市": "臺中市",
-        "台南市": "臺南市",
-        "台東縣": "臺東縣",
-    }
-    return mapping.get(city_name, city_name)
+from app.address_utils import normalize_city_name, extract_city_from_text
 
 
-async def get_today_weather_by_city(city_name: str | None):
-    default_result = {
+_weather_cache: dict[str, tuple[float, dict]] = {}
+WEATHER_CACHE_SECONDS = 300
+
+
+def _get_weather_api_key() -> str | None:
+    return (
+        os.getenv("CWA_API_KEY")
+        or os.getenv("WEATHER_API_KEY")
+        or os.getenv("CWB_API_KEY")
+        or os.getenv("CWA_TOKEN")
+    )
+
+
+def _build_failed_weather_result(
+    *,
+    city: str | None = None,
+    township: str | None = None,
+    scope: str = "weather_unavailable",
+) -> dict[str, Any]:
+    return {
         "weather_text": "未知",
+        "weather_description": None,
+        "pop": None,
+        "temperature": None,
         "temperature_min": None,
         "temperature_max": None,
-        "pop": None,
         "extra_buffer_minutes": 0,
+        "scope": scope,
+        "city": city,
+        "township": township,
     }
 
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return None
+
+
+def _calculate_weather_buffer(pop: int | None, weather_text: str | None) -> int:
+    wx = weather_text or ""
+
+    if pop is not None and pop >= 80:
+        return 12
+    if pop is not None and pop >= 60:
+        return 8
+    if pop is not None and pop >= 40:
+        return 5
+
+    rainy_keywords = ["雨", "雷", "陣雨", "雷雨", "豪雨", "大雨"]
+    if any(keyword in wx for keyword in rainy_keywords):
+        return 6
+
+    return 0
+
+
+def _pick_parameter_value(parameter_block: dict[str, Any]) -> str | None:
+    if not parameter_block:
+        return None
+
+    value = parameter_block.get("parameterName")
+    if value is not None:
+        return str(value).strip()
+
+    value = parameter_block.get("parameterValue")
+    if value is not None:
+        return str(value).strip()
+
+    return None
+
+
+def _select_best_time_block(time_blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not time_blocks:
+        return None
+
+    now = datetime.now()
+
+    for block in time_blocks:
+        try:
+            start_str = block.get("startTime")
+            end_str = block.get("endTime")
+            if not start_str or not end_str:
+                continue
+
+            start_dt = datetime.fromisoformat(start_str)
+            end_dt = datetime.fromisoformat(end_str)
+
+            if start_dt <= now <= end_dt:
+                return block
+        except Exception:
+            continue
+
+    return time_blocks[0]
+
+
+def _parse_city_weather_payload(city_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    records = payload.get("records") or {}
+    locations = records.get("location") or []
+    location = next((loc for loc in locations if loc.get("locationName") == city_name), None)
+
+    if not location:
+        return _build_failed_weather_result(city=city_name, scope="city_not_found")
+
+    weather_elements = location.get("weatherElement") or []
+
+    wx_value = None
+    pop_value = None
+    min_t = None
+    max_t = None
+
+    for element in weather_elements:
+        element_name = element.get("elementName")
+        time_blocks = element.get("time") or []
+        chosen_block = _select_best_time_block(time_blocks)
+        if not chosen_block:
+            continue
+
+        parameter = chosen_block.get("parameter") or {}
+        raw_value = _pick_parameter_value(parameter)
+
+        if element_name == "Wx":
+            wx_value = raw_value
+        elif element_name == "PoP":
+            pop_value = _safe_int(raw_value)
+        elif element_name == "MinT":
+            min_t = _safe_int(raw_value)
+        elif element_name == "MaxT":
+            max_t = _safe_int(raw_value)
+
+    extra_buffer = _calculate_weather_buffer(pop_value, wx_value)
+
+    return {
+        "weather_text": wx_value or "未知",
+        "weather_description": None,
+        "pop": pop_value,
+        "temperature": None,
+        "temperature_min": min_t,
+        "temperature_max": max_t,
+        "extra_buffer_minutes": extra_buffer,
+        "scope": "city",
+        "city": city_name,
+        "township": None,
+    }
+
+
+async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
     city_name = normalize_city_name(city_name)
 
     if not city_name:
-        print("[weather] city_name is None")
-        return default_result
+        return _build_failed_weather_result(scope="missing_city")
 
-    if not CWA_API_KEY:
-        print("[weather] CWA_API_KEY is empty")
-        return default_result
+    now_ts = datetime.now().timestamp()
+    cached = _weather_cache.get(city_name)
+    if cached and now_ts - cached[0] <= WEATHER_CACHE_SECONDS:
+        return cached[1]
 
+    api_key = _get_weather_api_key()
+    if not api_key:
+        print("[weather] missing API key")
+        return _build_failed_weather_result(city=city_name, scope="missing_api_key")
+
+    url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
     params = {
-        "Authorization": CWA_API_KEY,
+        "Authorization": api_key,
         "format": "JSON",
         "locationName": city_name,
     }
 
     try:
         async with httpx.AsyncClient(
-            timeout=15,
+            timeout=httpx.Timeout(8.0, connect=3.0),
             verify=False,
-            trust_env=False,
         ) as client:
-            response = await client.get(CWA_FORECAST_URL, params=params)
+            response = await client.get(url, params=params)
+            if response.status_code >= 400:
+                print(f"[weather] city lookup failed: city={city_name}, status={response.status_code}, body={response.text}")
             response.raise_for_status()
-            data = response.json()
+            payload = response.json()
+            result = _parse_city_weather_payload(city_name, payload)
+            _weather_cache[city_name] = (now_ts, result)
+            print(f"[weather] success city={city_name} result={result}")
+            return result
+
     except Exception as e:
-        print(f"[weather] request failed: {e}")
-        return default_result
+        print(f"[weather] city lookup failed: city={city_name}, error={e}")
+        return _build_failed_weather_result(city=city_name, scope="weather_api_failed")
 
-    print(f"[weather] city_name={city_name}")
-    print(f"[weather] success={data.get('success')}")
 
-    records = data.get("records", {})
-    locations = records.get("location", [])
+async def get_commute_weather(profile) -> dict[str, Any]:
+    home_city = normalize_city_name(getattr(profile, "home_city", None))
+    office_city = normalize_city_name(getattr(profile, "office_city", None))
 
-    if not locations:
-        print("[weather] no locations found")
-        return default_result
+    home_township = getattr(profile, "home_township", None)
+    home_address = getattr(profile, "home_address", None)
+    office_address = getattr(profile, "office_address", None)
 
-    location = locations[0]
-    weather_elements = location.get("weatherElement", [])
+    print(
+        f"[weather-debug] home_city={home_city}, home_township={home_township}, "
+        f"home_address={home_address}, office_city={office_city}, office_address={office_address}"
+    )
 
-    weather_text = None
-    temperature_min = None
-    temperature_max = None
-    pop = None
+    city_name = (
+        home_city
+        or extract_city_from_text(home_address)
+        or office_city
+        or extract_city_from_text(office_address)
+    )
 
-    for element in weather_elements:
-        element_name = element.get("elementName")
-        times = element.get("time", [])
-        if not times:
-            continue
+    if not city_name:
+        print("[weather] no city info found from profile/address")
+        return _build_failed_weather_result(
+            city=None,
+            township=home_township,
+            scope="missing_city",
+        )
 
-        first_time = times[0]
-        parameter = first_time.get("parameter", {})
-        parameter_name = parameter.get("parameterName")
-
-        if element_name == "Wx":
-            weather_text = parameter_name
-        elif element_name == "MinT":
-            temperature_min = parameter_name
-        elif element_name == "MaxT":
-            temperature_max = parameter_name
-        elif element_name == "PoP":
-            try:
-                pop = int(parameter_name)
-            except (TypeError, ValueError):
-                pop = None
-
-    extra_buffer_minutes = 0
-    if pop is not None:
-        if pop >= 80:
-            extra_buffer_minutes = 15
-        elif pop >= 60:
-            extra_buffer_minutes = 10
-        elif pop >= 30:
-            extra_buffer_minutes = 5
-
-    return {
-        "weather_text": weather_text or "未知",
-        "temperature_min": temperature_min,
-        "temperature_max": temperature_max,
-        "pop": pop,
-        "extra_buffer_minutes": extra_buffer_minutes,
-    }
+    result = await get_today_weather_by_city(city_name)
+    result["city"] = city_name
+    result["township"] = home_township
+    return result
