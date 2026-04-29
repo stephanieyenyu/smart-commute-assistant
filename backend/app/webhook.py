@@ -1,10 +1,10 @@
-﻿import base64
-import hashlib
-import hmac
 import json
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from linebot.v3.webhook import WebhookParser
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent, FollowEvent
 
 from app.config import LINE_CHANNEL_SECRET
 from app.line_client import reply_text
@@ -51,19 +51,7 @@ FIELD_PROMPTS = {
     "override_tomorrow_arrival_time": "請直接輸入明天新的到公司時間，格式 HH:MM，例如 09:30",
 }
 
-
-def verify_line_signature(body: bytes, x_line_signature: str | None) -> bool:
-    if not x_line_signature:
-        return False
-
-    digest = hmac.new(
-        LINE_CHANNEL_SECRET.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).digest()
-
-    signature = base64.b64encode(digest).decode("utf-8")
-    return hmac.compare_digest(signature, x_line_signature)
+parser = WebhookParser(LINE_CHANNEL_SECRET)
 
 
 def format_profile_text(profile, tomorrow_override_time: str | None = None) -> str:
@@ -263,20 +251,18 @@ async def line_webhook(
     x_line_signature: str | None = Header(default=None),
 ):
     body = await request.body()
+    body_str = body.decode("utf-8")
 
-    if not verify_line_signature(body, x_line_signature):
+    try:
+        events = parser.parse(body_str, x_line_signature)
+    except InvalidSignatureError:
         raise HTTPException(status_code=400, detail="Invalid signature")
-
-    payload = json.loads(body.decode("utf-8"))
-    events = payload.get("events", [])
 
     db = SessionLocal()
 
     try:
         for event in events:
-            event_type = event.get("type")
-            source = event.get("source", {})
-            line_user_id = source.get("userId")
+            line_user_id = event.source.user_id
 
             if not line_user_id:
                 continue
@@ -284,9 +270,9 @@ async def line_webhook(
             user = get_or_create_user(db, line_user_id=line_user_id)
             profile = get_or_create_profile(db, user.id)
 
-            if event_type == "follow":
+            if isinstance(event, FollowEvent):
                 set_pending_field(db, user.id, "home_location")
-                reply_token = event.get("replyToken")
+                reply_token = event.reply_token
                 await reply_text(
                     reply_token,
                     "歡迎使用智慧通勤助理。\n"
@@ -294,22 +280,21 @@ async def line_webhook(
                 )
                 continue
 
-            if event_type != "message":
+            if not isinstance(event, MessageEvent):
                 continue
 
-            message = event.get("message", {})
-            message_type = message.get("type")
-            reply_token = event.get("replyToken")
+            message = event.message
+            reply_token = event.reply_token
 
             # 1. 先處理 location message
-            if message_type == "location":
+            if isinstance(message, LocationMessageContent):
                 profile = get_profile(db, user.id)
                 current_step = profile.pending_field or get_next_setup_step(profile)
 
-                lat = message.get("latitude")
-                lng = message.get("longitude")
-                title = message.get("title")
-                address = message.get("address")
+                lat = message.latitude
+                lng = message.longitude
+                title = message.title
+                address = message.address
                 raw_address = address or title or "未命名位置"
 
                 if current_step == "home_location":
@@ -356,10 +341,10 @@ async def line_webhook(
                 continue
 
             # 2. 其他非文字、非位置訊息直接略過
-            if message_type != "text":
+            if not isinstance(message, TextMessageContent):
                 continue
 
-            user_text = message.get("text", "").strip()
+            user_text = message.text.strip()
 
             today_date = date.today()
             tomorrow_date = today_date + timedelta(days=1)
