@@ -13,6 +13,8 @@ CWA_API_KEY = os.getenv("CWA_API_KEY", "")
 PORT = int(os.getenv("PORT", "8000"))
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./smart_commute.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 TDX_CLIENT_ID = os.getenv("TDX_CLIENT_ID", "")
