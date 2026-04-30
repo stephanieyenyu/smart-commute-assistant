@@ -9,7 +9,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessag
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET
 from app.db import SessionLocal
-from app.line_client import reply_text
+from app.line_client import reply_text, reply_with_quick_reply
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
@@ -57,6 +57,16 @@ FIELD_PROMPTS = {
 
 parser = WebhookParser(LINE_CHANNEL_SECRET)
 
+# Quick reply buttons for onboarding / greeting
+ONBOARDING_QUICK_REPLIES = [
+    {"type": "location", "label": "📍 設定住家位置"},
+    {"type": "location", "label": "🏢 設定公司位置"},
+    {"type": "message",  "label": "⏰ 設定到公司時間", "text": "設定到公司時間"},
+]
+
+HOME_QUICK_REPLY = [{"type": "location", "label": "📍 傳送住家位置"}]
+OFFICE_QUICK_REPLY = [{"type": "location", "label": "🏢 傳送公司位置"}]
+
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
     "auto": "自動判斷",
@@ -69,7 +79,7 @@ COMMAND_ALIASES = {
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
     "tomorrow_departure": {"明天幾點出門"},
-    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間"},
+    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
     "reset": {"重新設定"},
     "send_home_location": {"傳送住家位置", "設定住家位置"},
@@ -216,10 +226,10 @@ async def line_webhook(
             if isinstance(event, FollowEvent):
                 set_pending_field(db, user.id, "home_location")
                 reply_token = event.reply_token
-                await reply_text(
+                await reply_with_quick_reply(
                     reply_token,
-                    "歡迎使用智慧通勤助理。\n"
-                    f"{FIELD_PROMPTS['home_location']}"
+                    "歡迎使用智慧通勤助理！👋\n請先完成以下設定：",
+                    ONBOARDING_QUICK_REPLIES,
                 )
                 continue
 
@@ -279,17 +289,21 @@ async def line_webhook(
                     await reply_text(reply_token, "你好，我是智慧通勤助理。\n" + READY_MENU_TEXT)
                 else:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, "你好，我是智慧通勤助理。\n" + FIELD_PROMPTS[next_step])
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "你好，我是智慧通勤助理！請先完成以下設定：",
+                        ONBOARDING_QUICK_REPLIES,
+                    )
                 continue
 
             if command_text in COMMAND_ALIASES["send_home_location"]:
                 set_pending_field(db, user.id, "home_location")
-                await reply_text(reply_token, FIELD_PROMPTS["home_location"])
+                await reply_with_quick_reply(reply_token, FIELD_PROMPTS["home_location"], HOME_QUICK_REPLY)
                 continue
 
             if command_text in COMMAND_ALIASES["send_office_location"]:
                 set_pending_field(db, user.id, "office_location")
-                await reply_text(reply_token, FIELD_PROMPTS["office_location"])
+                await reply_with_quick_reply(reply_token, FIELD_PROMPTS["office_location"], OFFICE_QUICK_REPLY)
                 continue
 
             if command_text in COMMAND_ALIASES["reset"]:

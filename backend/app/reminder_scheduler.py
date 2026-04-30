@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -68,7 +68,7 @@ async def check_and_send_departure_reminders():
                     f"departure={override.frozen_departure_time} last_sent_plan_key={override.last_sent_plan_key}"
                 )
 
-                if now_sec >= departure_sec:
+                if now_sec >= departure_sec - 300:
                     await push_text(user.line_user_id, override.frozen_reminder_text)
                     mark_reminder_sent(
                         db=db,
