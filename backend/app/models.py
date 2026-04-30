@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String
-=======
-﻿from sqlalchemy import (
+from sqlalchemy import (
     Boolean,
     Column,
     Date,
@@ -15,8 +12,6 @@ from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integ
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
 from app.db import Base
 
 
@@ -83,10 +78,24 @@ class CommuteOverride(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-<<<<<<< HEAD
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    commute_date = Column(Date, nullable=False, index=True)
-    target_arrival_time = Column(String, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    target_date = Column(Date, index=True, nullable=False)
+
+    target_arrival_time = Column(String, nullable=True)
+    transport_mode_override = Column(String, nullable=True)
+
+    frozen_plan_key = Column(String, nullable=True)
+    frozen_departure_time = Column(String, nullable=True)
+    frozen_reminder_text = Column(Text, nullable=True)
+    reminder_prepared_at = Column(DateTime(timezone=True), nullable=True)
+
+    last_sent_plan_key = Column(String, nullable=True)
+    last_sent_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="overrides")
 
 
 class CommuteLog(Base):
@@ -125,23 +134,3 @@ class ApiHealthLog(Base):
     latency_ms = Column(Integer, nullable=True)
     status_code = Column(Integer, nullable=True)
     error_message = Column(String, nullable=True)
-=======
-    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    target_date = Column(Date, index=True, nullable=False)
-
-    target_arrival_time = Column(String, nullable=True)
-    transport_mode_override = Column(String, nullable=True)
-
-    frozen_plan_key = Column(String, nullable=True)
-    frozen_departure_time = Column(String, nullable=True)
-    frozen_reminder_text = Column(Text, nullable=True)
-    reminder_prepared_at = Column(DateTime(timezone=True), nullable=True)
-
-    last_sent_plan_key = Column(String, nullable=True)
-    last_sent_at = Column(DateTime(timezone=True), nullable=True)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    user = relationship("User", back_populates="overrides")
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a

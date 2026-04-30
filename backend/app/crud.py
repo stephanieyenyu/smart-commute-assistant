@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-from datetime import date
-=======
-﻿from datetime import datetime
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
+from datetime import date, datetime
 from sqlalchemy.orm import Session
 
 from app.models import User, CommuteProfile, CommuteOverride

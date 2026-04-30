@@ -55,9 +55,8 @@ FIELD_PROMPTS = {
     "override_tomorrow_arrival_time": "請直接輸入明天新的到公司時間，格式 HH:MM，例如 09:30",
 }
 
-<<<<<<< HEAD
 parser = WebhookParser(LINE_CHANNEL_SECRET)
-=======
+
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
     "auto": "自動判斷",
@@ -107,25 +106,10 @@ READY_MENU_TEXT = (
     "查看今天交通方式"
 )
 
-
 def normalize_user_text(text: str) -> str:
     if not text:
         return ""
     return text.strip().replace("\u3000", " ").replace("\n", "").replace("\r", "").replace(" ", "")
-
-
-def verify_line_signature(body: bytes, x_line_signature: str | None) -> bool:
-    if not x_line_signature or not LINE_CHANNEL_SECRET:
-        return False
-
-    digest = hmac.new(
-        LINE_CHANNEL_SECRET.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).digest()
-    signature = base64.b64encode(digest).decode("utf-8")
-    return hmac.compare_digest(signature, x_line_signature)
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
 
 
 def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None) -> str:
@@ -222,14 +206,7 @@ async def line_webhook(
 
     try:
         for event in events:
-<<<<<<< HEAD
             line_user_id = event.source.user_id
-
-=======
-            event_type = event.get("type")
-            source = event.get("source", {})
-            line_user_id = source.get("userId")
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
             if not line_user_id:
                 continue
 
@@ -238,16 +215,12 @@ async def line_webhook(
 
             if isinstance(event, FollowEvent):
                 set_pending_field(db, user.id, "home_location")
-<<<<<<< HEAD
                 reply_token = event.reply_token
                 await reply_text(
                     reply_token,
                     "歡迎使用智慧通勤助理。\n"
                     f"{FIELD_PROMPTS['home_location']}"
                 )
-=======
-                await reply_text(event.get("replyToken"), "歡迎使用智慧通勤助理。\n" + FIELD_PROMPTS["home_location"])
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
                 continue
 
             if not isinstance(event, MessageEvent):
@@ -256,12 +229,8 @@ async def line_webhook(
             message = event.message
             reply_token = event.reply_token
 
-<<<<<<< HEAD
             # 1. 先處理 location message
             if isinstance(message, LocationMessageContent):
-=======
-            if message_type == "location":
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
                 profile = get_profile(db, user.id)
                 current_step = profile.pending_field or get_next_setup_step(profile)
 
@@ -288,20 +257,12 @@ async def line_webhook(
                 await reply_text(reply_token, READY_MENU_TEXT)
                 continue
 
-<<<<<<< HEAD
             # 2. 其他非文字、非位置訊息直接略過
             if not isinstance(message, TextMessageContent):
                 continue
 
             user_text = message.text.strip()
-=======
-            if message_type != "text":
-                continue
-
-            user_text = message.get("text", "").strip()
             command_text = normalize_user_text(user_text)
-            print(f"[debug] user_text={repr(user_text)} | command_text={repr(command_text)}")
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
 
             today_date = date.today()
             tomorrow_date = today_date + timedelta(days=1)
