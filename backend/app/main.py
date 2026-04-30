@@ -10,7 +10,6 @@ from app.tasks import async_check_all_commutes
 
 Base.metadata.create_all(bind=engine)
 
-<<<<<<< HEAD
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Start the scheduler
@@ -27,15 +26,8 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 app = FastAPI(title="Smart Commute Assistant", lifespan=lifespan)
-=======
-app = FastAPI()
 app.include_router(webhook_router)
->>>>>>> cb646c664c1b63374efeeb9cc188560a21e05b4a
 
-
-@app.on_event("startup")
-async def startup_event():
-    start_reminder_scheduler()
 
 
 @app.get("/")
