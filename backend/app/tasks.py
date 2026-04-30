@@ -4,7 +4,25 @@ from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.crud import get_all_profiles, get_user_by_id
 from app.service import calculate_departure_time, estimate_commute_minutes
-from app.webhook import get_effective_arrival_time, select_city_name, ensure_profile_defaults_for_calc
+from app.crud import get_override_for_date
+from app.address_utils import extract_city_from_text
+
+def get_effective_arrival_time(db, user_id, target_date, default_time):
+    override = get_override_for_date(db, user_id, target_date)
+    if override and override.target_arrival_time:
+        return override.target_arrival_time, True
+    return default_time, False
+
+def select_city_name(profile):
+    return (
+        getattr(profile, "home_city", None)
+        or extract_city_from_text(getattr(profile, "home_address", None))
+        or getattr(profile, "office_city", None)
+        or extract_city_from_text(getattr(profile, "office_address", None))
+    )
+
+def ensure_profile_defaults_for_calc(db, user_id, profile):
+    return profile
 from app.weather import get_today_weather_by_city
 from app.line_client import push_text
 from app.integrations.redis_cache import get_cache, set_cache
