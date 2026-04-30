@@ -58,9 +58,10 @@ FIELD_PROMPTS = {
 parser = WebhookParser(LINE_CHANNEL_SECRET)
 
 # Quick reply buttons for onboarding / greeting
+# LINE Quick Reply label limit: 20 chars (emoji = 2 chars)
 ONBOARDING_QUICK_REPLIES = [
-    {"type": "location", "label": "📍 設定住家位置"},
-    {"type": "location", "label": "🏢 設定公司位置"},
+    {"type": "location", "label": "📍 住家位置"},
+    {"type": "location", "label": "🏢 公司位置"},
     {"type": "message",  "label": "⏰ 設定到公司時間", "text": "設定到公司時間"},
 ]
 
