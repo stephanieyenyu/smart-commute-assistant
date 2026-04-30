@@ -112,3 +112,42 @@ async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_la
     # Cache ETA for 3 minutes
     await set_cache(cache_key, minutes, expire_seconds=180)
     return minutes
+
+async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destination_lat: float, destination_lng: float):
+    time_str = datetime.now().strftime('%Y%m%d%H')
+    cache_key = f"maps:walk:{origin_lat:.4f},{origin_lng:.4f}:{destination_lat:.4f},{destination_lng:.4f}:{time_str}"
+    
+    cached = await get_cache(cache_key)
+    if cached:
+        return cached
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": "routes.duration",
+    }
+
+    body = {
+        "origin": {"location": {"latLng": {"latitude": origin_lat, "longitude": origin_lng}}},
+        "destination": {"location": {"latLng": {"latitude": destination_lat, "longitude": destination_lng}}},
+        "travelMode": "WALK",
+    }
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(ROUTES_URL, headers=headers, json=body)
+        if response.status_code >= 400:
+            print(f"[maps-walk] failed: {response.text}")
+        response.raise_for_status()
+        data = response.json()
+
+    routes = data.get("routes", [])
+    if not routes:
+        return None
+
+    duration_str = routes[0].get("duration")
+    if not duration_str or not duration_str.endswith("s"):
+        return None
+
+    minutes = max(1, round(float(duration_str[:-1]) / 60))
+    await set_cache(cache_key, minutes, expire_seconds=3600)
+    return minutes
