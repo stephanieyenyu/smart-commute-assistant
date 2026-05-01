@@ -17,10 +17,10 @@ TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 # Quick Reply buttons shown after departure reminder push
 REMINDER_QUICK_REPLIES = [
-    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
-    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
+    {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
     {"type": "message", "label": "🚇 今天搭捷運",    "text": "今天搭捷運"},
+    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
 ]
 
 

@@ -596,14 +596,16 @@ def _format_transport_line(plan: dict) -> str:
     steps = (google_detailed or {}).get("steps", [])
     matched_step = None
     if recommended_mode == "bus":
-        matched_step = next((s for s in steps if "BUS" in str(s.get("vehicle_type")).upper()), None)
+        # Search for any step that looks like a bus
+        matched_step = next((s for s in steps if "BUS" in str(s.get("vehicle_type")).upper() or "公車" in str(s.get("line_name"))), None)
     elif recommended_mode == "metro":
-        matched_step = next((s for s in steps if "SUBWAY" in str(s.get("vehicle_type")).upper() or "METRO" in str(s.get("vehicle_type")).upper()), None)
+        # Search for any step that looks like a subway/metro/rail
+        matched_step = next((s for s in steps if any(kw in str(s.get("vehicle_type")).upper() for kw in ["SUBWAY", "METRO", "RAIL", "TRAM"]) or "捷運" in str(s.get("line_name"))), None)
 
     if matched_step:
-        line = matched_step["line_name"]
-        dep_stop = matched_step["departure_stop"]
-        arr_stop = matched_step["arrival_stop"]
+        line = matched_step.get("line_name") or "大眾運輸"
+        dep_stop = matched_step.get("departure_stop") or "最近站點"
+        arr_stop = matched_step.get("arrival_stop") or "目的地站點"
         v_emoji = "🚌" if recommended_mode == "bus" else "🚇"
         mode_text = "搭公車" if recommended_mode == "bus" else "搭捷運"
         
@@ -677,8 +679,8 @@ def _format_today_commute_text(plan: dict, header: str = "今日通勤建議："
     # Line 3: 通勤時間
     commute_line = f"通勤時間：約 {baseline_minutes} 分鐘"
 
-    # Line 4: 交通方式
-    transport_line = f"交通方式：{_format_transport_line(plan)}"
+    # Line 4: 交通方式 (Moved up for visibility)
+    transport_line = f"導引：{_format_transport_line(plan)}"
 
     # Line 5: 天氣
     wx_text = weather_info.get("weather_text", "未知")
@@ -696,7 +698,7 @@ def _format_today_commute_text(plan: dict, header: str = "今日通勤建議："
     pop_str = f"。降雨機率 {pop}%" if pop is not None else ""
     weather_line = f"今日天氣：{wx_text}{temp_str}{pop_str}"
 
-    return "\n".join([header, arrival_line, departure_line, commute_line, transport_line, weather_line])
+    return "\n".join([header, arrival_line, departure_line, transport_line, commute_line, weather_line])
 
 
 def _build_reminder_payload_from_plan(plan: dict) -> dict:
@@ -728,12 +730,10 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     pop_str = f"。降雨機率 {pop}%" if pop is not None else ""
 
     lines = [
-        "⏰ 出門提醒（5 分鐘後建議出發）",
-        f"目標抵達：{plan['effective_arrival_time']}",
-        f"建議出門：{plan['final_departure_time']}{departure_note}",
-        f"通勤時間：約 {baseline_minutes} 分鐘",
-        f"交通方式：{_format_transport_line(plan)}",
-        f"今日天氣：{wx_text}{temp_str}{pop_str}",
+        f"🔔 出門提醒：您預計在 {plan['final_departure_time']} 出門{departure_note}",
+        f"📍 導引：{_format_transport_line(plan)}",
+        f"📅 目標 {plan['effective_arrival_time']} 抵達公司 (通勤約 {baseline_minutes} 分鐘)",
+        f"🌤 天氣：{wx_text}{temp_str}{pop_str}",
     ]
 
     text = "\n".join(lines)
