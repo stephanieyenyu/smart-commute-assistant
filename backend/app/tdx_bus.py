@@ -4,6 +4,7 @@ from typing import Any
 import httpx
 
 from app.config import TDX_CLIENT_ID, TDX_CLIENT_SECRET
+from app.integrations.api_health import api_timer_start, log_api_health
 
 TDX_AUTH_URL = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
 TDX_BASE_URL = "https://tdx.transportdata.tw/api/basic/v2"
@@ -81,14 +82,20 @@ async def get_access_token() -> str:
         "client_secret": TDX_CLIENT_SECRET,
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
-        response = await client.post(
-            TDX_AUTH_URL,
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        response.raise_for_status()
-        payload = response.json()
+    timer = api_timer_start()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                TDX_AUTH_URL,
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            log_api_health("tdx.bus.auth", timer, status_code=response.status_code)
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as e:
+        log_api_health("tdx.bus.auth", timer, error_message=str(e))
+        raise
 
     _TOKEN_CACHE["access_token"] = payload["access_token"]
     _TOKEN_CACHE["expires_at"] = now + int(payload.get("expires_in", 3600))
@@ -109,17 +116,23 @@ async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
 
     url = f"{TDX_BASE_URL}{path}"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(2.5, connect=1.0)) as client:
-        response = await client.get(url, headers=headers, params=params)
+    timer = api_timer_start()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.5, connect=1.0)) as client:
+            response = await client.get(url, headers=headers, params=params)
+            log_api_health(f"tdx.bus{path}", timer, status_code=response.status_code)
 
-        if response.status_code == 429:
-            _BUS_API_COOLDOWN_UNTIL = time.time() + BUS_API_COOLDOWN_SECONDS
-            print(f"[tdx-bus] 429 cooldown={BUS_API_COOLDOWN_SECONDS}s path={path} body={response.text}")
-        elif response.status_code >= 400:
-            print(f"[tdx-bus] status={response.status_code} path={path} body={response.text}")
+            if response.status_code == 429:
+                _BUS_API_COOLDOWN_UNTIL = time.time() + BUS_API_COOLDOWN_SECONDS
+                print(f"[tdx-bus] 429 cooldown={BUS_API_COOLDOWN_SECONDS}s path={path} body={response.text}")
+            elif response.status_code >= 400:
+                print(f"[tdx-bus] status={response.status_code} path={path} body={response.text}")
 
-        response.raise_for_status()
-        data = response.json()
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        log_api_health(f"tdx.bus{path}", timer, error_message=str(e))
+        raise
 
     return data if isinstance(data, list) else []
 
@@ -235,6 +248,10 @@ async def _get_city_stop_page(city_en: str, page: int) -> list[dict]:
         rows = await tdx_get(f"/Bus/Stop/City/{city_en}", params=params)
     except Exception as e:
         print(f"[bus-page] city={city_en} page={page} error={e}")
+        stale_cached = _CITY_STOP_PAGE_CACHE.get(cache_key)
+        if stale_cached:
+            print(f"[bus-page] using stale cache city={city_en} page={page}")
+            return stale_cached[1]
         rows = []
 
     simplified = simplify_stop_list(rows)
@@ -316,6 +333,10 @@ async def get_estimated_arrivals(
         rows = await tdx_get(f"/Bus/EstimatedTimeOfArrival/City/{city_en}", params=params)
     except Exception as e:
         print(f"[bus-eta] city={city_en} stop_uid={stop_uid} stop_id={stop_id} error={e}")
+        stale_cached = _ETA_CACHE.get(cache_key)
+        if stale_cached:
+            print(f"[bus-eta] using stale cache city={city_en} stop_uid={stop_uid} stop_id={stop_id}")
+            return stale_cached[1]
         rows = []
 
     _ETA_CACHE[cache_key] = (now, rows)

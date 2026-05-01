@@ -37,9 +37,9 @@ FastAPI will be available at:
 http://localhost:8000/docs
 ```
 
-## Regression tests
+## Regression and stability tests
 
-Phase 0 regression tests protect the current LINE commute advice and reminder behavior.
+Phase 0/1 tests protect the current LINE commute advice, reminder behavior, scheduler ownership, and API fallback logging.
 
 ```bash
 python -m unittest discover -s tests -v
