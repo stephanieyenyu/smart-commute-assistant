@@ -37,6 +37,14 @@ FastAPI will be available at:
 http://localhost:8000/docs
 ```
 
+## Regression tests
+
+Phase 0 regression tests protect the current LINE commute advice and reminder behavior.
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ## MVP next steps
 
 1. Add Alembic migrations.
