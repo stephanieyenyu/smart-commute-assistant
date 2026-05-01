@@ -529,12 +529,12 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["set_mode_auto"]:
                 upsert_transport_mode_override(db, user.id, today_date, "auto")
                 clear_today_reminder_state_for_user(user.id)
+
+                advice = await build_today_commute_payload(db, user.id, today_date, "auto", "好的，今天交通方式切換為：自動判斷。")
                 try:
-                    await freeze_today_reminder_payload(db, user.id, today_date)
+                    await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
                     print(f"[freeze-auto] error={e}")
-                
-                advice = await build_today_commute_payload(db, user.id, today_date, "auto", "好的，今天交通方式切換為：自動判斷。")
                 await reply_multi_messages_with_quick_reply(
                     reply_token,
                     [advice.get("text", "已設定。")],
@@ -545,12 +545,12 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["set_mode_shortest"]:
                 upsert_transport_mode_override(db, user.id, today_date, "shortest")
                 clear_today_reminder_state_for_user(user.id)
+
+                advice = await build_today_commute_payload(db, user.id, today_date, "shortest", "好的，今天優先選擇最短時間：")
                 try:
-                    await freeze_today_reminder_payload(db, user.id, today_date)
+                    await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
                     print(f"[freeze-shortest] error={e}")
-                
-                advice = await build_today_commute_payload(db, user.id, today_date, "shortest", "好的，今天優先選擇最短時間：")
                 await reply_multi_messages_with_quick_reply(
                     reply_token,
                     [advice.get("text", "已設定。")],
@@ -561,12 +561,12 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["set_mode_bus"]:
                 upsert_transport_mode_override(db, user.id, today_date, "bus")
                 clear_today_reminder_state_for_user(user.id)
+
+                advice = await build_today_commute_payload(db, user.id, today_date, "bus", "好的，今天切換為：公車優先。")
                 try:
-                    await freeze_today_reminder_payload(db, user.id, today_date)
+                    await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
                     print(f"[freeze-bus] error={e}")
-                
-                advice = await build_today_commute_payload(db, user.id, today_date, "bus", "好的，今天切換為：公車優先。")
                 await reply_multi_messages_with_quick_reply(
                     reply_token,
                     [advice.get("text", "已設定。")],
@@ -577,12 +577,12 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["set_mode_metro"]:
                 upsert_transport_mode_override(db, user.id, today_date, "metro")
                 clear_today_reminder_state_for_user(user.id)
+
+                advice = await build_today_commute_payload(db, user.id, today_date, "metro", "好的，今天切換為：捷運優先。")
                 try:
-                    await freeze_today_reminder_payload(db, user.id, today_date)
+                    await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
                     print(f"[freeze-metro] error={e}")
-                
-                advice = await build_today_commute_payload(db, user.id, today_date, "metro", "好的，今天切換為：捷運優先。")
                 await reply_multi_messages_with_quick_reply(
                     reply_token,
                     [advice.get("text", "已設定。")],

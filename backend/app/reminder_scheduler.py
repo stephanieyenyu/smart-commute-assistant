@@ -7,13 +7,19 @@ from app.db import SessionLocal
 from app.line_client import push_text, push_with_quick_reply
 from app.models import CommuteOverride, User
 from app.crud import (
+    get_all_profiles,
+    get_next_setup_step,
+    get_override_for_date,
     get_profile,
     mark_reminder_sent,
     clear_today_reminder_state_db,
 )
+from app.service import freeze_today_reminder_payload
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+_PREPARE_ATTEMPT_CACHE: dict[tuple[int, str], datetime] = {}
+PREPARE_RETRY_SECONDS = 300
 
 # Quick Reply buttons shown after departure reminder push
 REMINDER_QUICK_REPLIES = [
@@ -38,6 +44,38 @@ def current_seconds_of_day() -> int:
     return now.hour * 3600 + now.minute * 60 + now.second
 
 
+async def ensure_today_reminders_prepared(db, today):
+    now_dt = now_taipei()
+    for profile in get_all_profiles(db):
+        try:
+            if not getattr(profile, "reminder_enabled", True):
+                continue
+            if get_next_setup_step(profile) is not None:
+                continue
+
+            override = get_override_for_date(db, profile.user_id, today)
+            if (
+                override
+                and override.frozen_plan_key
+                and override.frozen_departure_time
+                and override.frozen_reminder_text
+            ):
+                continue
+
+            cache_key = (profile.user_id, today.isoformat())
+            last_attempt = _PREPARE_ATTEMPT_CACHE.get(cache_key)
+            if last_attempt and (now_dt - last_attempt).total_seconds() < PREPARE_RETRY_SECONDS:
+                continue
+
+            _PREPARE_ATTEMPT_CACHE[cache_key] = now_dt
+            await freeze_today_reminder_payload(db, profile.user_id, today)
+            print(f"[reminder-prepare] prepared user_id={profile.user_id} date={today.isoformat()}")
+        except Exception as e:
+            import traceback
+            print(f"[reminder-prepare] failed user_id={getattr(profile, 'user_id', None)} error={e}")
+            print(traceback.format_exc())
+
+
 async def check_and_send_departure_reminders():
     db = SessionLocal()
     try:
@@ -45,6 +83,8 @@ async def check_and_send_departure_reminders():
         now_dt = now_taipei()
         now_hhmmss = now_dt.strftime("%H:%M:%S")
         now_sec = current_seconds_of_day()
+
+        await ensure_today_reminders_prepared(db, today)
 
         overrides = db.query(CommuteOverride).filter(
             CommuteOverride.target_date == today,

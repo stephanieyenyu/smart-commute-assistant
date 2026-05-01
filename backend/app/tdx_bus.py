@@ -81,7 +81,7 @@ async def get_access_token() -> str:
         "client_secret": TDX_CLIENT_SECRET,
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
         response = await client.post(
             TDX_AUTH_URL,
             data=data,
@@ -109,7 +109,7 @@ async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
 
     url = f"{TDX_BASE_URL}{path}"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(2.5, connect=1.0)) as client:
         response = await client.get(url, headers=headers, params=params)
 
         if response.status_code == 429:

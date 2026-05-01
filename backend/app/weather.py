@@ -180,7 +180,7 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(8.0, connect=3.0),
+            timeout=httpx.Timeout(2.0, connect=1.0),
             verify=False,
         ) as client:
             response = await client.get(url, params=params)
