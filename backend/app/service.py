@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import math
+import re
 import time
 from datetime import date, datetime, timedelta
 
@@ -608,7 +609,6 @@ def _format_transport_line(plan: dict) -> str:
         
         exit_info = ""
         instr = matched_step.get("instructions") or ""
-        import re
         exit_match = re.search(r"((?:出口|Exit)\s*\d+|\d+\s*號出口)", instr)
         if exit_match:
             exit_info = f"從『{exit_match.group(1)}』走"
