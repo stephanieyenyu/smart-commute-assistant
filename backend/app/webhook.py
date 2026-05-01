@@ -412,6 +412,36 @@ async def line_webhook(
             tomorrow_override = get_override_for_date(db, user.id, tomorrow_date)
             tomorrow_override_time = tomorrow_override.target_arrival_time if tomorrow_override and tomorrow_override.target_arrival_time else None
 
+            # ===========================================================
+            # 全域設定守衛：設定未完成的用戶，任何指令都先引導完成設定
+            # ===========================================================
+            _profile_for_guard = get_profile(db, user.id)
+            _next_step = get_next_setup_step(_profile_for_guard)
+
+            if _next_step is not None:
+                # 例外1：允許通過的設定指令
+                _setup_commands = (
+                    COMMAND_ALIASES["send_home_location"]
+                    | COMMAND_ALIASES["send_office_location"]
+                    | COMMAND_ALIASES["reset"]
+                    | {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}
+                )
+                # 例外2：正在填寫設定欄位中途（地址文字輸入 / 時間文字輸入）
+                _current_pending = _profile_for_guard.pending_field
+                _is_mid_setup = _current_pending in {
+                    "home_location", "office_location", "preferred_arrival_time"
+                }
+
+                if command_text not in _setup_commands and not _is_mid_setup:
+                    set_pending_field(db, user.id, _next_step)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "⚙️ 請先完成基本設定，才能使用完整功能！\n點擊下方按鈕快速設定：",
+                        SETUP_QUICK_REPLIES,
+                    )
+                    continue
+            # ===========================================================
+
             if command_text in {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
