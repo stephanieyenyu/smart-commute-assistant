@@ -609,6 +609,14 @@ def _format_transport_line(plan: dict) -> str:
         v_emoji = "🚌" if recommended_mode == "bus" else "🚇"
         mode_text = "搭公車" if recommended_mode == "bus" else "搭捷運"
         
+        # Try to find exit info in instructions
+        exit_info = ""
+        instr = matched_step.get("instructions") or ""
+        import re
+        exit_match = re.search(r"(出口\s*\d+|Exit\s*\d+)", instr)
+        if exit_match:
+            exit_info = f"從『{exit_match.group(1)}』走"
+
         # For bus, we still want the TDX real-time ETA if available
         eta_str = ""
         if recommended_mode == "bus":
@@ -618,7 +626,7 @@ def _format_transport_line(plan: dict) -> str:
             if eta is not None:
                 eta_str = f"（約 {eta} 分鐘後到站）"
 
-        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{eta_str}。"
+        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}{eta_str}。"
 
     if recommended_mode == "metro":
         metro_snap = snapshot
@@ -626,7 +634,7 @@ def _format_transport_line(plan: dict) -> str:
         walk_min = metro_snap.get("walk_minutes")
         name = station.get("name", "最近捷運站")
         walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        return f"🚇 建議搭捷運！{walk_str}抵達『{name}』，建議參考 Google 地圖確認下車站點。"
+        return f"🚇 建議搭捷運！{walk_str}抵達『{name}』，於目的地車站下車。"
 
     if recommended_mode == "bus":
         bus_snap = snapshot
@@ -680,7 +688,7 @@ def _format_today_commute_text(plan: dict, header: str = "今日通勤建議："
     commute_line = f"通勤時間：約 {baseline_minutes} 分鐘"
 
     # Line 4: 交通方式 (Moved up for visibility)
-    transport_line = f"導引：{_format_transport_line(plan)}"
+    transport_line = f"通勤方式：{_format_transport_line(plan)}"
 
     # Line 5: 天氣
     wx_text = weather_info.get("weather_text", "未知")
@@ -731,7 +739,7 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
 
     lines = [
         f"🔔 出門提醒：您預計在 {plan['final_departure_time']} 出門{departure_note}",
-        f"📍 導引：{_format_transport_line(plan)}",
+        f"📍 通勤方式：{_format_transport_line(plan)}",
         f"📅 目標 {plan['effective_arrival_time']} 抵達公司 (通勤約 {baseline_minutes} 分鐘)",
         f"🌤 天氣：{wx_text}{temp_str}{pop_str}",
     ]
