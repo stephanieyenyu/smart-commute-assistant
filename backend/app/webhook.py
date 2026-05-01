@@ -124,6 +124,7 @@ COMMAND_ALIASES = {
     "test_bus": {"測試公車", "公車測試"},
     "test_metro": {"測試捷運", "捷運測試"},
     "test_reminder": {"測試提醒"},
+    "test_quick_reply": {"測試按鈕"},
     "set_mode_auto": {"今天自動判斷", "今天交通自動"},
     "set_mode_bus": {"今天搭公車", "今天坐公車"},
     "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
@@ -502,6 +503,20 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["test_reminder"]:
                 await reply_text(reply_token, READY_MENU_TEXT)
+                continue
+
+            if command_text in COMMAND_ALIASES["test_quick_reply"]:
+                print(f"[test-qr] user_id={user.id} sending quick reply test")
+                test_items = [
+                    {"type": "message", "label": "✅ 按鈕測試 A", "text": "今天通勤建議"},
+                    {"type": "message", "label": "⏰ 按鈕測試 B", "text": "修改今天到公司時間"},
+                    {"type": "location", "label": "📍 地圖測試"},
+                ]
+                await reply_with_quick_reply(
+                    reply_token,
+                    "🧪 Quick Reply 按鈕測試\n如果您看到下方按鈕，代表功能正常！",
+                    test_items,
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["today_commute"]:
