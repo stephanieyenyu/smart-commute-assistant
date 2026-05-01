@@ -43,7 +43,7 @@ async def geocode_address(address: str):
         return cached
 
     params = {"address": address, "key": GOOGLE_MAPS_API_KEY}
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
         response = await client.get(GEOCODE_URL, params=params)
         response.raise_for_status()
         data = response.json()
@@ -110,7 +110,7 @@ async def estimate_transit_minutes_detailed(
         "transitPreferences": transit_preferences
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(7.0, connect=3.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
         response = await client.post(ROUTES_URL, headers=headers, json=body)
         response.raise_for_status()
         data = response.json()
@@ -182,7 +182,7 @@ async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destina
         "travelMode": "WALK",
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(7.0, connect=3.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
         response = await client.post(ROUTES_URL, headers=headers, json=body)
         if response.status_code >= 400:
             print(f"[maps-walk] failed: {response.text}")

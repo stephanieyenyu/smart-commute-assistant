@@ -14,6 +14,7 @@ _TOKEN_CACHE: dict[str, Any] = {
 }
 
 _METRO_NEARBY_CACHE: dict[str, tuple[float, dict | None]] = {}
+_METRO_EXIT_CACHE: dict[str, tuple[float, list[dict]]] = {}
 METRO_CACHE_SECONDS = 180
 MAX_NEARBY_RADIUS_M = 1000
 
@@ -41,7 +42,7 @@ async def get_access_token() -> str:
         "client_secret": TDX_CLIENT_SECRET,
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
         response = await client.post(
             TDX_AUTH_URL,
             data=data,
@@ -63,7 +64,7 @@ async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
     }
     url = f"{TDX_BASE_URL}{path}"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
         response = await client.get(url, headers=headers, params=params)
         if response.status_code >= 400:
             print(f"[metro-api] status={response.status_code} path={path} body={response.text}")
@@ -76,6 +77,58 @@ async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
 def _station_name(station: dict) -> str:
     station_name_obj = station.get("StationName") or {}
     return station_name_obj.get("Zh_tw") or station_name_obj.get("En") or "無法識別捷運站"
+
+
+def _exit_name(exit_info: dict) -> str:
+    exit_name_obj = exit_info.get("ExitName") or {}
+    return exit_name_obj.get("Zh_tw") or exit_name_obj.get("En") or "出口"
+
+
+def _simplify_station_exit(exit_info: dict) -> dict | None:
+    exit_position = exit_info.get("ExitPosition") or {}
+    lat = exit_position.get("PositionLat")
+    lng = exit_position.get("PositionLon")
+
+    return {
+        "station_id": exit_info.get("StationID"),
+        "exit_id": exit_info.get("ExitID"),
+        "name": _exit_name(exit_info),
+        "lat": lat,
+        "lng": lng,
+    }
+
+
+async def get_station_exits_async(
+    station_id: str | None,
+    operator_id: str = "TRTC",
+) -> list[dict]:
+    if not station_id:
+        return []
+
+    cache_key = f"{operator_id}|{station_id}"
+    now = time.time()
+    cached = _METRO_EXIT_CACHE.get(cache_key)
+    if cached and now - cached[0] <= METRO_CACHE_SECONDS:
+        return cached[1]
+
+    params = {
+        "$filter": f"StationID eq '{station_id}'",
+        "$format": "JSON",
+    }
+
+    try:
+        rows = await tdx_get(f"/Rail/Metro/StationExit/{operator_id}", params=params)
+    except Exception as e:
+        print(f"[metro-exit] station_id={station_id} error={e}")
+        rows = []
+
+    exits = [
+        simplified
+        for row in rows
+        if (simplified := _simplify_station_exit(row)) is not None
+    ]
+    _METRO_EXIT_CACHE[cache_key] = (now, exits)
+    return exits
 
 
 async def get_nearest_metro_station_async(
