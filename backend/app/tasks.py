@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.crud import get_all_profiles, get_user_by_id
@@ -27,12 +28,15 @@ from app.weather import get_today_weather_by_city
 from app.line_client import push_text
 from app.integrations.redis_cache import get_cache, set_cache
 
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+
 async def async_check_all_commutes():
     db = SessionLocal()
     try:
         profiles = get_all_profiles(db)
-        today = date.today()
-        now = datetime.now()
+        now = datetime.now(TAIPEI_TZ).replace(tzinfo=None)
+        today = now.date()
         
         for profile in profiles:
             if not profile.preferred_arrival_time or not profile.home_lat or not profile.office_lat:
