@@ -396,6 +396,9 @@ async def choose_commute_option_with_override(
             "snapshot": metro_snapshot,
         }
 
+    if mode_override == "shortest":
+        return {"best_option": google_option, "selection_source": "manual"}
+
     if mode_override == "bus":
         if bus_option:
             return {"best_option": bus_option, "selection_source": "manual"}
@@ -585,13 +588,43 @@ def _format_transport_line(plan: dict) -> str:
     recommended_mode = plan["recommended_mode"]
     snapshot = best_option.get("snapshot") or {}
 
+    # If it's a specific mode, try to find a matching transit step from Google for more details (like get-off station)
+    google_detailed = snapshot.get("google_detailed") if recommended_mode != "google_transit" else snapshot.get("google_detailed")
+    if not google_detailed and recommended_mode == "google_transit":
+        google_detailed = snapshot.get("google_detailed")
+
+    steps = (google_detailed or {}).get("steps", [])
+    matched_step = None
+    if recommended_mode == "bus":
+        matched_step = next((s for s in steps if "BUS" in str(s.get("vehicle_type")).upper()), None)
+    elif recommended_mode == "metro":
+        matched_step = next((s for s in steps if "SUBWAY" in str(s.get("vehicle_type")).upper() or "METRO" in str(s.get("vehicle_type")).upper()), None)
+
+    if matched_step:
+        line = matched_step["line_name"]
+        dep_stop = matched_step["departure_stop"]
+        arr_stop = matched_step["arrival_stop"]
+        v_emoji = "🚌" if recommended_mode == "bus" else "🚇"
+        mode_text = "搭公車" if recommended_mode == "bus" else "搭捷運"
+        
+        # For bus, we still want the TDX real-time ETA if available
+        eta_str = ""
+        if recommended_mode == "bus":
+            bus_snap = snapshot
+            chosen = bus_snap.get("chosen_bus") or {}
+            eta = chosen.get("eta_min")
+            if eta is not None:
+                eta_str = f"（約 {eta} 分鐘後到站）"
+
+        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{eta_str}。"
+
     if recommended_mode == "metro":
         metro_snap = snapshot
         station = metro_snap.get("station") or {}
         walk_min = metro_snap.get("walk_minutes")
         name = station.get("name", "最近捷運站")
         walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        return f"🚇 建議搭捷運！{walk_str}抵達『{name}』。"
+        return f"🚇 建議搭捷運！{walk_str}抵達『{name}』，建議參考 Google 地圖確認下車站點。"
 
     if recommended_mode == "bus":
         bus_snap = snapshot
