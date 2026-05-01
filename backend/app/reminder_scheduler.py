@@ -76,7 +76,7 @@ async def check_and_send_departure_reminders():
                     f"departure={override.frozen_departure_time} last_sent_plan_key={override.last_sent_plan_key}"
                 )
 
-                if now_sec >= departure_sec - 300:
+                if now_sec >= departure_sec - 180:
                     await push_with_quick_reply(
                         user.line_user_id,
                         override.frozen_reminder_text,

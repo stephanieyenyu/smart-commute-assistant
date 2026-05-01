@@ -181,23 +181,25 @@ def normalize_user_text(text: str) -> str:
     return text.strip().replace("\u3000", " ").replace("\n", "").replace("\r", "").replace(" ", "")
 
 
-def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None) -> str:
+def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None, today_mode: str | None = None) -> str:
     home_address = profile.home_address or "尚未設定"
     office_address = profile.office_address or "尚未設定"
     preferred_arrival_time = profile.preferred_arrival_time or "尚未設定"
     reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
+    mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
 
     text = (
         "您目前設定如下：\n"
-        f"住家位置：{home_address}\n"
-        f"公司位置：{office_address}\n"
-        f"到公司時間：{preferred_arrival_time}\n"
-        f"自動提醒：{reminder_status}"
+        f"🏠 住家位置：{home_address}\n"
+        f"🏢 公司位置：{office_address}\n"
+        f"⏰ 到公司時間：{preferred_arrival_time}\n"
+        f"📢 自動提醒：{reminder_status}\n"
+        f"🚇 今天交通方式：{mode_label}"
     )
     if today_override_time:
-        text += f"\n今天覆蓋到公司時間：{today_override_time}"
+        text += f"\n📍 今天覆蓋到公司時間：{today_override_time}"
     if tomorrow_override_time:
-        text += f"\n明天覆蓋到公司時間：{tomorrow_override_time}"
+        text += f"\n📅 明天覆蓋到公司時間：{tomorrow_override_time}"
     return text
 
 
@@ -489,12 +491,13 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["view_settings"]:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
+                today_mode = get_transport_mode_override(db, user.id, today_date)
                 if next_step is None:
                     set_pending_field(db, user.id, None)
-                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time))
+                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode))
                 else:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time) + "\n\n" + FIELD_PROMPTS[next_step])
+                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode) + "\n\n" + FIELD_PROMPTS[next_step])
                 continue
 
             if command_text in COMMAND_ALIASES["enable_reminder"]:

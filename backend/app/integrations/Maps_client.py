@@ -71,10 +71,10 @@ async def geocode_address(address: str):
     await set_cache(cache_key, result, expire_seconds=86400)
     return result
 
-async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float, arrival_datetime: datetime):
+async def estimate_transit_minutes_detailed(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float, arrival_datetime: datetime):
     # Create cache key, round coordinates and minute precision
     time_str = arrival_datetime.strftime('%Y%m%d%H%M')
-    cache_key = f"maps:transit:{origin_lat:.4f},{origin_lng:.4f}:{dest_lat:.4f},{dest_lng:.4f}:{time_str}"
+    cache_key = f"maps:transit:detailed:{origin_lat:.4f},{origin_lng:.4f}:{dest_lat:.4f},{dest_lng:.4f}:{time_str}"
     
     cached = await get_cache(cache_key)
     if cached:
@@ -83,7 +83,7 @@ async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_la
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "routes.duration",
+        "X-Goog-FieldMask": "routes.duration,routes.legs.steps.transitDetails,routes.legs.steps.navigationInstruction",
     }
     if arrival_datetime.tzinfo is None:
         arrival_datetime = arrival_datetime.replace(tzinfo=timezone.utc)
@@ -93,6 +93,9 @@ async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_la
         "destination": {"location": {"latLng": {"latitude": dest_lat, "longitude": dest_lng}}},
         "travelMode": "TRANSIT",
         "arrivalTime": arrival_datetime.isoformat(),
+        "transitPreferences": {
+            "routingPreference": "LESS_WALKING"
+        }
     }
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(7.0, connect=3.0)) as client:
@@ -104,14 +107,41 @@ async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_la
     if not routes:
         return None
 
-    duration_str = routes[0].get("duration")
+    route = routes[0]
+    duration_str = route.get("duration")
     if not duration_str or not duration_str.endswith("s"):
         return None
 
     minutes = round(float(duration_str[:-1]) / 60)
-    # Cache ETA for 3 minutes
-    await set_cache(cache_key, minutes, expire_seconds=180)
-    return minutes
+    
+    steps = []
+    legs = route.get("legs", [])
+    if legs:
+        for step in legs[0].get("steps", []):
+            transit_details = step.get("transitDetails")
+            if transit_details:
+                line = transit_details.get("transitLine", {})
+                stop_details = transit_details.get("stopDetails", {})
+                steps.append({
+                    "type": "TRANSIT",
+                    "line_name": line.get("name") or line.get("shortName"),
+                    "vehicle_type": line.get("vehicle", {}).get("type"),
+                    "departure_stop": stop_details.get("departureStop", {}).get("name"),
+                    "arrival_stop": stop_details.get("arrivalStop", {}).get("name"),
+                })
+    
+    result = {
+        "duration_minutes": minutes,
+        "steps": steps,
+    }
+    # Cache detailed result for 3 minutes
+    await set_cache(cache_key, result, expire_seconds=180)
+    return result
+
+async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float, arrival_datetime: datetime):
+    # Backward compatibility
+    res = await estimate_transit_minutes_detailed(origin_lat, origin_lng, dest_lat, dest_lng, arrival_datetime)
+    return res["duration_minutes"] if res else None
 
 async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destination_lat: float, destination_lng: float):
     time_str = datetime.now().strftime('%Y%m%d%H')
