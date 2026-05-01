@@ -128,6 +128,7 @@ async def estimate_transit_minutes_detailed(origin_lat: float, origin_lng: float
                     "vehicle_type": line.get("vehicle", {}).get("type"),
                     "departure_stop": stop_details.get("departureStop", {}).get("name"),
                     "arrival_stop": stop_details.get("arrivalStop", {}).get("name"),
+                    "instructions": step.get("navigationInstruction", {}).get("instructions"),
                 })
     
     result = {

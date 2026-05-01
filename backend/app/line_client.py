@@ -53,24 +53,30 @@ async def reply_text(reply_token: str, text: str) -> None:
 
 
 async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> None:
+    await reply_multi_messages_with_quick_reply(reply_token, [text], items)
+
+
+async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[str], items: list) -> None:
     quick_reply_items = _build_quick_reply_items(items)
+    messages = []
+    for i, t in enumerate(texts):
+        # Only the last message can have quick replies attached
+        qr = QuickReply(items=quick_reply_items) if i == len(texts) - 1 else None
+        messages.append(TextMessage(text=t, quick_reply=qr))
+    
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
             await line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
-                    messages=[
-                        TextMessage(
-                            text=text,
-                            quick_reply=QuickReply(items=quick_reply_items)
-                        )
-                    ]
+                    messages=messages
                 )
             )
     except Exception as e:
-        print(f"[line] reply_with_quick_reply error: {e}")
-        await reply_text(reply_token, text)
+        print(f"[line] reply_multi_messages_with_quick_reply error: {e}")
+        if texts:
+            await reply_text(reply_token, texts[0])
 
 
 async def push_text(user_id: str, text: str) -> None:

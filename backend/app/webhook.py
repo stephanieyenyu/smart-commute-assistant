@@ -9,7 +9,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessag
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET
 from app.db import SessionLocal
-from app.line_client import reply_text, reply_with_quick_reply
+from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
@@ -497,10 +497,18 @@ async def line_webhook(
                 today_mode = get_transport_mode_override(db, user.id, today_date)
                 if next_step is None:
                     set_pending_field(db, user.id, None)
-                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode))
+                    await reply_with_quick_reply(
+                        reply_token, 
+                        format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode),
+                        MAIN_MENU_QUICK_REPLIES
+                    )
                 else:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode) + "\n\n" + FIELD_PROMPTS[next_step])
+                    await reply_with_quick_reply(
+                        reply_token,
+                        format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode) + "\n\n" + FIELD_PROMPTS[next_step],
+                        MAIN_MENU_QUICK_REPLIES
+                    )
                 continue
 
             if command_text in COMMAND_ALIASES["enable_reminder"]:
@@ -525,7 +533,13 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db, user.id, today_date)
                 except Exception as e:
                     print(f"[freeze-auto] error={e}")
-                await reply_text(reply_token, "已設定今天交通方式為：自動判斷")
+                
+                advice = await build_today_commute_payload(db, user.id, today_date, "auto", "好的，今天交通方式切換為：自動判斷。")
+                await reply_multi_messages_with_quick_reply(
+                    reply_token,
+                    [advice.get("text", "已設定。")],
+                    COMMUTE_RESULT_QUICK_REPLIES
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_shortest"]:
@@ -535,7 +549,13 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db, user.id, today_date)
                 except Exception as e:
                     print(f"[freeze-shortest] error={e}")
-                await reply_text(reply_token, "已設定今天交通方式為：最短時間優先 (Google Map)")
+                
+                advice = await build_today_commute_payload(db, user.id, today_date, "shortest", "好的，今天優先選擇最短時間：")
+                await reply_multi_messages_with_quick_reply(
+                    reply_token,
+                    [advice.get("text", "已設定。")],
+                    COMMUTE_RESULT_QUICK_REPLIES
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus"]:
@@ -545,7 +565,13 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db, user.id, today_date)
                 except Exception as e:
                     print(f"[freeze-bus] error={e}")
-                await reply_text(reply_token, "已設定今天交通方式為：公車優先")
+                
+                advice = await build_today_commute_payload(db, user.id, today_date, "bus", "好的，今天切換為：公車優先。")
+                await reply_multi_messages_with_quick_reply(
+                    reply_token,
+                    [advice.get("text", "已設定。")],
+                    COMMUTE_RESULT_QUICK_REPLIES
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_metro"]:
@@ -555,7 +581,13 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db, user.id, today_date)
                 except Exception as e:
                     print(f"[freeze-metro] error={e}")
-                await reply_text(reply_token, "已設定今天交通方式為：捷運優先")
+                
+                advice = await build_today_commute_payload(db, user.id, today_date, "metro", "好的，今天切換為：捷運優先。")
+                await reply_multi_messages_with_quick_reply(
+                    reply_token,
+                    [advice.get("text", "已設定。")],
+                    COMMUTE_RESULT_QUICK_REPLIES
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus_to_metro"]:
