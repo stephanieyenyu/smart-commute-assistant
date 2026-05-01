@@ -284,6 +284,8 @@ async def get_metro_snapshot(profile):
     try:
         home_lat = getattr(profile, "home_lat", None)
         home_lng = getattr(profile, "home_lng", None)
+        office_lat = getattr(profile, "office_lat", None)
+        office_lng = getattr(profile, "office_lng", None)
 
         if home_lat is None or home_lng is None:
             return {"available": False, "reason": "coords_missing"}
@@ -299,6 +301,10 @@ async def get_metro_snapshot(profile):
             result = {"available": False, "reason": "no_station"}
             _METRO_CACHE[cache_key] = (now, result)
             return result
+
+        destination_station = None
+        if office_lat is not None and office_lng is not None:
+            destination_station = await get_nearest_metro_station_async(office_lat, office_lng)
 
         station_lat = station.get("lat")
         station_lng = station.get("lng")
@@ -316,6 +322,7 @@ async def get_metro_snapshot(profile):
         result = {
             "available": True,
             "station": station,
+            "destination_station": destination_station,
             "walk_minutes": walk_minutes,
             "distance_km": distance_km,
         }
@@ -335,6 +342,11 @@ async def choose_commute_option_with_override(
     mode_override: str | None = None,
 ):
     arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
+    allowed_travel_modes = None
+    if mode_override == "bus":
+        allowed_travel_modes = ["BUS"]
+    elif mode_override == "metro":
+        allowed_travel_modes = ["SUBWAY", "RAIL", "LIGHT_RAIL"]
     
     bus_snapshot, metro_snapshot, google_detailed = await asyncio.gather(
         safe_call(get_bus_realtime_snapshot(profile)),
@@ -342,7 +354,8 @@ async def choose_commute_option_with_override(
         safe_call(estimate_transit_minutes_detailed(
             profile.home_lat, profile.home_lng,
             profile.office_lat, profile.office_lng,
-            arrival_dt
+            arrival_dt,
+            allowed_travel_modes=allowed_travel_modes,
         )),
     )
 
@@ -351,6 +364,13 @@ async def choose_commute_option_with_override(
         chosen_bus = bus_snapshot.get("chosen_bus")
 
     metro_available = bool(metro_snapshot and metro_snapshot.get("available"))
+    google_detailed = google_detailed or {}
+    bus_snapshot_with_details = dict(bus_snapshot or {})
+    metro_snapshot_with_details = dict(metro_snapshot or {})
+    if bus_snapshot_with_details:
+        bus_snapshot_with_details["google_detailed"] = google_detailed
+    if metro_snapshot_with_details:
+        metro_snapshot_with_details["google_detailed"] = google_detailed
 
     google_option = {
         "mode": "google_transit",
@@ -359,7 +379,7 @@ async def choose_commute_option_with_override(
         "snapshot": {
             "bus_snapshot": bus_snapshot or {},
             "metro_snapshot": metro_snapshot or {},
-            "google_detailed": google_detailed or {},
+            "google_detailed": google_detailed,
         },
     }
 
@@ -380,7 +400,7 @@ async def choose_commute_option_with_override(
             "summary": f"可搭公車 {bus_label}，於『{first_stop.get('stop_name', '最近站牌')}』上車。",
             "wait_minutes": wait_minutes,
             "reliability_penalty_minutes": 3,
-            "snapshot": bus_snapshot,
+            "snapshot": bus_snapshot_with_details,
         }
 
     metro_option = None
@@ -394,7 +414,7 @@ async def choose_commute_option_with_override(
             "wait_minutes": 3,
             "transfer_minutes": 2,
             "reliability_penalty_minutes": 1,
-            "snapshot": metro_snapshot,
+            "snapshot": metro_snapshot_with_details,
         }
 
     if mode_override == "shortest":
@@ -584,40 +604,90 @@ def _walk_metres(walk_minutes) -> str | None:
     return f"{metres} 公尺"
 
 
+def _normalize_exit_label(text: str | None) -> str | None:
+    if not text:
+        return None
+
+    compact = re.sub(r"\s+", " ", str(text).strip())
+    patterns = [
+        r"(?:出口|Exit)\s*([0-9A-Za-z]+)",
+        r"([0-9A-Za-z]+)\s*(?:號)?\s*出口",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            return f"出口 {match.group(1).upper()}"
+    return None
+
+
+def _exit_info_from_steps(steps: list[dict], matched_step: dict) -> str:
+    try:
+        matched_index = steps.index(matched_step)
+    except ValueError:
+        matched_index = 0
+
+    search_steps = steps[matched_index + 1:] + [matched_step]
+    for step in search_steps:
+        exit_label = _normalize_exit_label(step.get("instructions"))
+        if exit_label:
+            return f"從『{exit_label}』走"
+    return ""
+
+
+def _is_bus_step(step: dict) -> bool:
+    vehicle_type = str(step.get("vehicle_type", "")).upper()
+    line_text = f"{step.get('line_name', '')} {step.get('line_full_name', '')}".upper()
+    return "BUS" in vehicle_type or "BUS" in line_text or "公車" in line_text
+
+
+def _is_metro_step(step: dict) -> bool:
+    vehicle_type = str(step.get("vehicle_type", "")).upper()
+    return any(kind in vehicle_type for kind in ("SUBWAY", "RAIL", "LIGHT_RAIL", "TRAM"))
+
+
+def _select_transit_step(steps: list[dict], recommended_mode: str) -> dict | None:
+    transit_steps = [step for step in steps if step.get("type") == "TRANSIT"]
+    if not transit_steps:
+        return None
+
+    if recommended_mode == "bus":
+        return next((step for step in transit_steps if _is_bus_step(step)), transit_steps[0])
+    if recommended_mode == "metro":
+        metro_step = next((step for step in transit_steps if _is_metro_step(step)), None)
+        return metro_step or next((step for step in transit_steps if not _is_bus_step(step)), transit_steps[0])
+    return transit_steps[0]
+
+
+def _bus_route_label(bus_snapshot: dict) -> str | None:
+    chosen = bus_snapshot.get("chosen_bus") or {}
+    return chosen.get("route_name") or chosen.get("subroute_name")
+
+
 def _format_transport_line(plan: dict) -> str:
     best_option = plan["best_option"]
     recommended_mode = plan["recommended_mode"]
     snapshot = best_option.get("snapshot") or {}
 
-    # If it's a specific mode, try to find a matching transit step from Google for more details (like get-off station)
-    google_detailed = snapshot.get("google_detailed") if recommended_mode != "google_transit" else snapshot.get("google_detailed")
-    if not google_detailed and recommended_mode == "google_transit":
-        google_detailed = snapshot.get("google_detailed")
-
+    google_detailed = snapshot.get("google_detailed") or {}
     steps = (google_detailed or {}).get("steps", [])
-    # Always pick the first TRANSIT step from Google to get detailed station/line info
-    matched_step = next((s for s in steps if s.get("type") == "TRANSIT"), None)
+    matched_step = _select_transit_step(steps, recommended_mode)
 
     if matched_step:
-        line = matched_step.get("line_name") or "大眾運輸"
+        is_bus = _is_bus_step(matched_step)
+        bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
+        if is_bus:
+            line = matched_step.get("line_short_name") or _bus_route_label(bus_snap) or matched_step.get("line_name") or "公車"
+        else:
+            line = matched_step.get("line_name") or matched_step.get("line_short_name") or "捷運"
+
         dep_stop = matched_step.get("departure_stop") or "最近站點"
         arr_stop = matched_step.get("arrival_stop") or "目的地站點"
-        v_type = str(matched_step.get("vehicle_type", "")).upper()
-        is_bus = "BUS" in v_type or "公車" in line
         v_emoji = "🚌" if is_bus else "🚇"
         mode_text = "搭公車" if is_bus else "搭捷運"
-        
-        exit_info = ""
-        instr = matched_step.get("instructions") or ""
-        exit_match = re.search(r"((?:出口|Exit)\s*\d+|\d+\s*號出口)", instr)
-        if exit_match:
-            exit_info = f"從『{exit_match.group(1)}』走"
+        exit_info = "" if is_bus else _exit_info_from_steps(steps, matched_step)
 
         eta_str = ""
         if is_bus:
-            # If manually selected bus mode, snapshot is the bus snapshot. 
-            # If auto/shortest, snapshot is the root container.
-            bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
             chosen = bus_snap.get("chosen_bus") or {}
             eta = chosen.get("eta_min")
             if eta is not None:
@@ -628,10 +698,13 @@ def _format_transport_line(plan: dict) -> str:
     if recommended_mode == "metro":
         metro_snap = snapshot
         station = metro_snap.get("station") or {}
+        destination_station = metro_snap.get("destination_station") or {}
         walk_min = metro_snap.get("walk_minutes")
-        name = station.get("name", "最近捷運站")
-        walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        return f"🚇 建議搭捷運！{walk_str}抵達『{name}』，於目的地車站下車。"
+        dep_stop = station.get("name", "最近捷運站")
+        arr_stop = destination_station.get("name", "目的地附近捷運站")
+        line = "捷運"
+        walk_str = f"步行約 {walk_min} 分鐘抵達『{dep_stop}』，" if walk_min else ""
+        return f"🚇 建議搭捷運！{walk_str}請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車。"
 
     if recommended_mode == "bus":
         bus_snap = snapshot
@@ -639,26 +712,12 @@ def _format_transport_line(plan: dict) -> str:
         walk_min = bus_snap.get("walk_minutes")
         chosen = bus_snap.get("chosen_bus") or {}
         stop_name = first_stop.get("stop_name", "最近站牌")
-        route = chosen.get("route_name", "")
+        route = _bus_route_label(bus_snap)
         eta = chosen.get("eta_min")
         walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        route_str = f"搭乘 {route} 路線" if route else "搭乘公車"
+        route_str = f"搭乘 {route}" if route else "搭乘公車"
         eta_str = f"（約 {eta} 分鐘後到站）" if eta is not None else ""
         return f"🚌 建議搭公車！{walk_str}抵達『{stop_name}』，{route_str}{eta_str}。"
-
-    # google_transit detailed result
-    google_detailed = snapshot.get("google_detailed") or {}
-    steps = google_detailed.get("steps", [])
-    if steps:
-        # Take the first transit step for a more detailed summary
-        transit_step = next((s for s in steps if s["type"] == "TRANSIT"), None)
-        if transit_step:
-            line = transit_step["line_name"]
-            dep_stop = transit_step["departure_stop"]
-            arr_stop = transit_step["arrival_stop"]
-            v_type = transit_step["vehicle_type"]
-            v_emoji = "🚌" if "BUS" in str(v_type).upper() else "🚇"
-            return f"{v_emoji} 建議搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車。"
 
     return "🚶 建議參考 Google 地圖最快路徑。"
 
