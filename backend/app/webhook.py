@@ -419,20 +419,30 @@ async def line_webhook(
             _next_step = get_next_setup_step(_profile_for_guard)
 
             if _next_step is not None:
-                # 例外1：允許通過的設定指令
+                # 例外1：允許通過的設定指令（含問候、重設、傳送位置指令）
                 _setup_commands = (
                     COMMAND_ALIASES["send_home_location"]
                     | COMMAND_ALIASES["send_office_location"]
                     | COMMAND_ALIASES["reset"]
                     | {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}
                 )
-                # 例外2：正在填寫設定欄位中途（地址文字輸入 / 時間文字輸入）
+                # 例外2：正在填寫設定欄位且輸入內容確實像「地址」或「時間」
                 _current_pending = _profile_for_guard.pending_field
-                _is_mid_setup = _current_pending in {
-                    "home_location", "office_location", "preferred_arrival_time"
-                }
+                _is_valid_setup_input = False
+                if _current_pending in {"home_location", "office_location"}:
+                    # 只有看起來像地址的文字才放行
+                    _is_valid_setup_input = looks_like_address(user_text)
+                elif _current_pending == "preferred_arrival_time":
+                    # 只有 HH:MM 格式的時間文字才放行
+                    _parts = user_text.strip().split(":")
+                    if len(_parts) == 2:
+                        try:
+                            _h, _m = int(_parts[0]), int(_parts[1])
+                            _is_valid_setup_input = 0 <= _h <= 23 and 0 <= _m <= 59
+                        except ValueError:
+                            pass
 
-                if command_text not in _setup_commands and not _is_mid_setup:
+                if command_text not in _setup_commands and not _is_valid_setup_input:
                     set_pending_field(db, user.id, _next_step)
                     await reply_with_quick_reply(
                         reply_token,
