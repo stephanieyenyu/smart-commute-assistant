@@ -1,6 +1,7 @@
 import httpx
 from datetime import datetime, timezone
 from app.config import GOOGLE_MAPS_API_KEY
+from app.integrations.api_health import api_timer_start, log_api_health
 from app.integrations.redis_cache import get_cache, set_cache
 
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -43,10 +44,16 @@ async def geocode_address(address: str):
         return cached
 
     params = {"address": address, "key": GOOGLE_MAPS_API_KEY}
-    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
-        response = await client.get(GEOCODE_URL, params=params)
-        response.raise_for_status()
-        data = response.json()
+    timer = api_timer_start()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
+            response = await client.get(GEOCODE_URL, params=params)
+            log_api_health("google.geocode", timer, status_code=response.status_code)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        log_api_health("google.geocode", timer, error_message=str(e))
+        raise
 
     status = data.get("status")
     if status != "OK":
@@ -110,10 +117,16 @@ async def estimate_transit_minutes_detailed(
         "transitPreferences": transit_preferences
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
-        response = await client.post(ROUTES_URL, headers=headers, json=body)
-        response.raise_for_status()
-        data = response.json()
+    timer = api_timer_start()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
+            response = await client.post(ROUTES_URL, headers=headers, json=body)
+            log_api_health("google.routes.transit", timer, status_code=response.status_code)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        log_api_health("google.routes.transit", timer, error_message=str(e))
+        raise
 
     routes = data.get("routes", [])
     if not routes:
@@ -182,12 +195,18 @@ async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destina
         "travelMode": "WALK",
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
-        response = await client.post(ROUTES_URL, headers=headers, json=body)
-        if response.status_code >= 400:
-            print(f"[maps-walk] failed: {response.text}")
-        response.raise_for_status()
-        data = response.json()
+    timer = api_timer_start()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
+            response = await client.post(ROUTES_URL, headers=headers, json=body)
+            log_api_health("google.routes.walk", timer, status_code=response.status_code)
+            if response.status_code >= 400:
+                print(f"[maps-walk] failed: {response.text}")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        log_api_health("google.routes.walk", timer, error_message=str(e))
+        raise
 
     routes = data.get("routes", [])
     if not routes:

@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.address_utils import normalize_city_name, extract_city_from_text
+from app.integrations.api_health import api_timer_start, log_api_health
 
 
 _weather_cache: dict[str, tuple[float, dict]] = {}
@@ -165,6 +166,7 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
     cached = _weather_cache.get(city_name)
     if cached and now_ts - cached[0] <= WEATHER_CACHE_SECONDS:
         return cached[1]
+    stale_cached = cached
 
     api_key = _get_weather_api_key()
     if not api_key:
@@ -178,12 +180,14 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
         "locationName": city_name,
     }
 
+    timer = api_timer_start()
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(2.0, connect=1.0),
             verify=False,
         ) as client:
             response = await client.get(url, params=params)
+            log_api_health("cwa.weather.city", timer, status_code=response.status_code)
             if response.status_code >= 400:
                 print(f"[weather] city lookup failed: city={city_name}, status={response.status_code}, body={response.text}")
             response.raise_for_status()
@@ -194,7 +198,13 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
             return result
 
     except Exception as e:
+        log_api_health("cwa.weather.city", timer, error_message=str(e))
         print(f"[weather] city lookup failed: city={city_name}, error={e}")
+        if stale_cached:
+            result = dict(stale_cached[1])
+            result["scope"] = f"{result.get('scope') or 'city'}_stale_cache"
+            print(f"[weather] using stale cache city={city_name}")
+            return result
         return _build_failed_weather_result(city=city_name, scope="weather_api_failed")
 
 
