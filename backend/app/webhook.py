@@ -111,10 +111,10 @@ OVERRIDE_TOMORROW_TIME_QUICK_REPLIES = [
 
 # Shown after setup complete / after commute advice
 MAIN_MENU_QUICK_REPLIES = [
-    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
+    {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
     {"type": "message", "label": "🚇 今天搭捷運",    "text": "今天搭捷運"},
-    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
+    {"type": "message", "label": "📅 修改到公司時間", "text": "修改今天到公司時間"},
 ]
 
 # Shown after commute advice reply
@@ -128,6 +128,7 @@ COMMUTE_RESULT_QUICK_REPLIES = [
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
     "auto": "自動判斷",
+    "shortest": "最短時間優先 (Google)",
     "bus": "公車優先",
     "metro": "捷運優先",
     "bus_to_metro": "公車轉捷運",
@@ -147,6 +148,7 @@ COMMAND_ALIASES = {
     "test_reminder": {"測試提醒"},
     "test_quick_reply": {"測試按鈕"},
     "set_mode_auto": {"今天自動判斷", "今天交通自動"},
+    "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間"},
     "set_mode_bus": {"今天搭公車", "今天坐公車"},
     "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
     "set_mode_bus_to_metro": {"今天搭公車轉捷運", "今天公車轉捷運"},
@@ -169,6 +171,7 @@ READY_MENU_TEXT = (
     "測試公車\n"
     "測試捷運\n"
     "今天自動判斷\n"
+    "優先選擇通勤時間短\n"
     "今天搭公車\n"
     "今天搭捷運\n"
     "今天搭公車轉捷運\n"
@@ -523,6 +526,16 @@ async def line_webhook(
                 except Exception as e:
                     print(f"[freeze-auto] error={e}")
                 await reply_text(reply_token, "已設定今天交通方式為：自動判斷")
+                continue
+
+            if command_text in COMMAND_ALIASES["set_mode_shortest"]:
+                upsert_transport_mode_override(db, user.id, today_date, "shortest")
+                clear_today_reminder_state_for_user(user.id)
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today_date)
+                except Exception as e:
+                    print(f"[freeze-shortest] error={e}")
+                await reply_text(reply_token, "已設定今天交通方式為：最短時間優先 (Google Map)")
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_bus"]:
