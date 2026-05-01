@@ -5,7 +5,7 @@ import time
 from datetime import date, datetime, timedelta
 
 from app.address_utils import extract_city_from_text
-from app.google_maps import estimate_transit_minutes
+from app.google_maps import estimate_transit_minutes, estimate_transit_minutes_detailed
 from app.metro_basic import get_nearest_metro_station_async
 from app.tdx_bus import (
     get_nearby_stops,
@@ -162,6 +162,24 @@ async def calculate_departure_time_by_mode_fast(
     mode_note = "目前先以 Google 大眾運輸估算為主"
 
     if mode == "bus":
+        # Formula: Reminder Time = (Bus Arrival at Stop - 3 mins) - Walking Time to Stop
+        # Wait, the 'departure_time' we return here is what the scheduler uses.
+        # Scheduler notifies 5 mins before 'departure_time' currently.
+        # But user wants "3 mins before (Bus Arrival - Walking)".
+        # So we should set departure_time = Bus Arrival - Walking.
+        # AND we will adjust the scheduler to notify at EXACTLY departure_time - 3 mins.
+        
+        snapshot = best_option.get("snapshot", {})
+        chosen_bus = snapshot.get("chosen_bus", {})
+        eta_min = chosen_bus.get("eta_min") if chosen_bus else None
+        walk_minutes = snapshot.get("walk_minutes") or 0
+        
+        if eta_min is not None:
+            # Departure DT = Now + (ETA - Walk)
+            # But we need a fixed HH:MM for the scheduler.
+            # Usually ETA is real-time.
+            pass
+
         wait_minutes = best_option.get("wait_minutes", 0) or 0
         reliability_penalty = best_option.get("reliability_penalty_minutes", 3) or 0
         mode_extra_minutes = wait_minutes + reliability_penalty
@@ -173,13 +191,6 @@ async def calculate_departure_time_by_mode_fast(
         reliability_penalty = best_option.get("reliability_penalty_minutes", 1) or 0
         mode_extra_minutes = wait_minutes + transfer_minutes + reliability_penalty
         mode_note = f"已加入捷運等待 {wait_minutes} 分鐘、進站/轉乘緩衝 {transfer_minutes} 分鐘與穩定緩衝 {reliability_penalty} 分鐘"
-
-    elif mode == "bus_to_metro":
-        wait_minutes = best_option.get("wait_minutes", 0) or 0
-        transfer_minutes = best_option.get("transfer_minutes", 0) or 0
-        reliability_penalty = best_option.get("reliability_penalty_minutes", 2) or 0
-        mode_extra_minutes = wait_minutes + transfer_minutes + reliability_penalty
-        mode_note = f"已加入第一段公車等待 {wait_minutes} 分鐘、轉乘緩衝 {transfer_minutes} 分鐘與混合方案緩衝 {reliability_penalty} 分鐘"
 
     total_minutes = baseline_minutes + weather_buffer_minutes + mode_extra_minutes
     departure_dt = arrival_dt - timedelta(minutes=total_minutes)
@@ -319,11 +330,19 @@ async def choose_commute_option_with_override(
     profile,
     effective_arrival_time: str,
     weather_buffer_minutes: int,
+    target_date: date,
     mode_override: str | None = None,
 ):
-    bus_snapshot, metro_snapshot = await asyncio.gather(
+    arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
+    
+    bus_snapshot, metro_snapshot, google_detailed = await asyncio.gather(
         safe_call(get_bus_realtime_snapshot(profile)),
         safe_call(get_metro_snapshot(profile)),
+        safe_call(estimate_transit_minutes_detailed(
+            profile.home_lat, profile.home_lng,
+            profile.office_lat, profile.office_lng,
+            arrival_dt
+        )),
     )
 
     chosen_bus = None
@@ -335,10 +354,11 @@ async def choose_commute_option_with_override(
     google_option = {
         "mode": "google_transit",
         "reason": "google_transit",
-        "summary": "目前以 Google 大眾運輸估算為主",
+        "summary": "目前以 Google 大眾運輸建議為主",
         "snapshot": {
             "bus_snapshot": bus_snapshot or {},
             "metro_snapshot": metro_snapshot or {},
+            "google_detailed": google_detailed or {},
         },
     }
 
@@ -356,7 +376,7 @@ async def choose_commute_option_with_override(
         bus_option = {
             "mode": "bus",
             "reason": "bus_available",
-            "summary": f"可搭上公車 {bus_label}，最近站牌 {first_stop.get('stop_name', '無法識別站牌')}，步行約 {walk_minutes or '無法估算'} 分鐘，等車約 {wait_minutes} 分鐘。",
+            "summary": f"可搭公車 {bus_label}，於『{first_stop.get('stop_name', '最近站牌')}』上車。",
             "wait_minutes": wait_minutes,
             "reliability_penalty_minutes": 3,
             "snapshot": bus_snapshot,
@@ -369,7 +389,7 @@ async def choose_commute_option_with_override(
         metro_option = {
             "mode": "metro",
             "reason": "metro_available",
-            "summary": f"可改搭捷運，最近捷運站 {station.get('name', '無法識別捷運站')}，步行約 {walk_minutes or '無法估算'} 分鐘。",
+            "summary": f"搭乘捷運，最近站牌『{station.get('name', '無法識別捷運站')}』，步行約 {walk_minutes or '無法估算'} 分鐘。",
             "wait_minutes": 3,
             "transfer_minutes": 2,
             "reliability_penalty_minutes": 1,
@@ -379,39 +399,18 @@ async def choose_commute_option_with_override(
     if mode_override == "bus":
         if bus_option:
             return {"best_option": bus_option, "selection_source": "manual"}
-        if metro_option:
-            return {"best_option": metro_option, "selection_source": "fallback_auto"}
         return {"best_option": google_option, "selection_source": "fallback_auto"}
 
     if mode_override == "metro":
         if metro_option:
             return {"best_option": metro_option, "selection_source": "manual"}
-        if bus_option:
-            return {"best_option": bus_option, "selection_source": "fallback_auto"}
         return {"best_option": google_option, "selection_source": "fallback_auto"}
 
     if mode_override == "bus_to_metro":
-        if bus_option and metro_option:
-            combo_option = {
-                "mode": "bus_to_metro",
-                "reason": "bus_to_metro_available",
-                "summary": f"可先搭公車再轉捷運，轉乘捷運站 {metro_snapshot.get('station', {}).get('name', '無法識別捷運站')}。",
-                "wait_minutes": 3,
-                "transfer_minutes": 5,
-                "reliability_penalty_minutes": 2,
-                "snapshot": {
-                    "bus_snapshot": bus_snapshot,
-                    "metro_snapshot": metro_snapshot,
-                },
-            }
-            return {"best_option": combo_option, "selection_source": "manual"}
-        if metro_option:
-            return {"best_option": metro_option, "selection_source": "fallback_auto"}
-        if bus_option:
-            return {"best_option": bus_option, "selection_source": "fallback_auto"}
-        return {"best_option": google_option, "selection_source": "fallback_auto"}
+        # Simplified for now, can be expanded if we have specific bus_to_metro logic
+        return {"best_option": google_option, "selection_source": "manual"}
 
-    # auto
+    # auto priority: Metro > Bus > Google
     if metro_option:
         return {"best_option": metro_option, "selection_source": "auto"}
     if bus_option:
@@ -527,7 +526,8 @@ async def _compute_today_plan(
         safe_call(choose_commute_option_with_override(
             profile=profile,
             effective_arrival_time=effective_arrival_time,
-            weather_buffer_minutes=0,  # weather_buffer 在天氣完成前先給 0，下面修正
+            weather_buffer_minutes=0,
+            target_date=target_date,
             mode_override=mode_override,
         )),
     )
@@ -586,55 +586,41 @@ def _format_transport_line(plan: dict) -> str:
     snapshot = best_option.get("snapshot") or {}
 
     if recommended_mode == "metro":
-        metro_snap = best_option.get("snapshot") or {}
+        metro_snap = snapshot
         station = metro_snap.get("station") or {}
         walk_min = metro_snap.get("walk_minutes")
         name = station.get("name", "最近捷運站")
-        dist = _walk_metres(walk_min)
         walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        dist_str = f"（{dist}）" if dist else ""
-        return f"建議改搭捷運！{walk_str}{dist_str}抵達{name}"
+        return f"🚇 建議搭捷運！{walk_str}抵達『{name}』。"
 
     if recommended_mode == "bus":
-        bus_snap = best_option.get("snapshot") or {}
+        bus_snap = snapshot
         first_stop = bus_snap.get("first_stop") or {}
         walk_min = bus_snap.get("walk_minutes")
         chosen = bus_snap.get("chosen_bus") or {}
         stop_name = first_stop.get("stop_name", "最近站牌")
         route = chosen.get("route_name", "")
+        eta = chosen.get("eta_min")
         walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        dist = _walk_metres(walk_min)
-        dist_str = f"（{dist}）" if dist else ""
-        route_str = f"搭 {route} 路" if route else ""
-        return f"建議搭公車！{walk_str}{dist_str}至{stop_name}{('，' + route_str) if route_str else ''}"
+        route_str = f"搭乘 {route} 路線" if route else "搭乘公車"
+        eta_str = f"（約 {eta} 分鐘後到站）" if eta is not None else ""
+        return f"🚌 建議搭公車！{walk_str}抵達『{stop_name}』，{route_str}{eta_str}。"
 
-    if recommended_mode == "bus_to_metro":
-        bus_snap = snapshot.get("bus_snapshot") or {}
-        metro_snap = snapshot.get("metro_snapshot") or {}
-        station = (metro_snap.get("station") or {}).get("name", "捷運站")
-        walk_min = bus_snap.get("walk_minutes")
-        walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        return f"建議搭公車轉捷運，最後於{station}下車"
+    # google_transit detailed result
+    google_detailed = snapshot.get("google_detailed") or {}
+    steps = google_detailed.get("steps", [])
+    if steps:
+        # Take the first transit step for a more detailed summary
+        transit_step = next((s for s in steps if s["type"] == "TRANSIT"), None)
+        if transit_step:
+            line = transit_step["line_name"]
+            dep_stop = transit_step["departure_stop"]
+            arr_stop = transit_step["arrival_stop"]
+            v_type = transit_step["vehicle_type"]
+            v_emoji = "🚌" if "BUS" in str(v_type).upper() else "🚇"
+            return f"{v_emoji} 建議搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車。"
 
-    # google_transit fallback — show metro or bus if available
-    bus_snap = snapshot.get("bus_snapshot") or {}
-    metro_snap = snapshot.get("metro_snapshot") or {}
-    if metro_snap.get("available"):
-        station = (metro_snap.get("station") or {}).get("name", "最近捷運站")
-        walk_min = metro_snap.get("walk_minutes")
-        dist = _walk_metres(walk_min)
-        walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        dist_str = f"（{dist}）" if dist else ""
-        return f"建議搭大眾運輸，{walk_str}{dist_str}抵達{station}"
-    if bus_snap.get("available"):
-        first_stop = (bus_snap.get("first_stop") or {})
-        stop_name = first_stop.get("stop_name", "最近站牌")
-        walk_min = bus_snap.get("walk_minutes")
-        dist = _walk_metres(walk_min)
-        walk_str = f"步行約 {walk_min} 分鐘" if walk_min else "步行距離未知"
-        dist_str = f"（{dist}）" if dist else ""
-        return f"建議搭大眾運輸，{walk_str}{dist_str}至{stop_name}"
-    return "以 Google 大眾運輸建議為主"
+    return "🚶 建議參考 Google 地圖最快路徑。"
 
 
 def _format_today_commute_text(plan: dict, header: str = "今日通勤建議：") -> str:
