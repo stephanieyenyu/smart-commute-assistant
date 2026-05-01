@@ -9,10 +9,36 @@ from linebot.v3.messaging import (
     QuickReplyItem,
     LocationAction,
     MessageAction,
+    DatetimePickerAction,
 )
 from app.config import LINE_CHANNEL_ACCESS_TOKEN
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+
+
+def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
+    """
+    Build QuickReplyItem list from dicts.
+    Supported types:
+      - type: 'location'      → opens LINE map
+      - type: 'message'       → sends a text message
+      - type: 'datetimepicker'→ opens time/date picker (requires 'data', 'mode')
+    """
+    quick_reply_items = []
+    for item in items:
+        t = item["type"]
+        if t == "location":
+            action = LocationAction(label=item["label"])
+        elif t == "datetimepicker":
+            action = DatetimePickerAction(
+                label=item["label"],
+                data=item.get("data", "postback"),
+                mode=item.get("mode", "time"),
+            )
+        else:  # message
+            action = MessageAction(label=item["label"], text=item["text"])
+        quick_reply_items.append(QuickReplyItem(action=action))
+    return quick_reply_items
 
 
 async def reply_text(reply_token: str, text: str) -> None:
@@ -27,20 +53,7 @@ async def reply_text(reply_token: str, text: str) -> None:
 
 
 async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> None:
-    """
-    items: list of dicts with keys:
-      - type: 'location' | 'message'
-      - label: str  (max 20 chars for display)
-      - text: str   (only for type='message')
-    """
-    quick_reply_items = []
-    for item in items:
-        if item["type"] == "location":
-            action = LocationAction(label=item["label"])
-        else:
-            action = MessageAction(label=item["label"], text=item["text"])
-        quick_reply_items.append(QuickReplyItem(action=action))
-
+    quick_reply_items = _build_quick_reply_items(items)
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
@@ -57,7 +70,6 @@ async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> No
             )
     except Exception as e:
         print(f"[line] reply_with_quick_reply error: {e}")
-        # Fallback to plain text
         await reply_text(reply_token, text)
 
 
@@ -73,20 +85,7 @@ async def push_text(user_id: str, text: str) -> None:
 
 
 async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
-    """
-    items: list of dicts with keys:
-      - type: 'location' | 'message'
-      - label: str  (max 20 chars for display)
-      - text: str   (only for type='message')
-    """
-    quick_reply_items = []
-    for item in items:
-        if item["type"] == "location":
-            action = LocationAction(label=item["label"])
-        else:
-            action = MessageAction(label=item["label"], text=item["text"])
-        quick_reply_items.append(QuickReplyItem(action=action))
-
+    quick_reply_items = _build_quick_reply_items(items)
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)

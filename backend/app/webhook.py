@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, Request
 from linebot.v3.webhook import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent, FollowEvent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent, FollowEvent, PostbackEvent
 
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET
@@ -53,40 +53,63 @@ FIELD_PROMPTS = {
 
 parser = WebhookParser(LINE_CHANNEL_SECRET)
 
-# Quick reply buttons for onboarding / greeting
-# LINE Quick Reply label limit: 20 chars (emoji = 2 chars)
-ONBOARDING_QUICK_REPLIES = [
-    {"type": "location", "label": "📍 住家位置"},
-    {"type": "location", "label": "🏢 公司位置"},
-    {"type": "message",  "label": "⏰ 設定到公司時間", "text": "設定到公司時間"},
+# ===========================================================
+# Quick Reply button sets
+# ===========================================================
+
+# Shown for: new users (FollowEvent), reset, setup incomplete
+# Contains all 3 setup actions in one bar
+SETUP_QUICK_REPLIES = [
+    {"type": "location",      "label": "🏠 住家位置"},
+    {"type": "location",      "label": "🏢 公司位置"},
+    {"type": "datetimepicker","label": "⏰ 到公司時間",
+     "data": "action=set_preferred_arrival_time", "mode": "time"},
 ]
 
-# Quick reply shown after receiving today's commute advice
-COMMUTE_RESULT_QUICK_REPLIES = [
-    {"type": "message", "label": "🚌 今天搭公車",       "text": "今天搭公車"},
-    {"type": "message", "label": "🚇 今天搭捷運",       "text": "今天搭捷運"},
-    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
-    {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
-]
-
+# Shown when waiting for home address
 HOME_QUICK_REPLY = [
-    {"type": "location", "label": "📍 就近地圖選位置"},
-]
-OFFICE_QUICK_REPLY = [
-    {"type": "location", "label": "🏢 就近地圖選位置"},
+    {"type": "location", "label": "📍 開啟地圖選位置"},
 ]
 
-# Quick reply for preferred_arrival_time step: common arrival times
+# Shown when waiting for office address
+OFFICE_QUICK_REPLY = [
+    {"type": "location", "label": "🏢 開啟地圖選位置"},
+]
+
+# Shown when waiting for preferred_arrival_time
 ARRIVAL_TIME_QUICK_REPLIES = [
+    {"type": "datetimepicker", "label": "⏰ 選擇到公司時間",
+     "data": "action=set_preferred_arrival_time", "mode": "time"},
     {"type": "message", "label": "07:30", "text": "07:30"},
     {"type": "message", "label": "08:00", "text": "08:00"},
     {"type": "message", "label": "08:30", "text": "08:30"},
     {"type": "message", "label": "09:00", "text": "09:00"},
     {"type": "message", "label": "09:30", "text": "09:30"},
-    {"type": "message", "label": "10:00", "text": "10:00"},
 ]
 
-# Quick reply after setup complete / commute shown
+# Shown when modifying today's arrival time
+OVERRIDE_TODAY_TIME_QUICK_REPLIES = [
+    {"type": "datetimepicker", "label": "⏰ 選擇今天時間",
+     "data": "action=set_today_arrival_time", "mode": "time"},
+    {"type": "message", "label": "08:00", "text": "08:00"},
+    {"type": "message", "label": "09:00", "text": "09:00"},
+    {"type": "message", "label": "10:00", "text": "10:00"},
+    {"type": "message", "label": "14:00", "text": "14:00"},
+    {"type": "message", "label": "17:00", "text": "17:00"},
+]
+
+# Shown when modifying tomorrow's arrival time
+OVERRIDE_TOMORROW_TIME_QUICK_REPLIES = [
+    {"type": "datetimepicker", "label": "⏰ 選擇明天時間",
+     "data": "action=set_tomorrow_arrival_time", "mode": "time"},
+    {"type": "message", "label": "08:00", "text": "08:00"},
+    {"type": "message", "label": "08:30", "text": "08:30"},
+    {"type": "message", "label": "09:00", "text": "09:00"},
+    {"type": "message", "label": "10:00", "text": "10:00"},
+    {"type": "message", "label": "09:30", "text": "09:30"},
+]
+
+# Shown after setup complete / after commute advice
 MAIN_MENU_QUICK_REPLIES = [
     {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
     {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
@@ -94,14 +117,12 @@ MAIN_MENU_QUICK_REPLIES = [
     {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
 ]
 
-# Quick reply for modifying today's arrival time
-OVERRIDE_TIME_QUICK_REPLIES = [
-    {"type": "message", "label": "08:00", "text": "08:00"},
-    {"type": "message", "label": "09:00", "text": "09:00"},
-    {"type": "message", "label": "10:00", "text": "10:00"},
-    {"type": "message", "label": "12:00", "text": "12:00"},
-    {"type": "message", "label": "14:00", "text": "14:00"},
-    {"type": "message", "label": "17:00", "text": "17:00"},
+# Shown after commute advice reply
+COMMUTE_RESULT_QUICK_REPLIES = [
+    {"type": "message", "label": "🚌 今天搭公車",       "text": "今天搭公車"},
+    {"type": "message", "label": "🚇 今天搭捷運",       "text": "今天搭捷運"},
+    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
+    {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
 ]
 
 TRANSPORT_MODE_NAME_MAP = {
@@ -266,9 +287,72 @@ async def line_webhook(
                 reply_token = event.reply_token
                 await reply_with_quick_reply(
                     reply_token,
-                    "歡迎使用智慧通勤助理！👋\n請先完成以下設定：",
-                    ONBOARDING_QUICK_REPLIES,
+                    "歡迎使用智慧通勤助理！👋\n"
+                    "請先完成以下設定，點擊下方按鈕可快速完成：",
+                    SETUP_QUICK_REPLIES,
                 )
+                continue
+
+            # --- PostbackEvent: datetime picker time selection ---
+            if isinstance(event, PostbackEvent):
+                postback_data = event.postback.data if event.postback else ""
+                params = event.postback.params or {} if event.postback else {}
+                # params is a dict for datetimepicker: {"time": "HH:mm"}
+                time_value = params.get("time") if isinstance(params, dict) else getattr(params, "time", None)
+                reply_token = event.reply_token
+                today_date = date.today()
+                tomorrow_date = today_date + timedelta(days=1)
+
+                today_override = get_override_for_date(db, user.id, today_date)
+                today_override_time = today_override.target_arrival_time if today_override and today_override.target_arrival_time else None
+                tomorrow_override = get_override_for_date(db, user.id, tomorrow_date)
+                tomorrow_override_time = tomorrow_override.target_arrival_time if tomorrow_override and tomorrow_override.target_arrival_time else None
+
+                print(f"[postback] user_id={user.id} data={postback_data} time={time_value}")
+
+                if postback_data == "action=set_preferred_arrival_time" and time_value:
+                    update_profile_field(db, user.id, "preferred_arrival_time", time_value)
+                    clear_today_reminder_state_for_user(user.id)
+                    set_pending_field(db, user.id, None)
+                    try:
+                        await freeze_today_reminder_payload(db, user.id, today_date)
+                    except Exception as e:
+                        print(f"[freeze-postback-preferred] error={e}")
+                    updated_profile = get_profile(db, user.id)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已儲存到公司時間：{time_value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    continue
+
+                if postback_data == "action=set_today_arrival_time" and time_value:
+                    upsert_override(db, user.id, today_date, time_value)
+                    clear_today_reminder_state_for_user(user.id)
+                    try:
+                        await freeze_today_reminder_payload(db, user.id, today_date)
+                    except Exception as e:
+                        print(f"[freeze-postback-today] error={e}")
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已儲存今天到公司時間：{time_value}",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    continue
+
+                if postback_data == "action=set_tomorrow_arrival_time" and time_value:
+                    upsert_override(db, user.id, tomorrow_date, time_value)
+                    set_pending_field(db, user.id, None)
+                    departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, time_value)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已儲存明天到公司時間：{time_value}\n明天建議 {departure_time} 出門。",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    continue
+
+                # Unknown postback — ignore
                 continue
 
             if not isinstance(event, MessageEvent):
@@ -337,8 +421,8 @@ async def line_webhook(
                     set_pending_field(db, user.id, next_step)
                     await reply_with_quick_reply(
                         reply_token,
-                        "你好，我是智慧通勤助理！請先完成以下設定：",
-                        ONBOARDING_QUICK_REPLIES,
+                        "你好，我是智慧通勤助理！\n請先完成以下設定，點擊下方按鈕可快速完成：",
+                        SETUP_QUICK_REPLIES,
                     )
                 continue
 
@@ -580,7 +664,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     FIELD_PROMPTS["override_today_arrival_time"],
-                    OVERRIDE_TIME_QUICK_REPLIES,
+                    OVERRIDE_TODAY_TIME_QUICK_REPLIES,
                 )
                 continue
 
@@ -596,7 +680,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     FIELD_PROMPTS["override_tomorrow_arrival_time"],
-                    OVERRIDE_TIME_QUICK_REPLIES,
+                    OVERRIDE_TOMORROW_TIME_QUICK_REPLIES,
                 )
                 continue
 
@@ -645,7 +729,12 @@ async def line_webhook(
             if current_step in {"preferred_arrival_time", "override_today_arrival_time", "override_tomorrow_arrival_time"}:
                 value, error_message = validate_pending_input(current_step, user_text)
                 if error_message:
-                    qr = ARRIVAL_TIME_QUICK_REPLIES if current_step == "preferred_arrival_time" else OVERRIDE_TIME_QUICK_REPLIES
+                    if current_step == "preferred_arrival_time":
+                        qr = ARRIVAL_TIME_QUICK_REPLIES
+                    elif current_step == "override_today_arrival_time":
+                        qr = OVERRIDE_TODAY_TIME_QUICK_REPLIES
+                    else:
+                        qr = OVERRIDE_TOMORROW_TIME_QUICK_REPLIES
                     await reply_with_quick_reply(reply_token, error_message + "\n" + FIELD_PROMPTS[current_step], qr)
                     continue
 
