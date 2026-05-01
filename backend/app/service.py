@@ -594,13 +594,8 @@ def _format_transport_line(plan: dict) -> str:
         google_detailed = snapshot.get("google_detailed")
 
     steps = (google_detailed or {}).get("steps", [])
-    matched_step = None
-    if recommended_mode == "bus":
-        matched_step = next((s for s in steps if "BUS" in str(s.get("vehicle_type")).upper() or "公車" in str(s.get("line_name"))), None)
-    elif recommended_mode == "metro":
-        matched_step = next((s for s in steps if any(kw in str(s.get("vehicle_type")).upper() for kw in ["SUBWAY", "METRO", "RAIL", "TRAM"]) or "捷運" in str(s.get("line_name"))), None)
-    elif recommended_mode == "google_transit":
-        matched_step = next((s for s in steps if s.get("type") == "TRANSIT"), None)
+    # Always pick the first TRANSIT step from Google to get detailed station/line info
+    matched_step = next((s for s in steps if s.get("type") == "TRANSIT"), None)
 
     if matched_step:
         line = matched_step.get("line_name") or "大眾運輸"

@@ -124,7 +124,7 @@ async def estimate_transit_minutes_detailed(origin_lat: float, origin_lng: float
                 stop_details = transit_details.get("stopDetails", {})
                 steps.append({
                     "type": "TRANSIT",
-                    "line_name": line.get("name") or line.get("shortName"),
+                    "line_name": line.get("shortName") or line.get("name"),
                     "vehicle_type": line.get("vehicle", {}).get("type"),
                     "departure_stop": stop_details.get("departureStop", {}).get("name"),
                     "arrival_stop": stop_details.get("arrivalStop", {}).get("name"),
