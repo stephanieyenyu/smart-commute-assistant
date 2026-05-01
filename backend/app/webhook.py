@@ -119,9 +119,9 @@ MAIN_MENU_QUICK_REPLIES = [
 
 # Shown after commute advice reply
 COMMUTE_RESULT_QUICK_REPLIES = [
+    {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "🚌 今天搭公車",       "text": "今天搭公車"},
     {"type": "message", "label": "🚇 今天搭捷運",       "text": "今天搭捷運"},
-    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
     {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
 ]
 
