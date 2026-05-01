@@ -39,20 +39,16 @@ router = APIRouter()
 
 FIELD_PROMPTS = {
     "home_location": (
-        "請傳送住家位置。\n"
-        "1. 傳 LINE 位置\n"
-        "2. 或直接輸入完整地址\n"
-        "3. 中英文地址都可以"
+        "請傳送住家位置 📍\n"
+        "點下方按鈕開啟地圖，或直接輸入完整地址"
     ),
     "office_location": (
-        "請傳送公司位置。\n"
-        "1. 傳 LINE 位置\n"
-        "2. 或直接輸入完整地址\n"
-        "3. 中英文地址都可以"
+        "請傳送公司位置 🏢\n"
+        "點下方按鈕開啟地圖，或直接輸入完整地址"
     ),
-    "preferred_arrival_time": "請直接輸入到公司時間，格式 HH:MM，例如 08:30",
-    "override_today_arrival_time": "請直接輸入今天新的到公司時間，格式 HH:MM，例如 15:30",
-    "override_tomorrow_arrival_time": "請直接輸入明天新的到公司時間，格式 HH:MM，例如 09:30",
+    "preferred_arrival_time": "請問您幾點需要到公司？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 08:30）",
+    "override_today_arrival_time": "請問今天幾點需要到公司？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 15:30）",
+    "override_tomorrow_arrival_time": "請問明天幾點需要到公司？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 09:30）",
 }
 
 parser = WebhookParser(LINE_CHANNEL_SECRET)
@@ -78,6 +74,34 @@ HOME_QUICK_REPLY = [
 ]
 OFFICE_QUICK_REPLY = [
     {"type": "location", "label": "🏢 就近地圖選位置"},
+]
+
+# Quick reply for preferred_arrival_time step: common arrival times
+ARRIVAL_TIME_QUICK_REPLIES = [
+    {"type": "message", "label": "07:30", "text": "07:30"},
+    {"type": "message", "label": "08:00", "text": "08:00"},
+    {"type": "message", "label": "08:30", "text": "08:30"},
+    {"type": "message", "label": "09:00", "text": "09:00"},
+    {"type": "message", "label": "09:30", "text": "09:30"},
+    {"type": "message", "label": "10:00", "text": "10:00"},
+]
+
+# Quick reply after setup complete / commute shown
+MAIN_MENU_QUICK_REPLIES = [
+    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
+    {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
+    {"type": "message", "label": "🚇 今天搭捷運",    "text": "今天搭捷運"},
+    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
+]
+
+# Quick reply for modifying today's arrival time
+OVERRIDE_TIME_QUICK_REPLIES = [
+    {"type": "message", "label": "08:00", "text": "08:00"},
+    {"type": "message", "label": "09:00", "text": "09:00"},
+    {"type": "message", "label": "10:00", "text": "10:00"},
+    {"type": "message", "label": "12:00", "text": "12:00"},
+    {"type": "message", "label": "14:00", "text": "14:00"},
+    {"type": "message", "label": "17:00", "text": "17:00"},
 ]
 
 TRANSPORT_MODE_NAME_MAP = {
@@ -278,10 +302,14 @@ async def line_webhook(
                     await save_location_or_address(db, user.id, "office", raw_address, lat=lat, lng=lng)
                     clear_today_reminder_state_for_user(user.id)
                     set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_text(reply_token, "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"])
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"],
+                        ARRIVAL_TIME_QUICK_REPLIES,
+                    )
                     continue
 
-                await reply_text(reply_token, READY_MENU_TEXT)
+                await reply_with_quick_reply(reply_token, READY_MENU_TEXT, MAIN_MENU_QUICK_REPLIES)
                 continue
 
             # 2. 其他非文字、非位置訊息直接略過
@@ -326,7 +354,11 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["reset"]:
                 reset_profile_for_reconfigure(db, user.id)
                 clear_today_reminder_state_for_user(user.id)
-                await reply_text(reply_token, "好的，現在開始重新設定。\n" + FIELD_PROMPTS["home_location"])
+                await reply_with_quick_reply(
+                    reply_token,
+                    "好的，現在開始重新設定。\n" + FIELD_PROMPTS["home_location"],
+                    HOME_QUICK_REPLY,
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["view_settings"]:
@@ -530,7 +562,11 @@ async def line_webhook(
                     continue
 
                 set_pending_field(db, user.id, "override_today_arrival_time")
-                await reply_text(reply_token, FIELD_PROMPTS["override_today_arrival_time"])
+                await reply_with_quick_reply(
+                    reply_token,
+                    FIELD_PROMPTS["override_today_arrival_time"],
+                    OVERRIDE_TIME_QUICK_REPLIES,
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["edit_tomorrow_arrival"]:
@@ -542,7 +578,11 @@ async def line_webhook(
                     continue
 
                 set_pending_field(db, user.id, "override_tomorrow_arrival_time")
-                await reply_text(reply_token, FIELD_PROMPTS["override_tomorrow_arrival_time"])
+                await reply_with_quick_reply(
+                    reply_token,
+                    FIELD_PROMPTS["override_tomorrow_arrival_time"],
+                    OVERRIDE_TIME_QUICK_REPLIES,
+                )
                 continue
 
             profile = get_profile(db, user.id)
@@ -551,11 +591,13 @@ async def line_webhook(
             if current_step in {"home_location", "office_location"}:
                 typed_address = user_text.strip()
                 if not typed_address:
-                    await reply_text(reply_token, FIELD_PROMPTS[current_step])
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[current_step],
+                                                 HOME_QUICK_REPLY if current_step == "home_location" else OFFICE_QUICK_REPLY)
                     continue
 
                 if not looks_like_address(typed_address):
-                    await reply_text(reply_token, FIELD_PROMPTS[current_step])
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[current_step],
+                                                 HOME_QUICK_REPLY if current_step == "home_location" else OFFICE_QUICK_REPLY)
                     continue
 
                 try:
@@ -563,14 +605,22 @@ async def line_webhook(
                         await save_location_or_address(db, user.id, "home", typed_address)
                         clear_today_reminder_state_for_user(user.id)
                         set_pending_field(db, user.id, "office_location")
-                        await reply_text(reply_token, "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"])
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"],
+                            OFFICE_QUICK_REPLY,
+                        )
                         continue
 
                     if current_step == "office_location":
                         await save_location_or_address(db, user.id, "office", typed_address)
                         clear_today_reminder_state_for_user(user.id)
                         set_pending_field(db, user.id, "preferred_arrival_time")
-                        await reply_text(reply_token, "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"])
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"],
+                            ARRIVAL_TIME_QUICK_REPLIES,
+                        )
                         continue
                 except Exception as e:
                     print(f"[text-address] error={e}")
@@ -580,7 +630,8 @@ async def line_webhook(
             if current_step in {"preferred_arrival_time", "override_today_arrival_time", "override_tomorrow_arrival_time"}:
                 value, error_message = validate_pending_input(current_step, user_text)
                 if error_message:
-                    await reply_text(reply_token, error_message + "\n" + FIELD_PROMPTS[current_step])
+                    qr = ARRIVAL_TIME_QUICK_REPLIES if current_step == "preferred_arrival_time" else OVERRIDE_TIME_QUICK_REPLIES
+                    await reply_with_quick_reply(reply_token, error_message + "\n" + FIELD_PROMPTS[current_step], qr)
                     continue
 
                 if current_step == "override_today_arrival_time":
@@ -591,14 +642,22 @@ async def line_webhook(
                     except Exception as e:
                         print(f"[freeze-today-override] error={e}")
                     set_pending_field(db, user.id, None)
-                    await reply_text(reply_token, f"已儲存今天到公司時間：{value}")
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已儲存今天到公司時間：{value}",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
                     continue
 
                 if current_step == "override_tomorrow_arrival_time":
                     upsert_override(db, user.id, tomorrow_date, value)
                     set_pending_field(db, user.id, None)
                     departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, value)
-                    await reply_text(reply_token, f"已儲存明天到公司時間：{value}\n明天建議 {departure_time} 出門。")
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已儲存明天到公司時間：{value}\n明天建議 {departure_time} 出門。",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
                     continue
 
                 update_profile_field(db, user.id, "preferred_arrival_time", value)
@@ -611,15 +670,26 @@ async def line_webhook(
                     print(f"[freeze-preferred-arrival] error={e}")
 
                 updated_profile = get_profile(db, user.id)
-                await reply_text(reply_token, f"已儲存到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}")
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已儲存到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                    MAIN_MENU_QUICK_REPLIES,
+                )
                 continue
 
             next_step = get_next_setup_step(profile)
             if next_step is None:
-                await reply_text(reply_token, READY_MENU_TEXT)
+                await reply_with_quick_reply(reply_token, READY_MENU_TEXT, MAIN_MENU_QUICK_REPLIES)
             else:
                 set_pending_field(db, user.id, next_step)
-                await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                if next_step == "home_location":
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], HOME_QUICK_REPLY)
+                elif next_step == "office_location":
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], OFFICE_QUICK_REPLY)
+                elif next_step == "preferred_arrival_time":
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], ARRIVAL_TIME_QUICK_REPLIES)
+                else:
+                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
 
     finally:
         db.close()
