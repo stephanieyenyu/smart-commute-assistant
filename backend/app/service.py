@@ -596,31 +596,33 @@ def _format_transport_line(plan: dict) -> str:
     steps = (google_detailed or {}).get("steps", [])
     matched_step = None
     if recommended_mode == "bus":
-        # Search for any step that looks like a bus
         matched_step = next((s for s in steps if "BUS" in str(s.get("vehicle_type")).upper() or "公車" in str(s.get("line_name"))), None)
     elif recommended_mode == "metro":
-        # Search for any step that looks like a subway/metro/rail
         matched_step = next((s for s in steps if any(kw in str(s.get("vehicle_type")).upper() for kw in ["SUBWAY", "METRO", "RAIL", "TRAM"]) or "捷運" in str(s.get("line_name"))), None)
+    elif recommended_mode == "google_transit":
+        matched_step = next((s for s in steps if s.get("type") == "TRANSIT"), None)
 
     if matched_step:
         line = matched_step.get("line_name") or "大眾運輸"
         dep_stop = matched_step.get("departure_stop") or "最近站點"
         arr_stop = matched_step.get("arrival_stop") or "目的地站點"
-        v_emoji = "🚌" if recommended_mode == "bus" else "🚇"
-        mode_text = "搭公車" if recommended_mode == "bus" else "搭捷運"
+        v_type = str(matched_step.get("vehicle_type", "")).upper()
+        is_bus = "BUS" in v_type or "公車" in line
+        v_emoji = "🚌" if is_bus else "🚇"
+        mode_text = "搭公車" if is_bus else "搭捷運"
         
-        # Try to find exit info in instructions
         exit_info = ""
         instr = matched_step.get("instructions") or ""
         import re
-        exit_match = re.search(r"(出口\s*\d+|Exit\s*\d+)", instr)
+        exit_match = re.search(r"((?:出口|Exit)\s*\d+|\d+\s*號出口)", instr)
         if exit_match:
             exit_info = f"從『{exit_match.group(1)}』走"
 
-        # For bus, we still want the TDX real-time ETA if available
         eta_str = ""
-        if recommended_mode == "bus":
-            bus_snap = snapshot
+        if is_bus:
+            # If manually selected bus mode, snapshot is the bus snapshot. 
+            # If auto/shortest, snapshot is the root container.
+            bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
             chosen = bus_snap.get("chosen_bus") or {}
             eta = chosen.get("eta_min")
             if eta is not None:
