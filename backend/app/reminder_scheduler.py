@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.db import SessionLocal
-from app.line_client import push_text
+from app.line_client import push_text, push_with_quick_reply
 from app.models import CommuteOverride, User
 from app.crud import (
     get_profile,
@@ -14,6 +14,14 @@ from app.crud import (
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+# Quick Reply buttons shown after departure reminder push
+REMINDER_QUICK_REPLIES = [
+    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
+    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
+    {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
+    {"type": "message", "label": "🚇 今天搭捷運",    "text": "今天搭捷運"},
+]
 
 
 def now_taipei() -> datetime:
@@ -69,7 +77,11 @@ async def check_and_send_departure_reminders():
                 )
 
                 if now_sec >= departure_sec - 300:
-                    await push_text(user.line_user_id, override.frozen_reminder_text)
+                    await push_with_quick_reply(
+                        user.line_user_id,
+                        override.frozen_reminder_text,
+                        REMINDER_QUICK_REPLIES,
+                    )
                     mark_reminder_sent(
                         db=db,
                         user_id=user.id,
