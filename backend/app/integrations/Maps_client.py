@@ -95,7 +95,7 @@ async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_la
         "arrivalTime": arrival_datetime.isoformat(),
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(7.0, connect=3.0)) as client:
         response = await client.post(ROUTES_URL, headers=headers, json=body)
         response.raise_for_status()
         data = response.json()
@@ -133,7 +133,7 @@ async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destina
         "travelMode": "WALK",
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(7.0, connect=3.0)) as client:
         response = await client.post(ROUTES_URL, headers=headers, json=body)
         if response.status_code >= 400:
             print(f"[maps-walk] failed: {response.text}")

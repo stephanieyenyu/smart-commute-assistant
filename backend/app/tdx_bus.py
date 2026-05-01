@@ -1,4 +1,4 @@
-﻿import time
+import time
 from typing import Any
 
 import httpx
@@ -109,7 +109,7 @@ async def tdx_get(path: str, params: dict | None = None) -> list[dict]:
 
     url = f"{TDX_BASE_URL}{path}"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
         response = await client.get(url, headers=headers, params=params)
 
         if response.status_code == 429:
