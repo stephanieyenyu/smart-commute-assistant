@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from linebot.v3.webhook import WebhookParser
@@ -36,6 +37,11 @@ from app.service import (
 from app.reminder_scheduler import clear_today_reminder_state_for_user
 
 router = APIRouter()
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+
+def today_taipei() -> date:
+    return datetime.now(TAIPEI_TZ).date()
 
 FIELD_PROMPTS = {
     "home_location": (
@@ -305,7 +311,7 @@ async def line_webhook(
                 # params is a dict for datetimepicker: {"time": "HH:mm"}
                 time_value = params.get("time") if isinstance(params, dict) else getattr(params, "time", None)
                 reply_token = event.reply_token
-                today_date = date.today()
+                today_date = today_taipei()
                 tomorrow_date = today_date + timedelta(days=1)
 
                 today_override = get_override_for_date(db, user.id, today_date)
@@ -409,7 +415,7 @@ async def line_webhook(
             user_text = message.text.strip()
             command_text = normalize_user_text(user_text)
 
-            today_date = date.today()
+            today_date = today_taipei()
             tomorrow_date = today_date + timedelta(days=1)
 
             today_override = get_override_for_date(db, user.id, today_date)
