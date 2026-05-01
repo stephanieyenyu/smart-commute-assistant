@@ -65,8 +65,20 @@ ONBOARDING_QUICK_REPLIES = [
     {"type": "message",  "label": "⏰ 設定到公司時間", "text": "設定到公司時間"},
 ]
 
-HOME_QUICK_REPLY = [{"type": "location", "label": "📍 傳送住家位置"}]
-OFFICE_QUICK_REPLY = [{"type": "location", "label": "🏢 傳送公司位置"}]
+# Quick reply shown after receiving today's commute advice
+COMMUTE_RESULT_QUICK_REPLIES = [
+    {"type": "message", "label": "🚌 今天搭公車",       "text": "今天搭公車"},
+    {"type": "message", "label": "🚇 今天搭捷運",       "text": "今天搭捷運"},
+    {"type": "message", "label": "⏰ 修改到公司時間", "text": "修改今天到公司時間"},
+    {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
+]
+
+HOME_QUICK_REPLY = [
+    {"type": "location", "label": "📍 就近地圖選位置"},
+]
+OFFICE_QUICK_REPLY = [
+    {"type": "location", "label": "🏢 就近地圖選位置"},
+]
 
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
@@ -255,7 +267,11 @@ async def line_webhook(
                     await save_location_or_address(db, user.id, "home", raw_address, lat=lat, lng=lng)
                     clear_today_reminder_state_for_user(user.id)
                     set_pending_field(db, user.id, "office_location")
-                    await reply_text(reply_token, "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"])
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"],
+                        OFFICE_QUICK_REPLY,
+                    )
                     continue
 
                 if current_step == "office_location":
@@ -485,7 +501,7 @@ async def line_webhook(
                 except Exception as e:
                     print(f"[freeze-today-commute] error={e}")
 
-                await reply_text(reply_token, payload["text"])
+                await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["tomorrow_departure"]:
