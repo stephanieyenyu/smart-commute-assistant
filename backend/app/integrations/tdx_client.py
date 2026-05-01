@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import time
 from app.config import TDX_CLIENT_ID, TDX_CLIENT_SECRET
@@ -23,7 +24,7 @@ async def _get_access_token() -> str | None:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
             response = await client.post(AUTH_URL, data=payload)
             response.raise_for_status()
             data = response.json()
@@ -53,7 +54,7 @@ async def fetch_tdx_data(endpoint: str, params: dict = None, cache_seconds: int 
     url = f"{BASE_URL}{endpoint}"
     for attempt in range(retries):
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
                 response = await client.get(url, headers=headers, params=params)
                 response.raise_for_status()
                 data = response.json()
@@ -62,7 +63,7 @@ async def fetch_tdx_data(endpoint: str, params: dict = None, cache_seconds: int 
         except httpx.HTTPError as e:
             print(f"[tdx] fetch error on {endpoint} (attempt {attempt+1}/{retries}): {e}")
             if attempt < retries - 1:
-                time.sleep(1) # simple wait before retry
+                await asyncio.sleep(0.5)
             continue
     return None
 

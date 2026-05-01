@@ -5,7 +5,7 @@ import time
 from datetime import date, datetime, timedelta
 
 from app.address_utils import extract_city_from_text
-from app.google_maps import estimate_transit_minutes, estimate_walking_minutes
+from app.google_maps import estimate_transit_minutes
 from app.metro_basic import get_nearest_metro_station_async
 from app.tdx_bus import (
     get_nearby_stops,
@@ -226,22 +226,14 @@ async def get_bus_realtime_snapshot(profile):
         stop_lat = first_stop.get("lat")
         stop_lng = first_stop.get("lng")
 
+        # 步行時間：優先使用站點距離，次之用 Haversine 計算（省去 Google API call）
         walk_minutes = None
-        if stop_lat is not None and stop_lng is not None:
-            try:
-                walk_minutes = await estimate_walking_minutes(
-                    origin_lat=home_lat,
-                    origin_lng=home_lng,
-                    destination_lat=stop_lat,
-                    destination_lng=stop_lng,
-                )
-            except Exception as e:
-                print(f"[bus-walk] estimate failed: {e}")
-
-        if walk_minutes is None:
-            dist_m = first_stop.get("distance_m")
-            if dist_m is not None:
-                walk_minutes = max(1, round(dist_m / 80))
+        dist_m = first_stop.get("distance_m")
+        if dist_m is not None:
+            walk_minutes = max(1, round(dist_m / 80))
+        elif stop_lat is not None and stop_lng is not None:
+            dist_km = _haversine_km(home_lat, home_lng, stop_lat, stop_lng)
+            walk_minutes = max(1, round(dist_km * 1000 / 80))
 
         arrival_at_stop_min = (walk_minutes or 0) + 1
         valid_eta_list = await _fetch_arrivals_for_stop(city_name, first_stop)
@@ -296,30 +288,18 @@ async def get_metro_snapshot(profile):
             _METRO_CACHE[cache_key] = (now, result)
             return result
 
-        walk_minutes = None
         station_lat = station.get("lat")
         station_lng = station.get("lng")
 
-        if station_lat is not None and station_lng is not None:
-            try:
-                walk_minutes = await estimate_walking_minutes(
-                    origin_lat=home_lat,
-                    origin_lng=home_lng,
-                    destination_lat=station_lat,
-                    destination_lng=station_lng,
-                )
-            except Exception as e:
-                print(f"[metro-walk] estimate failed: {e}")
-
+        # 步行時間：直接用 Haversine 計算（省去 Google API call）
         distance_km = None
+        walk_minutes = None
         if station_lat is not None and station_lng is not None:
             try:
                 distance_km = _haversine_km(home_lat, home_lng, station_lat, station_lng)
+                walk_minutes = max(1, round(distance_km * 1000 / 80))
             except Exception:
-                distance_km = None
-
-        if walk_minutes is None and distance_km is not None:
-            walk_minutes = max(1, round(distance_km * 1000 / 80))
+                pass
 
         result = {
             "available": True,
@@ -537,21 +517,24 @@ async def _compute_today_plan(
         effective_arrival_time = override.target_arrival_time
         used_override = True
 
-    weather_info, baseline_minutes = await asyncio.gather(
-        get_commute_weather(profile),
-        estimate_commute_minutes(profile, target_date, effective_arrival_time),
-    )
-    weather_buffer = weather_info.get("extra_buffer_minutes", 0)
-
     stored_mode_override = get_transport_mode_override(db, user_id, target_date)
     mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
 
-    option_choice = await choose_commute_option_with_override(
-        profile=profile,
-        effective_arrival_time=effective_arrival_time,
-        weather_buffer_minutes=weather_buffer,
-        mode_override=mode_override,
+    # 三路並行：天氣、通勤時間估算、公車+捷運快照同時發出
+    weather_info, baseline_minutes, option_choice = await asyncio.gather(
+        safe_call(get_commute_weather(profile)),
+        safe_call(estimate_commute_minutes(profile, target_date, effective_arrival_time)),
+        safe_call(choose_commute_option_with_override(
+            profile=profile,
+            effective_arrival_time=effective_arrival_time,
+            weather_buffer_minutes=0,  # weather_buffer 在天氣完成前先給 0，下面修正
+            mode_override=mode_override,
+        )),
     )
+    weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
+    baseline_minutes = baseline_minutes or DEFAULT_COMMUTE_MINUTES
+    weather_buffer = weather_info.get("extra_buffer_minutes", 0)
+    option_choice = option_choice or {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
     best_option = option_choice.get("best_option", {}) or {}
     selection_source = option_choice.get("selection_source", "auto")
 
