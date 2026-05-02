@@ -675,10 +675,17 @@ async def _compute_today_plan(
     final_departure_time = departure_calc["departure_time"]
     recommended_mode = best_option.get("mode", "google_transit")
 
+    today = datetime.now(TAIPEI_TZ).date()
+    if target_date == today:
+        target_label = "今天"
+    elif target_date == today + timedelta(days=1):
+        target_label = "明天"
+    else:
+        target_label = target_date.isoformat()
     note = (
-        f"已套用今天覆蓋到公司時間：{effective_arrival_time}"
+        f"{target_label}使用臨時到公司時間：{effective_arrival_time}"
         if used_override
-        else f"目前使用預設到公司時間：{effective_arrival_time}"
+        else f"{target_label}使用固定到公司時間：{effective_arrival_time}"
     )
 
     return {
@@ -1025,6 +1032,7 @@ async def build_today_commute_payload(
         return plan
 
     plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
+    plan["plan_key"] = route_formatter.build_reminder_payload_from_plan(plan).get("plan_key")
     if log_plan:
         try:
             record_commute_plan_log(db, user_id, plan)

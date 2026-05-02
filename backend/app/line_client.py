@@ -20,7 +20,7 @@ LINE_QUICK_REPLY_LIMIT = 13
 
 PERSISTENT_QUICK_REPLIES = [
     {"type": "message", "label": "今日通勤建議", "text": "今日通勤建議"},
-    {"type": "message", "label": "修改出門時間", "text": "修改出門時間"},
+    {"type": "message", "label": "修改到公司時間", "text": "修改到公司時間"},
 ]
 
 

@@ -44,7 +44,7 @@ def render_dashboard_html(user_id: int) -> str:
       color: var(--text);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       letter-spacing: 0;
-      overflow: hidden;
+      overflow: auto;
     }}
 
     .screen {{
@@ -52,6 +52,74 @@ def render_dashboard_html(user_id: int) -> str:
       display: grid;
       grid-template-rows: auto 1fr auto;
       transition: background-color 180ms ease;
+    }}
+
+    .screen.layout-compact {{
+      --edge-x: 24px;
+      --edge-y: 18px;
+      --main-gap: 22px;
+      --band-pad-y: 14px;
+      --band-pad-x: 18px;
+      --title-size: 23px;
+      --clock-size: 46px;
+      --state-size: 38px;
+      --countdown-size: 88px;
+      --caption-size: 21px;
+      --label-size: 16px;
+      --value-size: 27px;
+      --transport-size: 22px;
+      --footer-size: 15px;
+    }}
+
+    .screen.layout-short {{
+      --edge-x: 20px;
+      --edge-y: 14px;
+      --main-gap: 18px;
+      --band-pad-y: 12px;
+      --band-pad-x: 16px;
+      --title-size: 21px;
+      --clock-size: 38px;
+      --state-size: 32px;
+      --countdown-size: 70px;
+      --caption-size: 18px;
+      --label-size: 14px;
+      --value-size: 24px;
+      --transport-size: 20px;
+      --footer-size: 14px;
+    }}
+
+    .screen.layout-stack {{
+      --edge-x: 20px;
+      --edge-y: 16px;
+      --main-gap: 18px;
+      --band-pad-y: 14px;
+      --band-pad-x: 16px;
+      --title-size: 20px;
+      --clock-size: 34px;
+      --state-size: 31px;
+      --countdown-size: 68px;
+      --caption-size: 18px;
+      --label-size: 14px;
+      --value-size: 23px;
+      --transport-size: 19px;
+      --footer-size: 14px;
+    }}
+
+    .screen.layout-tiny {{
+      --edge-x: 14px;
+      --edge-y: 12px;
+      --main-gap: 14px;
+      --band-pad-y: 12px;
+      --band-pad-x: 14px;
+      --title-size: 18px;
+      --clock-size: 28px;
+      --state-size: 26px;
+      --countdown-size: 54px;
+      --caption-size: 16px;
+      --label-size: 13px;
+      --value-size: 20px;
+      --transport-size: 17px;
+      --footer-size: 13px;
     }}
 
     .state-safe {{
@@ -128,12 +196,33 @@ def render_dashboard_html(user_id: int) -> str:
       min-height: 0;
     }}
 
+    .screen.layout-compact .main {{
+      grid-template-columns: minmax(240px, 0.8fr) minmax(300px, 1.2fr);
+    }}
+
+    .screen.layout-short .main {{
+      grid-template-columns: minmax(220px, 0.78fr) minmax(280px, 1.22fr);
+    }}
+
+    .screen.layout-stack .main,
+    .screen.layout-tiny .main {{
+      grid-template-columns: 1fr;
+      padding: 20px var(--edge-x);
+    }}
+
     .hero {{
       display: flex;
       flex-direction: column;
       justify-content: center;
       gap: 26px;
       min-width: 0;
+    }}
+
+    .screen.layout-compact .hero,
+    .screen.layout-short .hero,
+    .screen.layout-stack .hero,
+    .screen.layout-tiny .hero {{
+      gap: 16px;
     }}
 
     .state-label {{
@@ -161,6 +250,11 @@ def render_dashboard_html(user_id: int) -> str:
       align-content: center;
       gap: 16px;
       min-width: 0;
+    }}
+
+    .screen.layout-short .details,
+    .screen.layout-tiny .details {{
+      gap: 10px;
     }}
 
     .band {{
@@ -198,6 +292,13 @@ def render_dashboard_html(user_id: int) -> str:
       color: var(--muted);
       border-top: 1px solid var(--line);
       font-size: var(--footer-size);
+    }}
+
+    .screen.layout-stack .topbar,
+    .screen.layout-tiny .topbar,
+    .screen.layout-stack .footer,
+    .screen.layout-tiny .footer {{
+      flex-wrap: wrap;
     }}
 
     .sound-button {{
@@ -342,7 +443,7 @@ def render_dashboard_html(user_id: int) -> str:
   </style>
 </head>
 <body>
-  <main id="screen" class="screen state-error">
+  <main id="screen" class="screen state-error layout-wide">
     <header class="topbar">
       <div class="brand">
         <span class="status-dot" aria-hidden="true"></span>
@@ -411,6 +512,39 @@ def render_dashboard_html(user_id: int) -> str:
     let latestPayload = null;
     let ws = null;
     let soundEnabled = localStorage.getItem(`dashboardSoundEnabled:${{userId}}`) === "true";
+    let activeSpeechKeys = new Set();
+    let currentState = "error";
+    let layoutClass = "layout-wide";
+
+    function applyScreenClass() {{
+      screen.className = `screen state-${{currentState}} ${{layoutClass}}`;
+    }}
+
+    function pickLayoutClass() {{
+      const viewport = window.visualViewport || window;
+      const width = viewport.width || window.innerWidth;
+      const height = viewport.height || window.innerHeight;
+
+      if (width <= 540 || height <= 540) return "layout-tiny";
+      if (width <= 820) return "layout-stack";
+      if (height <= 720) return "layout-short";
+      if (width <= 1180 || height <= 860) return "layout-compact";
+      return "layout-wide";
+    }}
+
+    function fitDashboardToViewport() {{
+      layoutClass = pickLayoutClass();
+      applyScreenClass();
+
+      window.requestAnimationFrame(() => {{
+        const viewport = window.visualViewport || window;
+        const height = viewport.height || window.innerHeight;
+        if (screen.scrollHeight > height + 4 && layoutClass === "layout-compact") {{
+          layoutClass = "layout-short";
+          applyScreenClass();
+        }}
+      }});
+    }}
 
     function updateSoundToggle() {{
       soundToggle.classList.toggle("enabled", soundEnabled);
@@ -422,7 +556,8 @@ def render_dashboard_html(user_id: int) -> str:
         "dashboardSpoken",
         userId,
         payload.target_date || "unknown-date",
-        payload.departure_time || "unknown-time",
+        payload.plan_key || "unknown-plan",
+        payload.departure_at || payload.departure_time || "unknown-time",
         moment
       ].join(":");
     }}
@@ -444,17 +579,51 @@ def render_dashboard_html(user_id: int) -> str:
 
     function speakReminder(message, storageKey, onDone) {{
       if (!soundEnabled || !("speechSynthesis" in window)) return;
-      if (localStorage.getItem(storageKey) === "true") return;
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.lang = "zh-TW";
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      if (onDone) {{
-        utterance.onend = onDone;
+      if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return;
+
+      const speakNow = () => {{
+        if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return;
+
+        activeSpeechKeys.add(storageKey);
+        let speechStarted = false;
+        const utterance = new SpeechSynthesisUtterance(message);
+        utterance.lang = "zh-TW";
+        utterance.rate = 1;
+        utterance.pitch = 1;
+
+        const handleSpeechDone = () => {{
+          activeSpeechKeys.delete(storageKey);
+          localStorage.setItem(storageKey, "true");
+          if (onDone) onDone();
+        }};
+
+        utterance.onstart = () => {{
+          speechStarted = true;
+        }};
+        utterance.onend = handleSpeechDone;
+        utterance.onerror = (event) => {{
+          console.warn("speech reminder failed", event);
+          activeSpeechKeys.delete(storageKey);
+          if (onDone) onDone();
+        }};
+
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.resume();
+        window.speechSynthesis.speak(utterance);
+        window.setTimeout(() => window.speechSynthesis.resume(), 250);
+        window.setTimeout(() => {{
+          if (!speechStarted && !window.speechSynthesis.speaking) {{
+            activeSpeechKeys.delete(storageKey);
+          }}
+        }}, 2500);
+      }};
+
+      if (!window.speechSynthesis.getVoices().length) {{
+        window.speechSynthesis.onvoiceschanged = speakNow;
+        window.setTimeout(speakNow, 300);
+        return;
       }}
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
-      localStorage.setItem(storageKey, "true");
+      speakNow();
     }}
 
     function handleVoiceReminder(payload) {{
@@ -519,7 +688,8 @@ def render_dashboard_html(user_id: int) -> str:
     function render(payload) {{
       latestPayload = payload;
       const state = payload.state || "error";
-      screen.className = `screen state-${{state}}`;
+      currentState = state;
+      applyScreenClass();
       stateLabel.textContent = stateLabels[state] || stateLabels.error;
 
       if (!payload.ok) {{
@@ -541,6 +711,7 @@ def render_dashboard_html(user_id: int) -> str:
       weather.textContent = formatWeather(payload.weather);
       updatedAt.textContent = payload.updated_at ? `更新 ${{new Date(payload.updated_at).toLocaleTimeString("zh-TW", {{ hour12: false }})}}` : "尚未更新";
       handleVoiceReminder(payload);
+      fitDashboardToViewport();
     }}
 
     async function fetchStatus() {{
@@ -574,7 +745,13 @@ def render_dashboard_html(user_id: int) -> str:
 
     setInterval(updateClock, 1000);
     setInterval(fetchStatus, 30000);
+    window.addEventListener("resize", fitDashboardToViewport);
+    window.addEventListener("orientationchange", () => setTimeout(fitDashboardToViewport, 250));
+    if (window.visualViewport) {{
+      window.visualViewport.addEventListener("resize", fitDashboardToViewport);
+    }}
     updateSoundToggle();
+    fitDashboardToViewport();
     updateClock();
     fetchStatus();
     connectWebSocket();

@@ -49,19 +49,38 @@ def seconds_until_departure_datetime(now: datetime, target_date, hhmm: str) -> i
     return int((departure_datetime - now).total_seconds())
 
 
+def seconds_until_iso_datetime(now: datetime, iso_value: str | None) -> int | None:
+    if not iso_value:
+        return None
+    try:
+        departure_datetime = datetime.fromisoformat(iso_value)
+    except (TypeError, ValueError):
+        return None
+    if now.tzinfo is not None and departure_datetime.tzinfo is None:
+        departure_datetime = departure_datetime.replace(tzinfo=now.tzinfo)
+    elif now.tzinfo is not None:
+        departure_datetime = departure_datetime.astimezone(now.tzinfo)
+    return int((departure_datetime - now).total_seconds())
+
+
 def dashboard_plan_is_expired(now: datetime, plan: dict) -> bool:
     if not plan.get("ok"):
         return False
 
     departure_time = plan.get("final_departure_time")
-    if not departure_time:
+    seconds_until_departure = seconds_until_iso_datetime(
+        now,
+        plan.get("departure_snoozed_until") or plan.get("departure_at"),
+    )
+    if seconds_until_departure is None and not departure_time:
         return False
 
-    seconds_until_departure = seconds_until_departure_datetime(
-        now,
-        plan.get("target_date"),
-        departure_time,
-    )
+    if seconds_until_departure is None:
+        seconds_until_departure = seconds_until_departure_datetime(
+            now,
+            plan.get("target_date"),
+            departure_time,
+        )
     return seconds_until_departure < -TODAY_PLAN_EXPIRES_AFTER_SECONDS
 
 
@@ -98,11 +117,18 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
 
     departure_time = plan.get("final_departure_time")
     seconds_until_departure = None
+    departure_at = plan.get("departure_snoozed_until") or plan.get("departure_at")
+    if departure_at:
+        seconds_until_departure = seconds_until_iso_datetime(now, departure_at)
     if departure_time:
-        seconds_until_departure = seconds_until_departure_datetime(
-            now,
-            plan.get("target_date"),
-            departure_time,
+        seconds_until_departure = (
+            seconds_until_departure
+            if seconds_until_departure is not None
+            else seconds_until_departure_datetime(
+                now,
+                plan.get("target_date"),
+                departure_time,
+            )
         )
 
     degraded = weather_is_degraded(plan.get("weather_info") or {})
@@ -115,6 +141,8 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
         "target_date": plan["target_date"].isoformat() if hasattr(plan.get("target_date"), "isoformat") else plan.get("target_date"),
         "target_arrival_time": plan.get("effective_arrival_time"),
         "departure_time": departure_time,
+        "departure_at": departure_at,
+        "plan_key": plan.get("plan_key"),
         "seconds_until_departure": seconds_until_departure,
         "recommended_mode": plan.get("recommended_mode"),
         "transport_line": plan.get("transport_line"),

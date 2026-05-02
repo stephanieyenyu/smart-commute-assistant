@@ -37,8 +37,6 @@ from app.service import (
     calculate_departure_time,
     build_today_commute_payload,
     freeze_today_reminder_payload,
-    get_bus_realtime_snapshot,
-    get_metro_snapshot,
 )
 from app.reminder_scheduler import clear_today_reminder_state_for_user
 
@@ -156,15 +154,11 @@ COMMAND_ALIASES = {
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
     "dashboard_link": {"取得Dashboard連結", "取得dashboard連結", "Dashboard連結", "dashboard連結", "取得儀表板連結"},
     "tomorrow_departure": {"明天幾點出門"},
-    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間"},
+    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
     "reset": {"重新設定"},
     "send_home_location": {"傳送住家位置", "設定住家位置"},
     "send_office_location": {"傳送公司位置", "設定公司位置"},
-    "test_bus": {"測試公車", "公車測試"},
-    "test_metro": {"測試捷運", "捷運測試"},
-    "test_reminder": {"測試提醒"},
-    "test_quick_reply": {"測試按鈕"},
     "set_mode_auto": {"今天自動判斷", "今天交通自動"},
     "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間"},
     "set_mode_bus": {"今天搭公車", "今天坐公車"},
@@ -189,8 +183,6 @@ READY_MENU_TEXT = (
     "重新設定\n"
     "傳送住家位置\n"
     "傳送公司位置\n"
-    "測試公車\n"
-    "測試捷運\n"
     "今天自動判斷\n"
     "優先選擇通勤時間短\n"
     "今天搭公車\n"
@@ -209,6 +201,10 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
     home_address = profile.home_address or "尚未設定"
     office_address = profile.office_address or "尚未設定"
     preferred_arrival_time = profile.preferred_arrival_time or "尚未設定"
+    today_effective_time = today_override_time or preferred_arrival_time
+    tomorrow_effective_time = tomorrow_override_time or preferred_arrival_time
+    today_note = "（今天臨時調整）" if today_override_time else "（固定時間）"
+    tomorrow_note = "（明天臨時調整）" if tomorrow_override_time else "（固定時間）"
     reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
 
@@ -216,14 +212,12 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
         "您目前設定如下：\n"
         f"🏠 住家位置：{home_address}\n"
         f"🏢 公司位置：{office_address}\n"
-        f"⏰ 到公司時間：{preferred_arrival_time}\n"
+        f"⏰ 固定到公司時間：{preferred_arrival_time}\n"
+        f"📍 今天到公司時間：{today_effective_time}{today_note}\n"
+        f"📅 明天到公司時間：{tomorrow_effective_time}{tomorrow_note}\n"
         f"📢 自動提醒：{reminder_status}\n"
         f"🚇 今天交通方式：{mode_label}"
     )
-    if today_override_time:
-        text += f"\n📍 今天覆蓋到公司時間：{today_override_time}"
-    if tomorrow_override_time:
-        text += f"\n📅 明天覆蓋到公司時間：{tomorrow_override_time}"
     return text
 
 
@@ -344,7 +338,7 @@ async def line_webhook(
                         confirm_departure_for_user(db, user.id, today_date)
                         await reply_text(
                             reply_token,
-                            "收到，今天通勤計算已停止。Dashboard 會改看明天的通勤與提醒時間。",
+                            "收到，今天上班加油！\n已更新為計算明日通勤與提醒時間。",
                         )
                         continue
 
@@ -368,7 +362,7 @@ async def line_webhook(
                     updated_profile = get_profile(db, user.id)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已儲存到公司時間：{time_value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                        f"已更新固定到公司時間：{time_value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
@@ -383,7 +377,10 @@ async def line_webhook(
                     set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已儲存今天到公司時間：{time_value}",
+                        (
+                            f"已設定今天臨時到公司時間：{time_value}\n"
+                            f"明天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                        ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
@@ -394,7 +391,11 @@ async def line_webhook(
                     departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, time_value)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已儲存明天到公司時間：{time_value}\n明天建議 {departure_time} 出門。",
+                        (
+                            f"已設定明天臨時到公司時間：{time_value}\n"
+                            f"明天建議出門：{departure_time}\n"
+                            f"後天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                        ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
@@ -591,7 +592,7 @@ async def line_webhook(
                 confirm_departure_for_user(db, user.id, today_date)
                 await reply_text(
                     reply_token,
-                    "收到，今天通勤計算已停止。Dashboard 會改看明天的通勤與提醒時間。",
+                    "收到，今天上班加油！\n已更新為計算明日通勤與提醒時間。",
                 )
                 continue
 
@@ -683,92 +684,6 @@ async def line_webhook(
                 await reply_text(reply_token, f"今天交通方式設定：{TRANSPORT_MODE_NAME_MAP.get(current_mode, '自動判斷')}")
                 continue
 
-            if command_text in COMMAND_ALIASES["test_bus"]:
-                profile = get_profile(db, user.id)
-                next_step = get_next_setup_step(profile)
-                if next_step is not None:
-                    set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
-                    continue
-
-                bus_snapshot = await get_bus_realtime_snapshot(profile)
-                if not bus_snapshot.get("available"):
-                    await reply_text(reply_token, "附近站牌測試：\n無即時資訊")
-                    continue
-
-                nearby_stops = bus_snapshot.get("nearby_stops", []) or []
-                first_stop = bus_snapshot.get("first_stop", {}) or {}
-                valid_eta_list = bus_snapshot.get("valid_eta_list", []) or []
-
-                lines = ["附近站牌測試："]
-                for idx, stop in enumerate(nearby_stops[:5], start=1):
-                    lines.append(
-                        f"{idx}. {stop.get('stop_name', '無法識別站牌')} | "
-                        f"stop_id={stop.get('stop_id', '無即時資訊')} | "
-                        f"uid={stop.get('stop_uid', '無即時資訊')}"
-                    )
-
-                lines.append("")
-                lines.append(f"最近站牌 ETA 測試：{first_stop.get('stop_name', '無法識別站牌')}")
-
-                if valid_eta_list:
-                    for eta in valid_eta_list[:5]:
-                        route_label = eta.get("route_name", "無路線資訊")
-                        subroute_name = eta.get("subroute_name")
-                        if subroute_name and subroute_name != eta.get("route_name"):
-                            route_label += f"({subroute_name})"
-                        eta_text = f"{eta['eta_min']} 分鐘" if eta.get("eta_min") is not None else "無即時資訊"
-                        lines.append(f"{route_label}：{eta_text}")
-                else:
-                    lines.append("無即時資訊")
-
-                await reply_text(reply_token, "\n".join(lines))
-                continue
-
-            if command_text in COMMAND_ALIASES["test_metro"]:
-                profile = get_profile(db, user.id)
-                next_step = get_next_setup_step(profile)
-                if next_step is not None:
-                    set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
-                    continue
-
-                metro_snapshot = await get_metro_snapshot(profile)
-                if not metro_snapshot.get("available"):
-                    await reply_text(reply_token, "捷運測試：\n無即時資訊")
-                    continue
-
-                station = metro_snapshot.get("station", {}) or {}
-                distance_km = metro_snapshot.get("distance_km")
-                walk_minutes = metro_snapshot.get("walk_minutes")
-
-                lines = [
-                    "捷運測試：",
-                    f"最近捷運站：{station.get('name', '無法識別捷運站')}",
-                    f"直線距離：約 {distance_km:.2f} 公里" if distance_km is not None else "直線距離：無法估算",
-                    f"步行到捷運站：約 {walk_minutes if walk_minutes is not None else '無法估算'} 分鐘",
-                ]
-                await reply_text(reply_token, "\n".join(lines))
-                continue
-
-            if command_text in COMMAND_ALIASES["test_reminder"]:
-                await reply_text(reply_token, READY_MENU_TEXT)
-                continue
-
-            if command_text in COMMAND_ALIASES["test_quick_reply"]:
-                print(f"[test-qr] user_id={user.id} sending quick reply test")
-                test_items = [
-                    {"type": "message", "label": "✅ 按鈕測試 A", "text": "今天通勤建議"},
-                    {"type": "message", "label": "⏰ 按鈕測試 B", "text": "修改今天到公司時間"},
-                    {"type": "location", "label": "📍 地圖測試"},
-                ]
-                await reply_with_quick_reply(
-                    reply_token,
-                    "🧪 Quick Reply 按鈕測試\n如果您看到下方按鈕，代表功能正常！",
-                    test_items,
-                )
-                continue
-
             if command_text in COMMAND_ALIASES["today_commute"]:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
@@ -815,7 +730,10 @@ async def line_webhook(
                     effective_arrival_time = override.target_arrival_time
 
                 departure_time = await calculate_departure_time(profile, tomorrow_date, effective_arrival_time)
-                await reply_text(reply_token, f"明天建議 {departure_time} 出門。")
+                await reply_text(
+                    reply_token,
+                    f"明天到公司時間：{effective_arrival_time}\n明天建議出門：{departure_time}",
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["edit_today_arrival"]:
@@ -914,7 +832,10 @@ async def line_webhook(
                     set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已儲存今天到公司時間：{value}",
+                        (
+                            f"已設定今天臨時到公司時間：{value}\n"
+                            f"明天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                        ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
@@ -925,7 +846,11 @@ async def line_webhook(
                     departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, value)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已儲存明天到公司時間：{value}\n明天建議 {departure_time} 出門。",
+                        (
+                            f"已設定明天臨時到公司時間：{value}\n"
+                            f"明天建議出門：{departure_time}\n"
+                            f"後天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                        ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
@@ -942,7 +867,7 @@ async def line_webhook(
                 updated_profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已儲存到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                    f"已更新固定到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
                     MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
