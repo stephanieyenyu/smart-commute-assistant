@@ -3,8 +3,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 
 from app import route_formatter
+from app.dashboard_page import render_dashboard_html
 from app.dashboard_status import build_dashboard_payload
 from app.db import SessionLocal
 from app.service import build_today_commute_payload
@@ -41,6 +43,11 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
 @router.get("/status/{user_id}")
 async def dashboard_status(user_id: int):
     return await get_dashboard_status_payload(user_id)
+
+
+@router.get("/view/{user_id}", response_class=HTMLResponse)
+async def dashboard_view(user_id: int):
+    return HTMLResponse(render_dashboard_html(user_id))
 
 
 @router.websocket("/ws/{user_id}")
