@@ -156,7 +156,7 @@ def format_transport_line(plan: dict) -> str:
                 eta_str = f"（約 {eta} 分鐘後到站）"
             route_options = bus_route_options_text(bus_snap, line)
 
-        options_text = f" {route_options}。" if route_options else ""
+        options_text = f"\n{route_options}。" if route_options else ""
         return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}{eta_str}。{options_text}"
 
     if recommended_mode == "metro":
@@ -181,7 +181,7 @@ def format_transport_line(plan: dict) -> str:
         route_str = route or "公車"
         eta_str = f"（約 {eta} 分鐘後到站）" if eta is not None else ""
         route_options = bus_route_options_text(bus_snap, route_str)
-        options_text = f" {route_options}。" if route_options else ""
+        options_text = f"\n{route_options}。" if route_options else ""
         return f"🚌 建議搭公車！請搭乘 {route_str}，於『{stop_name}』上車，並在『目的地附近站牌』下車{eta_str}。{options_text}"
 
     return "🚶 建議參考 Google 地圖最快路徑。"

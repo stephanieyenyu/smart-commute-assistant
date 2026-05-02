@@ -1013,6 +1013,7 @@ async def build_today_commute_payload(
     target_date: date | None = None,
     force_mode_override: str | None = None,
     header: str = "今日通勤建議：",
+    log_plan: bool = True,
 ):
     plan = await _compute_today_plan(
         db=db,
@@ -1024,10 +1025,11 @@ async def build_today_commute_payload(
         return plan
 
     plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
-    try:
-        record_commute_plan_log(db, user_id, plan)
-    except Exception as e:
-        print(f"[commute-log] skipped user_id={user_id} error={e}")
+    if log_plan:
+        try:
+            record_commute_plan_log(db, user_id, plan)
+        except Exception as e:
+            print(f"[commute-log] skipped user_id={user_id} error={e}")
     return plan
 
 

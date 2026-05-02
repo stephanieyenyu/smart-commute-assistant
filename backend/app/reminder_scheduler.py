@@ -17,6 +17,12 @@ from app.crud import (
     mark_watchdog_alert_sent,
     clear_today_reminder_state_db,
 )
+from app.reminder_timing import (
+    ReminderTimingDecision,
+    evaluate_departure_reminder,
+    hhmm_to_seconds,
+    STALE_REMINDER_GRACE_SECONDS,
+)
 from app.service import build_today_commute_payload, freeze_today_reminder_payload
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
@@ -25,7 +31,6 @@ _PREPARE_ATTEMPT_CACHE: dict[tuple[int, str], datetime] = {}
 PREPARE_RETRY_SECONDS = 300
 BUS_RECOMPUTE_SECONDS = 60
 METRO_RECOMPUTE_SECONDS = 300
-STALE_REMINDER_GRACE_SECONDS = 120
 MORNING_WATCHDOG_LOOKAHEAD_HOURS = 2
 WATCHDOG_DEPARTURE_WARNING_SECONDS = 15 * 60
 
@@ -53,11 +58,6 @@ WATCHDOG_QUICK_REPLIES = [
 
 def now_taipei() -> datetime:
     return datetime.now(TAIPEI_TZ)
-
-
-def hhmm_to_seconds(hhmm: str) -> int:
-    h, m = hhmm.split(":")
-    return int(h) * 3600 + int(m) * 60
 
 
 def current_seconds_of_day() -> int:
@@ -180,20 +180,26 @@ async def check_and_send_departure_reminders():
                 if not profile.reminder_enabled:
                     continue
 
-                if override.last_sent_plan_key == override.frozen_plan_key:
+                already_sent = override.last_sent_plan_key == override.frozen_plan_key
+                timing_decision = evaluate_departure_reminder(
+                    now_sec,
+                    override.frozen_departure_time,
+                    already_sent=already_sent,
+                )
+
+                if timing_decision == ReminderTimingDecision.ALREADY_SENT:
                     print(
                         f"[reminder-check] user_id={user.id} now={now_hhmmss} "
                         f"departure={override.frozen_departure_time} already_sent=True"
                     )
                     continue
 
-                departure_sec = hhmm_to_seconds(override.frozen_departure_time)
                 print(
                     f"[reminder-check] user_id={user.id} now={now_hhmmss} "
                     f"departure={override.frozen_departure_time} last_sent_plan_key={override.last_sent_plan_key}"
                 )
 
-                if now_sec > departure_sec + STALE_REMINDER_GRACE_SECONDS:
+                if timing_decision == ReminderTimingDecision.SKIP_STALE:
                     mark_reminder_sent(
                         db=db,
                         user_id=user.id,
@@ -207,7 +213,7 @@ async def check_and_send_departure_reminders():
                     )
                     continue
 
-                if now_sec >= departure_sec:
+                if timing_decision == ReminderTimingDecision.SEND:
                     await push_with_quick_reply(
                         user.line_user_id,
                         override.frozen_reminder_text,
