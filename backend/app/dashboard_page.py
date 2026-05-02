@@ -656,8 +656,8 @@ def render_dashboard_html_for_paths(
     }}
 
     function speakReminder(message, storageKey, onDone, attempt = 0) {{
-      if (!soundEnabled || !("speechSynthesis" in window)) return;
-      if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return;
+      if (!soundEnabled || !("speechSynthesis" in window)) return "unavailable";
+      if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return "duplicate";
 
       const speakNow = () => {{
         if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return;
@@ -706,9 +706,10 @@ def render_dashboard_html_for_paths(
       if (!window.speechSynthesis.getVoices().length) {{
         window.speechSynthesis.onvoiceschanged = speakNow;
         window.setTimeout(speakNow, 300);
-        return;
+        return "started";
       }}
       speakNow();
+      return "started";
     }}
 
     function handleVoiceReminder(payload) {{
@@ -716,22 +717,31 @@ def render_dashboard_html_for_paths(
       const seconds = payload.seconds_until_departure;
       if (seconds === null || seconds === undefined) return;
 
+      if (payload.reminder_enabled === false) {{
+        if (payload.state === "urgent") {{
+          notifyDepartureCheck(payload, "urgent");
+        }}
+        return;
+      }}
+      if (seconds <= 0) {{
+        const result = speakReminder(
+          "已到出門時間，請準時出門。",
+          spokenStorageKey(payload, "leave-now"),
+          () => notifyDepartureVoiceComplete(payload)
+        );
+        if (result === "unavailable") {{
+          notifyDepartureCheck(payload, "urgent-no-voice");
+        }}
+        return;
+      }}
       if (payload.state === "urgent") {{
         notifyDepartureCheck(payload, "urgent");
       }}
-      if (payload.reminder_enabled === false) return;
       if (!payload.is_snoozed && seconds <= 300 && seconds > 240) {{
         speakReminder("請於五分鐘後出門。", spokenStorageKey(payload, "five-minutes"));
       }}
       if (seconds <= 60 && seconds > 0) {{
         speakReminder("距離出門剩下一分鐘，請準備出門。", spokenStorageKey(payload, "one-minute"));
-      }}
-      if (seconds <= 0 && seconds >= -60) {{
-        speakReminder(
-          "已到出門時間，請準時出門。",
-          spokenStorageKey(payload, "leave-now"),
-          () => notifyDepartureVoiceComplete(payload)
-        );
       }}
     }}
 

@@ -354,6 +354,7 @@ def mark_departure_confirmed(
 ):
     override = get_or_create_override(db, user_id, target_date)
     override.departure_confirmed_at = confirmed_at
+    override.target_arrival_time = None
     override.departure_snoozed_until = None
     override.snooze_one_min_sent_at = None
     override.snooze_departure_sent_at = None

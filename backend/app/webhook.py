@@ -96,11 +96,10 @@ SETUP_QUICK_REPLIES = [
 DONE_QUICK_REPLY = {"type": "message", "label": "完成修改設定", "text": "完成修改設定"}
 
 BASIC_SETTINGS_QUICK_REPLIES = [
-    {"type": "message", "label": "今日建議", "text": "今日通勤建議"},
     {"type": "message", "label": "查看設定", "text": "查看設定"},
-    {"type": "message", "label": "修改到公司時間", "text": "修改到公司時間"},
-    {"type": "message", "label": "取得Dashboard連結", "text": "取得Dashboard連結"},
-    {"type": "message", "label": "指令說明", "text": "指令說明"},
+    {"type": "message", "label": "重新設定", "text": "重新設定"},
+    {"type": "message", "label": "傳送住家地址", "text": "傳送住家地址"},
+    {"type": "message", "label": "傳送公司地址", "text": "傳送公司地址"},
 ]
 
 
@@ -195,13 +194,13 @@ REMINDER_SETTING_QUICK_REPLIES = with_done_button([
 ])
 
 SCHEDULE_QUICK_REPLIES = with_done_button([
-    {"type": "message", "label": "平日啟用", "text": "排程平日"},
-    {"type": "message", "label": "每天啟用", "text": "排程每天"},
-    {"type": "message", "label": "週末啟用", "text": "排程週末"},
-    {"type": "message", "label": "自訂星期", "text": "自訂日曆排程"},
-    {"type": "datetimepicker", "label": "選休息日", "data": "action=pause_date", "mode": "date"},
-    {"type": "datetimepicker", "label": "選啟用日", "data": "action=enable_date", "mode": "date"},
-    {"type": "message", "label": "暫停固定", "text": "暫停固定排程"},
+    {"type": "message", "label": "平日", "text": "排程平日"},
+    {"type": "message", "label": "每天", "text": "排程每天"},
+    {"type": "message", "label": "假日", "text": "排程假日"},
+    {"type": "message", "label": "自訂", "text": "自訂日曆排程"},
+    {"type": "datetimepicker", "label": "休息日", "data": "action=pause_date", "mode": "date"},
+    {"type": "datetimepicker", "label": "啟用日", "data": "action=enable_date", "mode": "date"},
+    {"type": "message", "label": "暫停", "text": "暫停固定排程"},
     {"type": "message", "label": "今天休息", "text": "今天休息"},
     {"type": "message", "label": "明天休息", "text": "明天休息"},
     {"type": "message", "label": "今天啟用", "text": "今天啟用"},
@@ -209,10 +208,10 @@ SCHEDULE_QUICK_REPLIES = with_done_button([
 ])
 
 SCHEDULE_SETUP_QUICK_REPLIES = with_done_button([
-    {"type": "message", "label": "平日啟用", "text": "排程平日"},
-    {"type": "message", "label": "每天啟用", "text": "排程每天"},
-    {"type": "message", "label": "週末啟用", "text": "排程週末"},
-    {"type": "message", "label": "自訂星期", "text": "自訂日曆排程"},
+    {"type": "message", "label": "平日", "text": "排程平日"},
+    {"type": "message", "label": "每天", "text": "排程每天"},
+    {"type": "message", "label": "假日", "text": "排程假日"},
+    {"type": "message", "label": "自訂", "text": "自訂日曆排程"},
 ])
 
 CUSTOM_SCHEDULE_QUICK_REPLIES = with_done_button([
@@ -261,8 +260,8 @@ COMMAND_ALIASES = {
     "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
     "reset": {"重新設定"},
-    "send_home_location": {"傳送住家位置", "設定住家位置"},
-    "send_office_location": {"傳送公司位置", "設定公司位置"},
+    "send_home_location": {"傳送住家位置", "設定住家位置", "傳送住家地址", "設定住家地址"},
+    "send_office_location": {"傳送公司位置", "設定公司位置", "傳送公司地址", "設定公司地址"},
     "set_mode_auto": {"今天自動判斷", "今天交通自動"},
     "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間"},
     "set_mode_bus": {"今天搭公車", "今天坐公車"},
@@ -275,7 +274,7 @@ COMMAND_ALIASES = {
     "view_schedule_setting": {"查看排程設定", "LINE排程"},
     "schedule_workdays": {"排程平日", "平日啟用", "只在平日啟用"},
     "schedule_everyday": {"排程每天", "每天啟用", "每天都啟用"},
-    "schedule_weekend": {"排程週末", "週末啟用", "只在週末啟用"},
+    "schedule_weekend": {"排程週末", "排程假日", "週末啟用", "假日啟用", "只在週末啟用"},
     "schedule_none": {"暫停固定排程", "排程全休"},
     "schedule_custom": {"自訂日曆排程", "自訂排程", "自訂星期", "自訂啟用日"},
     "pause_today": {"今天休息", "今天不用提醒", "今天不用通勤"},
@@ -300,7 +299,7 @@ CANONICAL_PROMPT_GROUPS = {
     "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
     "排程": ["查看排程設定", "排程平日", "排程每天", "排程週末", "自訂日曆排程", "今天休息", "明天休息", "今天啟用", "明天啟用"],
     "看板家庭": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
-    "基本設定": ["查看設定", "重新設定", "傳送住家位置", "傳送公司位置"],
+    "基本設定": ["查看設定", "重新設定", "傳送住家地址", "傳送公司地址"],
 }
 
 
@@ -481,9 +480,31 @@ def build_weekday_picker_flex(profile) -> dict:
     preset_buttons = [
         ("平日", "workdays"),
         ("每天", "everyday"),
-        ("週末", "weekend"),
-        ("全休", "none"),
+        ("假日", "weekend"),
+        ("暫停", "none"),
     ]
+
+    def preset_button(label: str, preset: str) -> dict:
+        return {
+            "type": "button",
+            "style": "secondary",
+            "height": "sm",
+            "action": {
+                "type": "postback",
+                "label": label,
+                "data": f"action=schedule_preset&preset={preset}",
+                "displayText": f"排程{label}",
+            },
+        }
+
+    def preset_row(items: list[tuple[str, str]]) -> dict:
+        return {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [preset_button(label, preset) for label, preset in items],
+        }
+
     return {
         "type": "bubble",
         "size": "mega",
@@ -498,25 +519,8 @@ def build_weekday_picker_flex(profile) -> dict:
                 row([3, 4, 5]),
                 row([6]),
                 {"type": "separator", "margin": "md"},
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "spacing": "sm",
-                    "contents": [
-                        {
-                            "type": "button",
-                            "style": "secondary",
-                            "height": "sm",
-                            "action": {
-                                "type": "postback",
-                                "label": label,
-                                "data": f"action=schedule_preset&preset={preset}",
-                                "displayText": f"排程{label}",
-                            },
-                        }
-                        for label, preset in preset_buttons
-                    ],
-                },
+                preset_row(preset_buttons[:2]),
+                preset_row(preset_buttons[2:]),
             ],
         },
     }
