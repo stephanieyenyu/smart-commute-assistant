@@ -95,6 +95,7 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
         self.assertIn("在『芝山』下車", metro_line)
         self.assertIn("從『出口 1』走", metro_line)
         self.assertIn("請搭乘 307", bus_line)
+        self.assertIn("307號公車將於 8 分鐘後抵達『南京敦化路口』", bus_line)
         self.assertIn("\n可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", bus_line)
 
     def test_phase4_scheduler_has_nightly_and_watchdog_jobs(self):

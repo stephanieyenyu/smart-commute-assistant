@@ -17,6 +17,20 @@ def render_dashboard_html(user_id: int) -> str:
       --error: #b84fd1;
       --surface: #161714;
       --line: #30322b;
+      --edge-x: 42px;
+      --edge-y: 24px;
+      --main-gap: 32px;
+      --band-pad-y: 18px;
+      --band-pad-x: 22px;
+      --title-size: 28px;
+      --clock-size: 58px;
+      --state-size: 50px;
+      --countdown-size: 136px;
+      --caption-size: 26px;
+      --label-size: 19px;
+      --value-size: 34px;
+      --transport-size: 28px;
+      --footer-size: 18px;
     }}
 
     * {{
@@ -25,7 +39,7 @@ def render_dashboard_html(user_id: int) -> str:
 
     body {{
       margin: 0;
-      min-height: 100vh;
+      min-height: 100dvh;
       background: var(--bg);
       color: var(--text);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -34,7 +48,7 @@ def render_dashboard_html(user_id: int) -> str:
     }}
 
     .screen {{
-      min-height: 100vh;
+      min-height: 100dvh;
       display: grid;
       grid-template-rows: auto 1fr auto;
       transition: background-color 180ms ease;
@@ -70,7 +84,7 @@ def render_dashboard_html(user_id: int) -> str:
       align-items: center;
       justify-content: space-between;
       gap: 24px;
-      padding: 26px 42px;
+      padding: var(--edge-y) var(--edge-x);
       border-bottom: 1px solid var(--line);
       background: linear-gradient(90deg, var(--accent-soft), transparent 70%);
     }}
@@ -92,13 +106,13 @@ def render_dashboard_html(user_id: int) -> str:
     }}
 
     .title {{
-      font-size: clamp(20px, 2vw, 30px);
+      font-size: var(--title-size);
       font-weight: 700;
       white-space: nowrap;
     }}
 
     .clock {{
-      font-size: clamp(30px, 5vw, 68px);
+      font-size: var(--clock-size);
       font-weight: 800;
       line-height: 1;
       font-variant-numeric: tabular-nums;
@@ -107,8 +121,10 @@ def render_dashboard_html(user_id: int) -> str:
     .main {{
       display: grid;
       grid-template-columns: minmax(300px, 0.85fr) minmax(360px, 1.15fr);
-      gap: 34px;
-      padding: 42px;
+      gap: var(--main-gap);
+      width: min(100%, 1440px);
+      margin: 0 auto;
+      padding: var(--edge-x);
       min-height: 0;
     }}
 
@@ -122,13 +138,13 @@ def render_dashboard_html(user_id: int) -> str:
 
     .state-label {{
       color: var(--accent);
-      font-size: clamp(26px, 4vw, 60px);
+      font-size: var(--state-size);
       font-weight: 850;
       line-height: 1;
     }}
 
     .countdown {{
-      font-size: clamp(58px, 11vw, 168px);
+      font-size: var(--countdown-size);
       font-weight: 900;
       line-height: 0.95;
       font-variant-numeric: tabular-nums;
@@ -136,32 +152,32 @@ def render_dashboard_html(user_id: int) -> str:
 
     .countdown-caption {{
       color: var(--muted);
-      font-size: clamp(18px, 2vw, 30px);
+      font-size: var(--caption-size);
     }}
 
     .details {{
       display: grid;
       grid-template-rows: repeat(4, minmax(0, auto));
       align-content: center;
-      gap: 18px;
+      gap: 16px;
       min-width: 0;
     }}
 
     .band {{
       border-left: 6px solid var(--accent);
       background: var(--surface);
-      padding: 20px 24px;
+      padding: var(--band-pad-y) var(--band-pad-x);
       min-width: 0;
     }}
 
     .label {{
       color: var(--muted);
-      font-size: clamp(14px, 1.5vw, 22px);
+      font-size: var(--label-size);
       margin-bottom: 8px;
     }}
 
     .value {{
-      font-size: clamp(24px, 3vw, 44px);
+      font-size: var(--value-size);
       font-weight: 760;
       line-height: 1.18;
       overflow-wrap: anywhere;
@@ -169,7 +185,7 @@ def render_dashboard_html(user_id: int) -> str:
 
     .transport {{
       white-space: pre-line;
-      font-size: clamp(20px, 2.3vw, 34px);
+      font-size: var(--transport-size);
       line-height: 1.3;
     }}
 
@@ -178,10 +194,10 @@ def render_dashboard_html(user_id: int) -> str:
       align-items: center;
       justify-content: space-between;
       gap: 18px;
-      padding: 20px 42px 28px;
+      padding: 18px var(--edge-x) 24px;
       color: var(--muted);
       border-top: 1px solid var(--line);
-      font-size: clamp(14px, 1.4vw, 20px);
+      font-size: var(--footer-size);
     }}
 
     .sound-button {{
@@ -210,27 +226,117 @@ def render_dashboard_html(user_id: int) -> str:
       animation: urgentPulse 1.8s ease-in-out infinite;
     }}
 
+    @media (min-width: 1441px) {{
+      :root {{
+        --edge-x: 54px;
+      }}
+    }}
+
+    @media (max-width: 1100px) {{
+      :root {{
+        --edge-x: 30px;
+        --edge-y: 20px;
+        --main-gap: 24px;
+        --title-size: 24px;
+        --clock-size: 48px;
+        --state-size: 42px;
+        --countdown-size: 108px;
+        --caption-size: 22px;
+        --label-size: 17px;
+        --value-size: 29px;
+        --transport-size: 24px;
+        --footer-size: 16px;
+      }}
+
+      .main {{
+        grid-template-columns: minmax(260px, 0.82fr) minmax(320px, 1.18fr);
+      }}
+    }}
+
     @media (max-width: 820px) {{
+      :root {{
+        --edge-x: 22px;
+        --edge-y: 18px;
+        --main-gap: 22px;
+        --band-pad-y: 16px;
+        --band-pad-x: 18px;
+        --title-size: 21px;
+        --clock-size: 38px;
+        --state-size: 34px;
+        --countdown-size: 76px;
+        --caption-size: 20px;
+        --label-size: 15px;
+        --value-size: 24px;
+        --transport-size: 20px;
+        --footer-size: 14px;
+      }}
+
       body {{
         overflow: auto;
       }}
 
       .screen {{
-        min-height: 100vh;
-      }}
-
-      .topbar, .footer {{
-        padding-left: 22px;
-        padding-right: 22px;
+        min-height: 100dvh;
       }}
 
       .main {{
         grid-template-columns: 1fr;
-        padding: 26px 22px;
+        padding: 24px var(--edge-x);
       }}
 
-      .clock {{
-        font-size: 38px;
+      .hero {{
+        gap: 18px;
+      }}
+
+      .footer {{
+        flex-wrap: wrap;
+      }}
+    }}
+
+    @media (max-width: 480px) {{
+      :root {{
+        --edge-x: 16px;
+        --title-size: 18px;
+        --clock-size: 30px;
+        --state-size: 29px;
+        --countdown-size: 62px;
+        --caption-size: 18px;
+        --value-size: 21px;
+        --transport-size: 18px;
+      }}
+
+      .topbar {{
+        gap: 12px;
+      }}
+
+      .status-dot {{
+        width: 14px;
+        height: 14px;
+      }}
+    }}
+
+    @media (max-height: 700px) and (min-width: 821px) {{
+      :root {{
+        --edge-x: 28px;
+        --edge-y: 16px;
+        --main-gap: 22px;
+        --clock-size: 42px;
+        --state-size: 38px;
+        --countdown-size: 96px;
+        --caption-size: 20px;
+        --band-pad-y: 14px;
+        --band-pad-x: 18px;
+        --value-size: 27px;
+        --transport-size: 22px;
+        --footer-size: 15px;
+      }}
+
+      .hero {{
+        gap: 18px;
+      }}
+
+      .details {{
+        gap: 12px;
       }}
     }}
   </style>
