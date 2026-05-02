@@ -19,6 +19,7 @@ def load_service_module():
             sys.modules.pop(module_name, None)
 
     sys.modules["app"] = types.ModuleType("app")
+    sys.modules["app"].__path__ = [str(BACKEND_DIR / "app")]
 
     stubs = {
         "app.address_utils": {"extract_city_from_text": lambda text: None},
@@ -42,6 +43,7 @@ def load_service_module():
             "get_override_for_date": None,
             "get_transport_mode_override": None,
             "save_frozen_reminder": None,
+            "record_commute_plan_log": None,
         },
     }
 

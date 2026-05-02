@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from sqlalchemy.orm import Session
 
-from app.models import User, CommuteProfile, CommuteOverride
+from app.models import ApiHealthLog, CommuteLog, User, CommuteProfile, CommuteOverride
 
 
 def _clear_override_reminder_fields(override: CommuteOverride):
@@ -260,3 +260,84 @@ def clear_today_reminder_state_db(db: Session, user_id: int, target_date):
     db.commit()
     db.refresh(override)
     return override
+
+
+def mark_nightly_brief_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    plan_key: str,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.nightly_brief_plan_key = plan_key
+    override.nightly_brief_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_watchdog_alert_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    alert_key: str,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.watchdog_alert_key = alert_key
+    override.watchdog_alert_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def record_api_health_log(
+    db: Session,
+    endpoint: str,
+    timestamp: datetime,
+    latency_ms: int | None = None,
+    status_code: int | None = None,
+    error_message: str | None = None,
+):
+    log = ApiHealthLog(
+        endpoint=endpoint,
+        timestamp=timestamp,
+        latency_ms=latency_ms,
+        status_code=status_code,
+        error_message=error_message,
+    )
+    db.add(log)
+    db.commit()
+    return log
+
+
+def record_commute_plan_log(
+    db: Session,
+    user_id: int,
+    plan: dict,
+):
+    target_date = plan.get("target_date")
+    if target_date is None:
+        target_date = date.today()
+
+    weather_info = plan.get("weather_info") or {}
+    commute_log = CommuteLog(
+        user_id=user_id,
+        date=target_date,
+        day_of_week=target_date.weekday() if hasattr(target_date, "weekday") else None,
+        is_holiday=False,
+        target_arrival_time=plan.get("effective_arrival_time"),
+        suggested_departure_time=plan.get("final_departure_time"),
+        suggested_transport=plan.get("transport_line"),
+        selection_source=plan.get("selection_source"),
+        recommended_mode=plan.get("recommended_mode"),
+        weather_condition=weather_info.get("weather_text"),
+        rain_prob=weather_info.get("pop"),
+        temp=weather_info.get("temperature"),
+        gmaps_traffic_duration=plan.get("baseline_minutes"),
+        weather_buffer_minutes=plan.get("weather_buffer"),
+    )
+    db.add(commute_log)
+    db.commit()
+    return commute_log
