@@ -175,12 +175,30 @@ def render_dashboard_html(user_id: int) -> str:
 
     .footer {{
       display: flex;
+      align-items: center;
       justify-content: space-between;
       gap: 18px;
       padding: 20px 42px 28px;
       color: var(--muted);
       border-top: 1px solid var(--line);
       font-size: clamp(14px, 1.4vw, 20px);
+    }}
+
+    .sound-button {{
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      padding: 10px 14px;
+      font: inherit;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }}
+
+    .sound-button.enabled {{
+      border-color: var(--accent);
+      color: var(--accent);
     }}
 
     @keyframes urgentPulse {{
@@ -256,6 +274,7 @@ def render_dashboard_html(user_id: int) -> str:
 
     <footer class="footer">
       <span id="connection">正在更新</span>
+      <button id="soundToggle" class="sound-button" type="button">聲音提醒</button>
       <span id="updatedAt">尚未更新</span>
     </footer>
   </main>
@@ -273,6 +292,7 @@ def render_dashboard_html(user_id: int) -> str:
     const connection = document.getElementById("connection");
     const updatedAt = document.getElementById("updatedAt");
     const clock = document.getElementById("clock");
+    const soundToggle = document.getElementById("soundToggle");
 
     const stateLabels = {{
       safe: "時間還很充裕",
@@ -284,6 +304,59 @@ def render_dashboard_html(user_id: int) -> str:
 
     let latestPayload = null;
     let ws = null;
+    let soundEnabled = localStorage.getItem(`dashboardSoundEnabled:${{userId}}`) === "true";
+
+    function updateSoundToggle() {{
+      soundToggle.classList.toggle("enabled", soundEnabled);
+      soundToggle.textContent = soundEnabled ? "聲音提醒開啟" : "聲音提醒";
+    }}
+
+    function spokenStorageKey(payload, moment) {{
+      return [
+        "dashboardSpoken",
+        userId,
+        payload.target_date || "unknown-date",
+        payload.departure_time || "unknown-time",
+        moment
+      ].join(":");
+    }}
+
+    function speakReminder(message, storageKey) {{
+      if (!soundEnabled || !("speechSynthesis" in window)) return;
+      if (localStorage.getItem(storageKey) === "true") return;
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.lang = "zh-TW";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+      localStorage.setItem(storageKey, "true");
+    }}
+
+    function handleVoiceReminder(payload) {{
+      if (!payload.ok || payload.reminder_enabled === false) return;
+      const seconds = payload.seconds_until_departure;
+      if (seconds === null || seconds === undefined) return;
+
+      if (seconds <= 300 && seconds > 60) {{
+        speakReminder("請於五分鐘後出門。", spokenStorageKey(payload, "five-minutes"));
+      }}
+      if (seconds <= 60 && seconds > 0) {{
+        speakReminder("距離出門剩下一分鐘，請準備出門。", spokenStorageKey(payload, "one-minute"));
+      }}
+      if (seconds <= 0 && seconds >= -60) {{
+        speakReminder("已到出門時間，請準時出門。", spokenStorageKey(payload, "leave-now"));
+      }}
+    }}
+
+    soundToggle.addEventListener("click", () => {{
+      soundEnabled = !soundEnabled;
+      localStorage.setItem(`dashboardSoundEnabled:${{userId}}`, soundEnabled ? "true" : "false");
+      updateSoundToggle();
+      if (soundEnabled) {{
+        speakReminder("聲音提醒已開啟。", `dashboardSoundReady:${{userId}}:${{Date.now()}}`);
+      }}
+    }});
 
     function pad(value) {{
       return String(value).padStart(2, "0");
@@ -339,6 +412,7 @@ def render_dashboard_html(user_id: int) -> str:
       transport.textContent = payload.transport_line || "還沒有通勤建議";
       weather.textContent = formatWeather(payload.weather);
       updatedAt.textContent = payload.updated_at ? `更新 ${{new Date(payload.updated_at).toLocaleTimeString("zh-TW", {{ hour12: false }})}}` : "尚未更新";
+      handleVoiceReminder(payload);
     }}
 
     async function fetchStatus() {{
@@ -372,6 +446,7 @@ def render_dashboard_html(user_id: int) -> str:
 
     setInterval(updateClock, 1000);
     setInterval(fetchStatus, 30000);
+    updateSoundToggle();
     updateClock();
     fetchStatus();
     connectWebSocket();

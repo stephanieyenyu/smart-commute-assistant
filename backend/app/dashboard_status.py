@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, time
 
 from app.reminder_timing import hhmm_to_seconds
 
@@ -11,11 +11,58 @@ ERROR_STATE = "error"
 
 WARNING_SECONDS = 15 * 60
 URGENT_SECONDS = 3 * 60
+TODAY_PLAN_EXPIRES_AFTER_SECONDS = 60 * 60
 
 
 def seconds_until_hhmm(now: datetime, hhmm: str) -> int:
     now_seconds = now.hour * 3600 + now.minute * 60 + now.second
     return hhmm_to_seconds(hhmm) - now_seconds
+
+
+def _coerce_target_date(target_date) -> date | None:
+    if isinstance(target_date, datetime):
+        return target_date.date()
+    if isinstance(target_date, date):
+        return target_date
+    if isinstance(target_date, str):
+        try:
+            return date.fromisoformat(target_date)
+        except ValueError:
+            return None
+    return None
+
+
+def seconds_until_departure_datetime(now: datetime, target_date, hhmm: str) -> int:
+    plan_date = _coerce_target_date(target_date)
+    if plan_date is None:
+        return seconds_until_hhmm(now, hhmm)
+
+    departure_seconds = hhmm_to_seconds(hhmm)
+    departure_time = time(
+        hour=departure_seconds // 3600,
+        minute=(departure_seconds % 3600) // 60,
+        second=departure_seconds % 60,
+    )
+    departure_datetime = datetime.combine(plan_date, departure_time)
+    if now.tzinfo is not None:
+        departure_datetime = departure_datetime.replace(tzinfo=now.tzinfo)
+    return int((departure_datetime - now).total_seconds())
+
+
+def dashboard_plan_is_expired(now: datetime, plan: dict) -> bool:
+    if not plan.get("ok"):
+        return False
+
+    departure_time = plan.get("final_departure_time")
+    if not departure_time:
+        return False
+
+    seconds_until_departure = seconds_until_departure_datetime(
+        now,
+        plan.get("target_date"),
+        departure_time,
+    )
+    return seconds_until_departure < -TODAY_PLAN_EXPIRES_AFTER_SECONDS
 
 
 def dashboard_state_for_departure(
@@ -52,7 +99,11 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
     departure_time = plan.get("final_departure_time")
     seconds_until_departure = None
     if departure_time:
-        seconds_until_departure = seconds_until_hhmm(now, departure_time)
+        seconds_until_departure = seconds_until_departure_datetime(
+            now,
+            plan.get("target_date"),
+            departure_time,
+        )
 
     degraded = weather_is_degraded(plan.get("weather_info") or {})
     state = dashboard_state_for_departure(seconds_until_departure, degraded=degraded)
