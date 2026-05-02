@@ -163,7 +163,7 @@ class Phase0RegressionTests(unittest.TestCase):
         self.assertIn("於『南京敦化路口』上車", transport_line)
         self.assertIn("在『捷運西門站』下車", transport_line)
         self.assertIn("（約 8 分鐘後到站）", transport_line)
-        self.assertIn("可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", transport_line)
+        self.assertIn("\n可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", transport_line)
         self.assertNotIn("12（約 2 分鐘後到站）", transport_line)
 
     def test_bus_departure_uses_realtime_eta_walk_and_three_minute_buffer(self):
