@@ -62,6 +62,38 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertEqual(dashboard_status.dashboard_state_for_departure(3 * 60), "urgent")
         self.assertEqual(dashboard_status.dashboard_state_for_departure(30 * 60, degraded=True), "degraded")
 
+    def test_dashboard_uses_target_date_for_countdown(self):
+        dashboard_status = load_module("dashboard_status_under_test", "backend/app/dashboard_status.py")
+
+        seconds = dashboard_status.seconds_until_departure_datetime(
+            now=datetime(2026, 5, 2, 13, 30, 0),
+            target_date=date(2026, 5, 3),
+            hhmm="08:00",
+        )
+
+        self.assertEqual(seconds, (18 * 60 + 30) * 60)
+
+    def test_dashboard_today_plan_expires_after_one_hour(self):
+        dashboard_status = load_module("dashboard_status_under_test", "backend/app/dashboard_status.py")
+        plan = {
+            "ok": True,
+            "target_date": date(2026, 5, 2),
+            "final_departure_time": "08:00",
+        }
+
+        self.assertFalse(
+            dashboard_status.dashboard_plan_is_expired(
+                datetime(2026, 5, 2, 9, 0, 0),
+                plan,
+            )
+        )
+        self.assertTrue(
+            dashboard_status.dashboard_plan_is_expired(
+                datetime(2026, 5, 2, 9, 1, 0),
+                plan,
+            )
+        )
+
     def test_dashboard_payload_contains_kiosk_fields(self):
         dashboard_status = load_module("dashboard_status_under_test", "backend/app/dashboard_status.py")
         plan = {
@@ -95,6 +127,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('@router.get("/view/{user_id}", response_class=HTMLResponse)', dashboard_py)
         self.assertIn('@router.websocket("/ws/{user_id}")', dashboard_py)
         self.assertIn("get_dashboard_status_payload", dashboard_py)
+        self.assertIn("dashboard_plan_is_expired", dashboard_py)
+        self.assertIn("today + timedelta(days=1)", dashboard_py)
+        self.assertIn('payload["reminder_enabled"]', dashboard_py)
         self.assertIn("app.include_router(dashboard_router)", main_py)
 
     def test_dashboard_view_contains_websocket_and_kiosk_layout(self):
@@ -109,6 +144,10 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("const userId = 7", html)
         self.assertIn("state-urgent", html)
         self.assertIn("white-space: pre-line", html)
+        self.assertIn("speechSynthesis", html)
+        self.assertIn("請於五分鐘後出門", html)
+        self.assertIn("已到出門時間，請準時出門", html)
+        self.assertIn("payload.reminder_enabled === false", html)
 
     def test_dashboard_link_builder_prefers_public_url(self):
         links = load_module("dashboard_links_under_test", "backend/app/dashboard_links.py")
