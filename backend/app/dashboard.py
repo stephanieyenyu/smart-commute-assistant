@@ -134,27 +134,37 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
     db = SessionLocal()
     try:
         now = now_taipei()
+        today = now.date()
         users = get_users_for_household(db, household_id)
         members = []
         for user in users:
             try:
+                today_override = get_override_for_date(db, user.id, today)
                 payload = await get_dashboard_status_payload(user.id)
                 payload["display_name"] = user.display_name or f"成員 {user.id}"
                 payload["household_id"] = get_household_id_for_user(user)
+                payload["departure_confirmed_today"] = bool(
+                    today_override and today_override.departure_confirmed_at
+                )
                 members.append(payload)
             except Exception as e:
                 print(f"[household-dashboard] user_id={user.id} error={e}")
 
-        active_members = [member for member in members if member.get("ok") and not member.get("sleeping")]
-        candidates = active_members or [member for member in members if member.get("ok")] or members
-        primary = min(
-            candidates,
-            key=lambda item: (
-                item.get("seconds_until_departure") is None,
-                item.get("seconds_until_departure") if item.get("seconds_until_departure") is not None else 10**9,
-            ),
-            default=None,
-        )
+        def member_sort_key(item: dict):
+            confirmed = bool(item.get("departure_confirmed_today"))
+            seconds = item.get("seconds_until_departure")
+            return (
+                1 if confirmed else 0,
+                1 if not item.get("ok") else 0,
+                1 if seconds is None else 0,
+                seconds if seconds is not None else 10**9,
+                item.get("user_id") or 10**9,
+            )
+
+        members = sorted(members, key=member_sort_key)
+        primary = next((member for member in members if member.get("ok") and not member.get("departure_confirmed_today")), None)
+        if primary is None:
+            primary = next((member for member in members if member.get("ok")), None)
         all_sleeping = bool(members) and all(member.get("sleeping") for member in members)
         if primary:
             payload = dict(primary)

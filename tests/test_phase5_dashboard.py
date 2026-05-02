@@ -188,9 +188,11 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("speechSynthesis", html)
         self.assertIn("請於五分鐘後出門", html)
         self.assertIn("已到出門時間，請準時出門", html)
+        self.assertIn("!payload.is_snoozed && seconds <= 300 && seconds > 240", html)
         self.assertIn("notifyDepartureVoiceComplete", html)
         self.assertIn("/api/v1/dashboard/departure-check/${departureUserId}", html)
         self.assertIn("activeSpeechKeys", html)
+        self.assertNotIn("payload.plan_key || \"unknown-plan\"", html)
         self.assertIn("utterance.onend = handleSpeechDone", html)
         self.assertIn("utterance.onerror", html)
         self.assertIn("speechSynthesis.resume()", html)
@@ -288,9 +290,27 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("commute_date_is_active", scheduler_py)
         self.assertIn("MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8", scheduler_py)
 
+    def test_schedule_repeat_picker_page_is_registered(self):
+        main_py = self.read_repo_file("backend/app/main.py")
+        schedule_py = self.read_repo_file("backend/app/schedule.py")
+        links_py = self.read_repo_file("backend/app/dashboard_links.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+
+        self.assertIn("schedule_router", main_py)
+        self.assertIn('@router.get("/weekly/{user_id}/view", response_class=HTMLResponse)', schedule_py)
+        self.assertIn('@router.post("/weekly/{user_id}")', schedule_py)
+        self.assertIn("scroll-snap-type", schedule_py)
+        self.assertIn("重複提醒日", schedule_py)
+        self.assertIn("active_weekdays", schedule_py)
+        self.assertIn("build_schedule_weekly_url", links_py)
+        self.assertIn("build_schedule_weekly_url", webhook_py)
+        self.assertIn("滑動式星期選擇頁", webhook_py)
+
     def test_household_management_and_computer_kiosk_guides_are_wired(self):
         webhook_py = self.read_repo_file("backend/app/webhook.py")
         crud_py = self.read_repo_file("backend/app/crud.py")
+        dashboard_py = self.read_repo_file("backend/app/dashboard.py")
+        dashboard_page_py = self.read_repo_file("backend/app/dashboard_page.py")
         readme = self.read_repo_file("README.md")
 
         self.assertIn("HOUSEHOLD_QUICK_REPLIES", webhook_py)
@@ -303,6 +323,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("ensure_personal_household", crud_py)
         self.assertIn("set_user_household_id", crud_py)
         self.assertIn("set_user_display_name", crud_py)
+        self.assertIn("departure_confirmed_today", dashboard_py)
+        self.assertIn("members = sorted(members, key=member_sort_key)", dashboard_py)
+        self.assertIn("已出門，改看明天", dashboard_page_py)
 
         self.assertIn('"computer_dashboard_guide"', webhook_py)
         self.assertIn("format_computer_dashboard_guide", webhook_py)
@@ -341,6 +364,7 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('postback_action == "departure_check"', webhook_py)
         self.assertIn("confirm_departure_for_user", webhook_py)
         self.assertIn("snooze_departure_for_user", webhook_py)
+        self.assertIn("format_taipei_hhmm", webhook_py)
 
         self.assertIn("check_and_send_snoozed_departure_reminders", scheduler_py)
         self.assertIn("距離出門剩下一分鐘", scheduler_py)
@@ -348,6 +372,8 @@ class Phase5DashboardTests(unittest.TestCase):
 
         self.assertIn("mark_departure_confirmed", crud_py)
         self.assertIn("snooze_departure_confirmation", crud_py)
+        departure_confirmation_py = self.read_repo_file("backend/app/departure_confirmation.py")
+        self.assertIn("format_taipei_hhmm", departure_confirmation_py)
 
     def test_short_test_reminder_command_is_removed_from_production(self):
         webhook_py = self.read_repo_file("backend/app/webhook.py")

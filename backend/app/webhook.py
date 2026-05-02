@@ -11,10 +11,11 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessag
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
 from app.commute_schedule import commute_date_is_active, parse_custom_weekdays, parse_weekday_preset, schedule_label
-from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url
+from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url, build_schedule_weekly_url
 from app.db import SessionLocal
 from app.departure_confirmation import (
     confirm_departure_for_user,
+    format_taipei_hhmm,
     snooze_departure_for_user,
 )
 from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
@@ -292,16 +293,19 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
     return text
 
 
-def format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override) -> str:
+def format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override, schedule_url: str | None = None) -> str:
     today_status = "啟用" if commute_date_is_active(profile, today_date, today_override) else "休息"
     tomorrow_status = "啟用" if commute_date_is_active(profile, tomorrow_date, tomorrow_override) else "休息"
-    return (
+    text = (
         "目前通勤排程：\n"
         f"🗓 固定啟用日：{schedule_label(getattr(profile, 'active_weekdays', None))}\n"
         f"📍 今天：{today_status}\n"
         f"📅 明天：{tomorrow_status}\n\n"
         "可用下方按鈕快速修改。"
     )
+    if schedule_url:
+        text += f"\n\n自訂星期滑動選擇頁：\n{schedule_url}"
+    return text
 
 
 SCHEDULE_PENDING_FIELDS = {"active_weekdays", "custom_active_weekdays"}
@@ -311,19 +315,25 @@ def is_schedule_setup_pending(profile) -> bool:
     return getattr(profile, "pending_field", None) in SCHEDULE_PENDING_FIELDS
 
 
-def schedule_setup_prompt() -> str:
-    return (
+def schedule_setup_prompt(schedule_url: str | None = None) -> str:
+    text = (
         "最後一步：請設定哪些日子要啟用通勤提醒。\n"
         "可用下方按鈕選「平日、每天、週末」，也可以按「自訂星期」後輸入例如：週一週三週五。"
     )
+    if schedule_url:
+        text += f"\n\n也可以打開像鬧鐘 Repeat 的滑動選擇頁：\n{schedule_url}"
+    return text
 
 
-def custom_schedule_prompt() -> str:
-    return (
+def custom_schedule_prompt(schedule_url: str | None = None) -> str:
+    text = (
         "請輸入要固定啟用的星期。\n"
         "範例：週一週三週五、週二週四、1,3,5。\n"
         "若要指定某一天臨時休息或啟用，請回到「查看排程設定」後用日期按鈕選擇。"
     )
+    if schedule_url:
+        text += f"\n\n滑動式星期選擇頁：\n{schedule_url}"
+    return text
 
 
 def schedule_saved_text(profile, was_setup: bool = False) -> str:
@@ -380,6 +390,14 @@ def format_computer_dashboard_guide(dashboard_url: str, household_url: str) -> s
         "3. 自動開機打開：Windows 把該捷徑放到 shell:startup。macOS 用「登入項目」加入 Chrome 或 Automator App。\n\n"
         "個人 Dashboard 連結：\n"
         f"{dashboard_url}"
+    )
+
+
+def schedule_weekly_url_for_request(request: Request, user_id: int) -> str:
+    return build_schedule_weekly_url(
+        user_id=user_id,
+        public_url=PUBLIC_URL,
+        request_base_url=str(request.base_url),
     )
 
 
@@ -507,7 +525,7 @@ async def line_webhook(
 
                     if postback_choice == "need_5":
                         override = snooze_departure_for_user(db, user.id, today_date)
-                        snooze_text = override.departure_snoozed_until.strftime("%H:%M")
+                        snooze_text = format_taipei_hhmm(override.departure_snoozed_until)
                         await reply_text(
                             reply_token,
                             f"好的，{snooze_text} 再提醒您出門。四分鐘後會先提醒一次，時間到會再提醒一次。",
@@ -549,7 +567,7 @@ async def line_webhook(
                         set_pending_field(db, user.id, "active_weekdays")
                         await reply_with_quick_reply(
                             reply_token,
-                            f"已設定固定到公司時間：{time_value}\n\n{schedule_setup_prompt()}",
+                            f"已設定固定到公司時間：{time_value}\n\n{schedule_setup_prompt(schedule_weekly_url_for_request(request, user.id))}",
                             SCHEDULE_SETUP_QUICK_REPLIES,
                         )
                         continue
@@ -711,7 +729,7 @@ async def line_webhook(
                 if command_text not in schedule_commands and parse_custom_weekdays(user_text) is None:
                     await reply_with_quick_reply(
                         reply_token,
-                        schedule_setup_prompt(),
+                        schedule_setup_prompt(schedule_weekly_url_for_request(request, user.id)),
                         SCHEDULE_SETUP_QUICK_REPLIES,
                     )
                     continue
@@ -919,7 +937,14 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override),
+                    format_schedule_text(
+                        profile,
+                        today_date,
+                        today_override,
+                        tomorrow_date,
+                        tomorrow_override,
+                        schedule_weekly_url_for_request(request, user.id),
+                    ),
                     SCHEDULE_QUICK_REPLIES,
                 )
                 continue
@@ -976,7 +1001,7 @@ async def line_webhook(
                 set_pending_field(db, user.id, "custom_active_weekdays")
                 await reply_with_quick_reply(
                     reply_token,
-                    custom_schedule_prompt(),
+                    custom_schedule_prompt(schedule_weekly_url_for_request(request, user.id)),
                     CUSTOM_SCHEDULE_QUICK_REPLIES,
                 )
                 continue
@@ -1029,7 +1054,7 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["departure_need_5"]:
                 override = snooze_departure_for_user(db, user.id, today_date)
-                snooze_text = override.departure_snoozed_until.strftime("%H:%M")
+                snooze_text = format_taipei_hhmm(override.departure_snoozed_until)
                 await reply_text(
                     reply_token,
                     f"好的，{snooze_text} 再提醒您出門。四分鐘後會先提醒一次，時間到會再提醒一次。",
@@ -1244,7 +1269,7 @@ async def line_webhook(
                     set_pending_field(db, user.id, "custom_active_weekdays")
                     await reply_with_quick_reply(
                         reply_token,
-                        custom_schedule_prompt(),
+                        custom_schedule_prompt(schedule_weekly_url_for_request(request, user.id)),
                         CUSTOM_SCHEDULE_QUICK_REPLIES,
                     )
                     continue
@@ -1361,7 +1386,7 @@ async def line_webhook(
                     set_pending_field(db, user.id, "active_weekdays")
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已設定固定到公司時間：{value}\n\n{schedule_setup_prompt()}",
+                        f"已設定固定到公司時間：{value}\n\n{schedule_setup_prompt(schedule_weekly_url_for_request(request, user.id))}",
                         SCHEDULE_SETUP_QUICK_REPLIES,
                     )
                     continue

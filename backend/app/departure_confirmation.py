@@ -38,6 +38,21 @@ def snooze_until_from(now_dt: datetime | None = None) -> datetime:
     return (now_dt or now_taipei()) + timedelta(minutes=SNOOZE_MINUTES)
 
 
+def as_taipei_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=TAIPEI_TZ)
+    return value.astimezone(TAIPEI_TZ)
+
+
+def format_taipei_hhmm(value: datetime | None) -> str:
+    taipei_value = as_taipei_datetime(value)
+    if taipei_value is None:
+        return "--:--"
+    return taipei_value.strftime("%H:%M")
+
+
 async def send_departure_check_for_user(
     db: Session,
     user_id: int,
