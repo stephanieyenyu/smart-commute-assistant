@@ -12,6 +12,7 @@ LINE 智慧通勤助理是一個以 FastAPI 為後端核心的個人化通勤決
 - API health logs and commute plan logs prepared for ML feedback
 - Nightly brief, morning watchdog, and departure reminder scheduler
 - Dashboard REST/WebSocket API for kiosk status displays
+- Browser dashboard view for external monitors
 - Docker Compose local development stack
 
 ## Architecture
@@ -40,9 +41,15 @@ FastAPI will be available at:
 http://localhost:8000/docs
 ```
 
+Dashboard kiosk view:
+
+```text
+http://localhost:8000/api/v1/dashboard/view/{user_id}
+```
+
 ## Regression and stability tests
 
-Phase 0-5 tests protect the current LINE commute advice, reminder behavior, scheduler ownership, API fallback logging, schema alignment, formatter extraction, proactive notification jobs, and dashboard status thresholds.
+Phase 0-6 tests protect the current LINE commute advice, reminder behavior, scheduler ownership, API fallback logging, schema alignment, formatter extraction, proactive notification jobs, dashboard status thresholds, and the external-monitor dashboard view.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -50,6 +57,6 @@ python -m unittest discover -s tests -v
 
 ## MVP next steps
 
-1. Build the Next.js/Tailwind dashboard with Safe/Warning/Urgent states.
-2. Add feedback collection for actual arrival time and ML shadow-mode prediction.
-3. Harden multi-user settings, auth, and dynamic worker scheduling.
+1. Add feedback collection for actual arrival time and ML shadow-mode prediction.
+2. Harden multi-user settings, auth, and dynamic worker scheduling.
+3. Optionally replace the server-rendered dashboard view with a dedicated Next.js frontend if a separate frontend service is needed.

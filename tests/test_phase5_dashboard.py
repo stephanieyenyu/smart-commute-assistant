@@ -92,9 +92,21 @@ class Phase5DashboardTests(unittest.TestCase):
         main_py = self.read_repo_file("backend/app/main.py")
 
         self.assertIn('@router.get("/status/{user_id}")', dashboard_py)
+        self.assertIn('@router.get("/view/{user_id}", response_class=HTMLResponse)', dashboard_py)
         self.assertIn('@router.websocket("/ws/{user_id}")', dashboard_py)
         self.assertIn("get_dashboard_status_payload", dashboard_py)
         self.assertIn("app.include_router(dashboard_router)", main_py)
+
+    def test_dashboard_view_contains_websocket_and_kiosk_layout(self):
+        page = load_module("dashboard_page_under_test", "backend/app/dashboard_page.py")
+        html = page.render_dashboard_html(7)
+
+        self.assertIn("Smart Commute Dashboard", html)
+        self.assertIn("/api/v1/dashboard/status/${userId}", html)
+        self.assertIn("/api/v1/dashboard/ws/${userId}", html)
+        self.assertIn("const userId = 7", html)
+        self.assertIn("state-urgent", html)
+        self.assertIn("white-space: pre-line", html)
 
 
 if __name__ == "__main__":
