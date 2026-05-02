@@ -11,6 +11,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 CWA_API_KEY = os.getenv("CWA_API_KEY", "")
 PORT = int(os.getenv("PORT", "8000"))
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./smart_commute.db")
 if DATABASE_URL.startswith("postgres://"):

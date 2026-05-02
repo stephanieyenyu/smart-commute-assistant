@@ -8,7 +8,8 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent, FollowEvent, PostbackEvent
 
 from app.address_utils import looks_like_address, extract_city_from_text
-from app.config import LINE_CHANNEL_SECRET
+from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
+from app.dashboard_links import build_dashboard_view_url
 from app.db import SessionLocal
 from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
 from app.crud import (
@@ -143,6 +144,7 @@ TRANSPORT_MODE_NAME_MAP = {
 COMMAND_ALIASES = {
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
+    "dashboard_link": {"取得Dashboard連結", "取得dashboard連結", "Dashboard連結", "dashboard連結", "取得儀表板連結"},
     "tomorrow_departure": {"明天幾點出門"},
     "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
@@ -169,6 +171,7 @@ READY_MENU_TEXT = (
     "可傳送：\n"
     "查看設定\n"
     "今天通勤建議\n"
+    "取得 Dashboard 連結\n"
     "明天幾點出門\n"
     "修改明天到公司時間\n"
     "重新設定\n"
@@ -435,6 +438,7 @@ async def line_webhook(
                     COMMAND_ALIASES["send_home_location"]
                     | COMMAND_ALIASES["send_office_location"]
                     | COMMAND_ALIASES["reset"]
+                    | COMMAND_ALIASES["dashboard_link"]
                     | {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}
                 )
                 # 例外2：正在填寫設定欄位且輸入內容確實像「地址」或「時間」
@@ -515,6 +519,20 @@ async def line_webhook(
                         format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode) + "\n\n" + FIELD_PROMPTS[next_step],
                         MAIN_MENU_QUICK_REPLIES
                     )
+                continue
+
+            if command_text in COMMAND_ALIASES["dashboard_link"]:
+                dashboard_url = build_dashboard_view_url(
+                    user_id=user.id,
+                    public_url=PUBLIC_URL,
+                    request_base_url=str(request.base_url),
+                )
+                await reply_text(
+                    reply_token,
+                    "外接螢幕 Dashboard 連結：\n"
+                    f"{dashboard_url}\n\n"
+                    "在要顯示的螢幕上打開這個網址，並把瀏覽器切成全螢幕即可。",
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["enable_reminder"]:

@@ -47,6 +47,12 @@ Dashboard kiosk view:
 http://localhost:8000/api/v1/dashboard/view/{user_id}
 ```
 
+LINE command:
+
+```text
+取得 Dashboard 連結
+```
+
 ## Regression and stability tests
 
 Phase 0-6 tests protect the current LINE commute advice, reminder behavior, scheduler ownership, API fallback logging, schema alignment, formatter extraction, proactive notification jobs, dashboard status thresholds, and the external-monitor dashboard view.

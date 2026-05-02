@@ -108,6 +108,34 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("state-urgent", html)
         self.assertIn("white-space: pre-line", html)
 
+    def test_dashboard_link_builder_prefers_public_url(self):
+        links = load_module("dashboard_links_under_test", "backend/app/dashboard_links.py")
+
+        self.assertEqual(
+            links.build_dashboard_view_url(
+                7,
+                public_url="https://commute.example.com/",
+                request_base_url="https://fallback.example.com/",
+            ),
+            "https://commute.example.com/api/v1/dashboard/view/7",
+        )
+        self.assertEqual(
+            links.build_dashboard_view_url(
+                8,
+                public_url="",
+                request_base_url="https://fallback.example.com/",
+            ),
+            "https://fallback.example.com/api/v1/dashboard/view/8",
+        )
+
+    def test_line_webhook_has_dashboard_link_command(self):
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+
+        self.assertIn('"dashboard_link"', webhook_py)
+        self.assertIn("取得Dashboard連結", webhook_py)
+        self.assertIn("build_dashboard_view_url", webhook_py)
+        self.assertIn("外接螢幕 Dashboard 連結", webhook_py)
+
 
 if __name__ == "__main__":
     unittest.main()
