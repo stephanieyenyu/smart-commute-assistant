@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from app.commute_schedule import commute_date_is_active
 from app.db import SessionLocal
 from app.line_client import push_text, push_with_quick_reply
 from app.models import CommuteOverride, User
@@ -33,7 +34,7 @@ _PREPARE_ATTEMPT_CACHE: dict[tuple[int, str], datetime] = {}
 PREPARE_RETRY_SECONDS = 300
 BUS_RECOMPUTE_SECONDS = 60
 METRO_RECOMPUTE_SECONDS = 300
-MORNING_WATCHDOG_LOOKAHEAD_HOURS = 2
+MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8
 WATCHDOG_DEPARTURE_WARNING_SECONDS = 15 * 60
 SNOOZE_ONE_MINUTE_WARNING_SECONDS = 60
 
@@ -122,6 +123,8 @@ async def ensure_today_reminders_prepared(db, today):
                 continue
 
             override = get_override_for_date(db, profile.user_id, today)
+            if not commute_date_is_active(profile, today, override):
+                continue
             if override and override.departure_confirmed_at:
                 continue
             refresh_interval = _refresh_interval_for_mode(
@@ -191,6 +194,8 @@ async def check_and_send_departure_reminders():
 
                 profile = user.profile or get_profile(db, user.id)
                 if not profile.reminder_enabled:
+                    continue
+                if not commute_date_is_active(profile, today, override):
                     continue
                 if override.departure_confirmed_at:
                     continue
@@ -274,6 +279,8 @@ async def check_and_send_snoozed_departure_reminders(db, today, now_dt: datetime
             profile = user.profile or get_profile(db, user.id)
             if not profile.reminder_enabled:
                 continue
+            if not commute_date_is_active(profile, today, override):
+                continue
 
             seconds_until = (snoozed_until - now_dt).total_seconds()
             if (
@@ -314,6 +321,9 @@ async def send_nightly_briefs():
                     continue
                 if get_next_setup_step(profile) is not None:
                     continue
+                override = get_override_for_date(db, profile.user_id, tomorrow)
+                if not commute_date_is_active(profile, tomorrow, override):
+                    continue
 
                 user = db.query(User).filter(User.id == profile.user_id).first()
                 if not user or not user.line_user_id:
@@ -337,7 +347,6 @@ async def send_nightly_briefs():
                     payload.get("recommended_mode"),
                     payload.get("text"),
                 )
-                override = get_override_for_date(db, user.id, tomorrow)
                 if override and override.nightly_brief_plan_key == plan_key:
                     continue
 
@@ -367,6 +376,9 @@ async def run_morning_watchdog():
                 if not getattr(profile, "reminder_enabled", True):
                     continue
                 if get_next_setup_step(profile) is not None:
+                    continue
+                override = get_override_for_date(db, profile.user_id, today)
+                if not commute_date_is_active(profile, today, override):
                     continue
 
                 effective_arrival_time = _effective_arrival_time_for_profile(db, profile, today)
@@ -412,7 +424,6 @@ async def run_morning_watchdog():
                     weather_buffer,
                     payload.get("text"),
                 )
-                override = get_override_for_date(db, user.id, today)
                 if override and override.watchdog_alert_key == alert_key:
                     continue
 

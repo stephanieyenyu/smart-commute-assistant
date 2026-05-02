@@ -8,6 +8,7 @@ WARNING_STATE = "warning"
 URGENT_STATE = "urgent"
 DEGRADED_STATE = "degraded"
 ERROR_STATE = "error"
+SLEEPING_STATE = "sleeping"
 
 WARNING_SECONDS = 15 * 60
 URGENT_SECONDS = 3 * 60
@@ -149,4 +150,36 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
         "commute_minutes": plan.get("baseline_minutes"),
         "weather": plan.get("weather_info"),
         "updated_at": now.isoformat(),
+        "refresh_seconds": 30,
+    }
+
+
+def build_sleeping_payload(user_id: int, plan: dict, now: datetime, sleep_until: datetime | None) -> dict:
+    payload = build_dashboard_payload(user_id=user_id, plan=plan, now=now)
+    payload["state"] = SLEEPING_STATE
+    payload["sleeping"] = True
+    payload["sleep_until"] = sleep_until.isoformat() if sleep_until else None
+    payload["refresh_seconds"] = 300
+    return payload
+
+
+def build_no_active_day_payload(user_id: int, now: datetime, reason: str = "schedule_inactive") -> dict:
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "state": SLEEPING_STATE,
+        "sleeping": True,
+        "reason": reason,
+        "target_date": None,
+        "target_arrival_time": "--:--",
+        "departure_time": "--:--",
+        "departure_at": None,
+        "plan_key": None,
+        "seconds_until_departure": None,
+        "recommended_mode": None,
+        "transport_line": "排程休息中，今天不會推送出門提醒。",
+        "commute_minutes": None,
+        "weather": None,
+        "updated_at": now.isoformat(),
+        "refresh_seconds": 300,
     }
