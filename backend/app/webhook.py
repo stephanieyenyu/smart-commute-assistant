@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime, timedelta
+from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -11,6 +12,10 @@ from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
 from app.dashboard_links import build_dashboard_view_url
 from app.db import SessionLocal
+from app.departure_confirmation import (
+    confirm_departure_for_user,
+    snooze_departure_for_user,
+)
 from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
 from app.crud import (
     get_or_create_user,
@@ -169,6 +174,8 @@ COMMAND_ALIASES = {
     "enable_reminder": {"開啟自動提醒"},
     "disable_reminder": {"關閉自動提醒"},
     "view_reminder_setting": {"查看提醒設定"},
+    "departure_left": {"已經出門了"},
+    "departure_need_5": {"我還需要五分鐘", "還需要五分鐘"},
 }
 
 READY_MENU_TEXT = (
@@ -328,6 +335,27 @@ async def line_webhook(
                 tomorrow_override_time = tomorrow_override.target_arrival_time if tomorrow_override and tomorrow_override.target_arrival_time else None
 
                 print(f"[postback] user_id={user.id} data={postback_data} time={time_value}")
+
+                postback_parts = parse_qs(postback_data)
+                postback_action = (postback_parts.get("action") or [""])[0]
+                postback_choice = (postback_parts.get("choice") or [""])[0]
+                if postback_action == "departure_check":
+                    if postback_choice == "left":
+                        confirm_departure_for_user(db, user.id, today_date)
+                        await reply_text(
+                            reply_token,
+                            "收到，今天通勤計算已停止。Dashboard 會改看明天的通勤與提醒時間。",
+                        )
+                        continue
+
+                    if postback_choice == "need_5":
+                        override = snooze_departure_for_user(db, user.id, today_date)
+                        snooze_text = override.departure_snoozed_until.strftime("%H:%M")
+                        await reply_text(
+                            reply_token,
+                            f"好的，{snooze_text} 再提醒您出門。四分鐘後會先提醒一次，時間到會再提醒一次。",
+                        )
+                        continue
 
                 if postback_data == "action=set_preferred_arrival_time" and time_value:
                     update_profile_field(db, user.id, "preferred_arrival_time", time_value)
@@ -556,6 +584,23 @@ async def line_webhook(
                     reply_token,
                     f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}\n可用下方按鈕切換。",
                     REMINDER_SETTING_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["departure_left"]:
+                confirm_departure_for_user(db, user.id, today_date)
+                await reply_text(
+                    reply_token,
+                    "收到，今天通勤計算已停止。Dashboard 會改看明天的通勤與提醒時間。",
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["departure_need_5"]:
+                override = snooze_departure_for_user(db, user.id, today_date)
+                snooze_text = override.departure_snoozed_until.strftime("%H:%M")
+                await reply_text(
+                    reply_token,
+                    f"好的，{snooze_text} 再提醒您出門。四分鐘後會先提醒一次，時間到會再提醒一次。",
                 )
                 continue
 

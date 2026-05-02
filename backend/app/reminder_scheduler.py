@@ -12,6 +12,8 @@ from app.crud import (
     get_next_setup_step,
     get_override_for_date,
     get_profile,
+    mark_snooze_departure_sent,
+    mark_snooze_one_min_sent,
     mark_nightly_brief_sent,
     mark_reminder_sent,
     mark_watchdog_alert_sent,
@@ -33,6 +35,7 @@ BUS_RECOMPUTE_SECONDS = 60
 METRO_RECOMPUTE_SECONDS = 300
 MORNING_WATCHDOG_LOOKAHEAD_HOURS = 2
 WATCHDOG_DEPARTURE_WARNING_SECONDS = 15 * 60
+SNOOZE_ONE_MINUTE_WARNING_SECONDS = 60
 
 # Quick Reply buttons shown after departure reminder push
 REMINDER_QUICK_REPLIES = [
@@ -93,6 +96,14 @@ def _seconds_since(now_dt: datetime, previous_dt: datetime | None) -> float | No
     return (now_dt - previous_dt).total_seconds()
 
 
+def _as_taipei_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=TAIPEI_TZ)
+    return value.astimezone(TAIPEI_TZ)
+
+
 def _refresh_interval_for_mode(mode: str | None) -> int | None:
     if mode == "bus":
         return BUS_RECOMPUTE_SECONDS
@@ -111,6 +122,8 @@ async def ensure_today_reminders_prepared(db, today):
                 continue
 
             override = get_override_for_date(db, profile.user_id, today)
+            if override and override.departure_confirmed_at:
+                continue
             refresh_interval = _refresh_interval_for_mode(
                 override.transport_mode_override if override else None
             )
@@ -179,6 +192,8 @@ async def check_and_send_departure_reminders():
                 profile = user.profile or get_profile(db, user.id)
                 if not profile.reminder_enabled:
                     continue
+                if override.departure_confirmed_at:
+                    continue
 
                 already_sent = override.last_sent_plan_key == override.frozen_plan_key
                 timing_decision = evaluate_departure_reminder(
@@ -233,8 +248,58 @@ async def check_and_send_departure_reminders():
                 print(f"[reminder] failed user_id={override.user_id} error={e}")
                 print(traceback.format_exc())
 
+        await check_and_send_snoozed_departure_reminders(db, today, now_dt)
+
     finally:
         db.close()
+
+
+async def check_and_send_snoozed_departure_reminders(db, today, now_dt: datetime):
+    overrides = db.query(CommuteOverride).filter(
+        CommuteOverride.target_date == today,
+        CommuteOverride.departure_snoozed_until.isnot(None),
+        CommuteOverride.departure_confirmed_at.is_(None),
+    ).all()
+
+    for override in overrides:
+        try:
+            snoozed_until = _as_taipei_datetime(override.departure_snoozed_until)
+            if snoozed_until is None:
+                continue
+
+            user = db.query(User).filter(User.id == override.user_id).first()
+            if not user or not user.line_user_id:
+                continue
+
+            profile = user.profile or get_profile(db, user.id)
+            if not profile.reminder_enabled:
+                continue
+
+            seconds_until = (snoozed_until - now_dt).total_seconds()
+            if (
+                seconds_until <= SNOOZE_ONE_MINUTE_WARNING_SECONDS
+                and seconds_until > 0
+                and not override.snooze_one_min_sent_at
+            ):
+                await push_text(
+                    user.line_user_id,
+                    "🔔 出門提醒：距離出門剩下一分鐘，請準備出門。",
+                )
+                mark_snooze_one_min_sent(db, user.id, today, now_dt)
+                print(f"[snooze-reminder] one-minute user_id={user.id}")
+
+            if seconds_until <= 0 and not override.snooze_departure_sent_at:
+                await push_text(
+                    user.line_user_id,
+                    "🔔 已到出門時間，請準時出門。",
+                )
+                mark_snooze_departure_sent(db, user.id, today, now_dt)
+                print(f"[snooze-reminder] leave-now user_id={user.id}")
+
+        except Exception as e:
+            import traceback
+            print(f"[snooze-reminder] failed user_id={override.user_id} error={e}")
+            print(traceback.format_exc())
 
 
 async def send_nightly_briefs():

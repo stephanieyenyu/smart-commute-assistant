@@ -9,6 +9,11 @@ def _clear_override_reminder_fields(override: CommuteOverride):
     override.frozen_departure_time = None
     override.frozen_reminder_text = None
     override.reminder_prepared_at = None
+    override.departure_confirmed_at = None
+    override.departure_check_sent_at = None
+    override.departure_snoozed_until = None
+    override.snooze_one_min_sent_at = None
+    override.snooze_departure_sent_at = None
 
 
 def get_or_create_user(db: Session, line_user_id: str) -> User:
@@ -249,6 +254,80 @@ def mark_reminder_sent(
     override = get_or_create_override(db, user_id, target_date)
     override.last_sent_plan_key = plan_key
     override.last_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_departure_confirmed(
+    db: Session,
+    user_id: int,
+    target_date,
+    confirmed_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.departure_confirmed_at = confirmed_at
+    override.departure_snoozed_until = None
+    override.snooze_one_min_sent_at = None
+    override.snooze_departure_sent_at = None
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_departure_check_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    if override.departure_check_sent_at:
+        return override
+    override.departure_check_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def snooze_departure_confirmation(
+    db: Session,
+    user_id: int,
+    target_date,
+    snoozed_until: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.departure_confirmed_at = None
+    override.departure_check_sent_at = None
+    override.departure_snoozed_until = snoozed_until
+    override.snooze_one_min_sent_at = None
+    override.snooze_departure_sent_at = None
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_snooze_one_min_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.snooze_one_min_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_snooze_departure_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    override.snooze_departure_sent_at = sent_at
     db.commit()
     db.refresh(override)
     return override

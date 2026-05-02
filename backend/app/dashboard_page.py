@@ -427,13 +427,31 @@ def render_dashboard_html(user_id: int) -> str:
       ].join(":");
     }}
 
-    function speakReminder(message, storageKey) {{
+    async function notifyDepartureVoiceComplete(payload) {{
+      try {{
+        await fetch(`/api/v1/dashboard/departure-check/${{userId}}`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            target_date: payload.target_date,
+            departure_time: payload.departure_time
+          }})
+        }});
+      }} catch (error) {{
+        console.warn("departure check notification failed", error);
+      }}
+    }}
+
+    function speakReminder(message, storageKey, onDone) {{
       if (!soundEnabled || !("speechSynthesis" in window)) return;
       if (localStorage.getItem(storageKey) === "true") return;
       const utterance = new SpeechSynthesisUtterance(message);
       utterance.lang = "zh-TW";
       utterance.rate = 1;
       utterance.pitch = 1;
+      if (onDone) {{
+        utterance.onend = onDone;
+      }}
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
       localStorage.setItem(storageKey, "true");
@@ -451,7 +469,11 @@ def render_dashboard_html(user_id: int) -> str:
         speakReminder("距離出門剩下一分鐘，請準備出門。", spokenStorageKey(payload, "one-minute"));
       }}
       if (seconds <= 0 && seconds >= -60) {{
-        speakReminder("已到出門時間，請準時出門。", spokenStorageKey(payload, "leave-now"));
+        speakReminder(
+          "已到出門時間，請準時出門。",
+          spokenStorageKey(payload, "leave-now"),
+          () => notifyDepartureVoiceComplete(payload)
+        );
       }}
     }}
 

@@ -18,6 +18,8 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
         self.assertIn("transport_preference = Column(JSON", models_py)
         self.assertIn("nightly_brief_plan_key", models_py)
         self.assertIn("watchdog_alert_key", models_py)
+        self.assertIn("departure_confirmed_at", models_py)
+        self.assertIn("departure_snoozed_until", models_py)
         self.assertIn("class ApiHealthLog", models_py)
 
     def test_phase2_api_health_persists_logs(self):
