@@ -52,7 +52,21 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
                     "destination_station": {"id": "R17", "name": "芝山"},
                     "suggested_exit": {"exit_id": "1", "name": "出口 1"},
                     "walk_minutes": 12,
-                    "google_detailed": {"steps": []},
+                    "google_detailed": {
+                        "steps": [
+                            {
+                                "type": "TRANSIT",
+                                "vehicle_type": "SUBWAY",
+                                "line_name": "淡水信義線",
+                                "departure_stop": "明德",
+                                "arrival_stop": "芝山",
+                            },
+                            {
+                                "type": "WALK",
+                                "instructions": "從出口 3 離開車站並步行前往目的地",
+                            },
+                        ]
+                    },
                 },
             },
             "target_date": date(2026, 5, 2),
@@ -95,7 +109,8 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
 
         self.assertIn("請搭乘 淡水信義線", metro_line)
         self.assertIn("在『芝山』下車", metro_line)
-        self.assertIn("從『出口 1』走", metro_line)
+        self.assertIn("從『出口 3』走", metro_line)
+        self.assertNotIn("從『出口 1』走", metro_line)
         self.assertIn("請搭乘 307", bus_line)
         self.assertIn("307號公車將於 8 分鐘後抵達『南京敦化路口』", bus_line)
         self.assertIn("\n可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", bus_line)

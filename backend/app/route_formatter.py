@@ -97,6 +97,21 @@ def bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = None
     return f"可選路線：{'、'.join(options)}" if options else ""
 
 
+def normalize_route_name(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).upper()
+    text = re.sub(r"\s+", "", text)
+    text = text.replace("號公車", "").replace("公車", "").replace("BUS", "")
+    return text
+
+
+def route_names_match(left: str | None, right: str | None) -> bool:
+    normalized_left = normalize_route_name(left)
+    normalized_right = normalize_route_name(right)
+    return bool(normalized_left and normalized_right and normalized_left == normalized_right)
+
+
 def bus_arrival_text(route: str | None, eta_min, stop_name: str | None) -> str:
     if eta_min is None or not route or route == "公車" or not stop_name:
         return ""
@@ -146,7 +161,7 @@ def format_transport_line(plan: dict) -> str:
         is_bus = is_bus_step(matched_step)
         bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
         if is_bus:
-            line = bus_route_label(bus_snap) or matched_step.get("line_short_name") or matched_step.get("line_name") or "公車"
+            line = matched_step.get("line_short_name") or matched_step.get("line_name") or bus_route_label(bus_snap) or "公車"
         else:
             line = matched_step.get("line_name") or matched_step.get("line_short_name") or "捷運"
 
@@ -154,14 +169,16 @@ def format_transport_line(plan: dict) -> str:
         arr_stop = matched_step.get("arrival_stop") or "目的地站點"
         v_emoji = "🚌" if is_bus else "🚇"
         mode_text = "搭公車" if is_bus else "搭捷運"
-        exit_info = "" if is_bus else (exit_info_from_steps(steps, matched_step) or exit_info_from_snapshot(snapshot))
+        exit_info = "" if is_bus else exit_info_from_steps(steps, matched_step)
 
         arrival_text = ""
         route_options = ""
         if is_bus:
             chosen = bus_snap.get("chosen_bus") or {}
             eta = chosen.get("eta_min")
-            arrival_text = bus_arrival_text(line, eta, dep_stop)
+            chosen_route = chosen.get("route_name") or chosen.get("subroute_name")
+            if route_names_match(chosen_route, line):
+                arrival_text = bus_arrival_text(line, eta, dep_stop)
             route_options = bus_route_options_text(bus_snap, line)
 
         options_text = f"\n{route_options}。" if route_options else ""
@@ -176,7 +193,7 @@ def format_transport_line(plan: dict) -> str:
         dep_stop = station.get("name", "最近捷運站")
         arr_stop = destination_station.get("name", "目的地附近捷運站")
         line = metro_line_from_station_ids(station, destination_station)
-        exit_info = exit_info_from_snapshot(metro_snap)
+        exit_info = ""
         walk_str = f"步行約 {walk_min} 分鐘抵達『{dep_stop}』，" if walk_min else ""
         return f"🚇 建議搭捷運！{walk_str}請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}。"
 

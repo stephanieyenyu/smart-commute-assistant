@@ -119,6 +119,29 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertEqual(payload["departure_time"], "08:30")
         self.assertEqual(payload["transport_line"], plan["transport_line"])
 
+    def test_dashboard_payload_prefers_precise_departure_datetime(self):
+        dashboard_status = load_module("dashboard_status_under_test", "backend/app/dashboard_status.py")
+        plan = {
+            "ok": True,
+            "target_date": date(2026, 5, 2),
+            "effective_arrival_time": "09:00",
+            "final_departure_time": "08:30",
+            "departure_snoozed_until": "2026-05-02T08:31:10",
+            "recommended_mode": "metro",
+            "transport_line": "測試通勤方式",
+            "baseline_minutes": 30,
+            "weather_info": {"weather_text": "多雲", "scope": "city"},
+        }
+
+        payload = dashboard_status.build_dashboard_payload(
+            user_id=1,
+            plan=plan,
+            now=datetime(2026, 5, 2, 8, 30, 0),
+        )
+
+        self.assertEqual(payload["seconds_until_departure"], 70)
+        self.assertEqual(payload["departure_at"], "2026-05-02T08:31:10")
+
     def test_dashboard_routes_are_registered(self):
         dashboard_py = self.read_repo_file("backend/app/dashboard.py")
         main_py = self.read_repo_file("backend/app/main.py")
@@ -148,6 +171,11 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("state-urgent", html)
         self.assertIn("white-space: pre-line", html)
         self.assertIn("width: min(100%, 1440px)", html)
+        self.assertIn("layout-compact", html)
+        self.assertIn("layout-short", html)
+        self.assertIn("layout-stack", html)
+        self.assertIn("fitDashboardToViewport", html)
+        self.assertIn("visualViewport", html)
         self.assertIn("@media (max-width: 1100px)", html)
         self.assertIn("@media (max-height: 700px) and (min-width: 821px)", html)
         self.assertIn("speechSynthesis", html)
@@ -155,7 +183,10 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("已到出門時間，請準時出門", html)
         self.assertIn("notifyDepartureVoiceComplete", html)
         self.assertIn("/api/v1/dashboard/departure-check/${userId}", html)
-        self.assertIn("utterance.onend = onDone", html)
+        self.assertIn("activeSpeechKeys", html)
+        self.assertIn("utterance.onend = handleSpeechDone", html)
+        self.assertIn("utterance.onerror", html)
+        self.assertIn("speechSynthesis.resume()", html)
         self.assertIn("payload.reminder_enabled === false", html)
 
     def test_dashboard_link_builder_prefers_public_url(self):
@@ -201,9 +232,11 @@ class Phase5DashboardTests(unittest.TestCase):
 
         self.assertIn("PERSISTENT_QUICK_REPLIES", line_client_py)
         self.assertIn('"label": "今日通勤建議"', line_client_py)
-        self.assertIn('"label": "修改出門時間"', line_client_py)
+        self.assertIn('"label": "修改到公司時間"', line_client_py)
+        self.assertNotIn('"label": "修改出門時間"', line_client_py)
         self.assertIn("with_persistent_quick_replies(items)", line_client_py)
         self.assertIn("with_persistent_quick_replies([])", line_client_py)
+        self.assertIn("修改到公司時間", webhook_py)
         self.assertIn("修改出門時間", webhook_py)
 
     def test_departure_confirmation_flow_is_wired(self):
@@ -229,6 +262,15 @@ class Phase5DashboardTests(unittest.TestCase):
 
         self.assertIn("mark_departure_confirmed", crud_py)
         self.assertIn("snooze_departure_confirmation", crud_py)
+
+    def test_short_test_reminder_command_is_removed_from_production(self):
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        departure_confirmation_py = self.read_repo_file("backend/app/departure_confirmation.py")
+
+        self.assertNotIn("schedule_" + "test_departure_for_user", webhook_py)
+        self.assertNotIn("已啟動" + "測試" + "提醒流程", webhook_py)
+        self.assertNotIn("TEST_" + "REMINDER_SECONDS", departure_confirmation_py)
+        self.assertNotIn("timedelta(seconds=", departure_confirmation_py)
 
 
 if __name__ == "__main__":

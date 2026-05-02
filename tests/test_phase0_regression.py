@@ -73,7 +73,21 @@ class Phase0RegressionTests(unittest.TestCase):
                     "destination_station": {"id": "R17", "name": "芝山"},
                     "suggested_exit": {"exit_id": "1", "name": "出口 1"},
                     "walk_minutes": 12,
-                    "google_detailed": {"steps": []},
+                    "google_detailed": {
+                        "steps": [
+                            {
+                                "type": "TRANSIT",
+                                "vehicle_type": "SUBWAY",
+                                "line_name": "淡水信義線",
+                                "departure_stop": "明德",
+                                "arrival_stop": "芝山",
+                            },
+                            {
+                                "type": "WALK",
+                                "instructions": "從出口 3 離開車站並步行前往目的地",
+                            },
+                        ]
+                    },
                 },
             },
             "target_date": date(2026, 5, 2),
@@ -130,7 +144,8 @@ class Phase0RegressionTests(unittest.TestCase):
         self.assertIn("請搭乘 淡水信義線", commute_detail)
         self.assertIn("於『明德』上車", commute_detail)
         self.assertIn("在『芝山』下車", commute_detail)
-        self.assertIn("從『出口 1』走", commute_detail)
+        self.assertIn("從『出口 3』走", commute_detail)
+        self.assertNotIn("從『出口 1』走", commute_detail)
         self.assertNotIn("目的地附近捷運站", commute_detail)
 
     def test_forced_metro_does_not_fall_back_to_bus_step(self):
@@ -165,6 +180,18 @@ class Phase0RegressionTests(unittest.TestCase):
         self.assertIn("307號公車將於 8 分鐘後抵達『南京敦化路口』", transport_line)
         self.assertIn("\n可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", transport_line)
         self.assertNotIn("12（約 2 分鐘後到站）", transport_line)
+
+    def test_bus_primary_route_comes_from_google_step(self):
+        plan = self.bus_plan()
+        snapshot = plan["best_option"]["snapshot"]
+        snapshot["chosen_bus"] = {"route_name": "652", "eta_min": 12}
+        snapshot["valid_eta_list"] = [{"route_name": "652", "eta_min": 12}]
+
+        transport_line = self.service._format_transport_line(plan)
+
+        self.assertIn("請搭乘 307", transport_line)
+        self.assertNotIn("請搭乘 652", transport_line)
+        self.assertNotIn("307號公車將於 12 分鐘後抵達", transport_line)
 
     def test_bus_departure_uses_realtime_eta_walk_and_three_minute_buffer(self):
         self.service._now_taipei_naive = lambda: datetime(2026, 5, 2, 8, 0)
