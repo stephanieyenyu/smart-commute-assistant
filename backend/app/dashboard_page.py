@@ -600,12 +600,13 @@ def render_dashboard_html_for_paths(
     }}
 
     function spokenStorageKey(payload, moment) {{
+      const voiceUserId = payload.user_id || (payload.primary && payload.primary.user_id) || userId;
+      const departureMoment = payload.departure_at || payload.departure_time || "unknown-time";
       return [
         "dashboardSpoken",
-        userId,
+        voiceUserId,
         payload.target_date || "unknown-date",
-        payload.plan_key || "unknown-plan",
-        payload.departure_at || payload.departure_time || "unknown-time",
+        departureMoment,
         moment
       ].join(":");
     }}
@@ -681,7 +682,7 @@ def render_dashboard_html_for_paths(
       const seconds = payload.seconds_until_departure;
       if (seconds === null || seconds === undefined) return;
 
-      if (seconds <= 300 && seconds > 60) {{
+      if (!payload.is_snoozed && seconds <= 300 && seconds > 240) {{
         speakReminder("請於五分鐘後出門。", spokenStorageKey(payload, "five-minutes"));
       }}
       if (seconds <= 60 && seconds > 0) {{
@@ -748,7 +749,9 @@ def render_dashboard_html_for_paths(
         const name = member.display_name || `成員 ${{member.user_id}}`;
         const date = member.target_date ? `${{member.target_date}} ` : "";
         const leave = member.departure_time || "--:--";
-        const stateText = stateLabels[member.state] || member.state || "更新中";
+        const stateText = member.departure_confirmed_today
+          ? "已出門，改看明天"
+          : (stateLabels[member.state] || member.state || "更新中");
         return `${{name}}：${{stateText}}｜${{date}}${{leave}} 出門`;
       }}).join("\\n");
     }}
