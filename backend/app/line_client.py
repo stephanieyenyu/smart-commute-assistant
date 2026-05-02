@@ -69,6 +69,13 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
     return quick_reply_items
 
 
+def _quick_reply_model(items: list | None) -> QuickReply | None:
+    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
+    if not quick_reply_items:
+        return None
+    return QuickReply(items=quick_reply_items)
+
+
 def _quick_reply_action_payload(item: dict) -> dict:
     t = item["type"]
     if t == "location":
@@ -125,13 +132,12 @@ async def reply_flex_with_quick_reply(reply_token: str, alt_text: str, contents:
 
 
 async def reply_text(reply_token: str, text: str) -> None:
-    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies([]))
     async with AsyncApiClient(configuration) as api_client:
         line_bot_api = AsyncMessagingApi(api_client)
         await line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
-                messages=[TextMessage(text=text, quick_reply=QuickReply(items=quick_reply_items))]
+                messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
             )
         )
 
@@ -141,11 +147,11 @@ async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> No
 
 
 async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[str], items: list) -> None:
-    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
+    quick_reply = _quick_reply_model(items)
     messages = []
     for i, t in enumerate(texts):
         # Only the last message can have quick replies attached
-        qr = QuickReply(items=quick_reply_items) if i == len(texts) - 1 else None
+        qr = quick_reply if i == len(texts) - 1 else None
         messages.append(TextMessage(text=t, quick_reply=qr))
     
     try:
@@ -164,19 +170,18 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
 
 
 async def push_text(user_id: str, text: str) -> None:
-    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies([]))
     async with AsyncApiClient(configuration) as api_client:
         line_bot_api = AsyncMessagingApi(api_client)
         await line_bot_api.push_message(
             PushMessageRequest(
                 to=user_id,
-                messages=[TextMessage(text=text, quick_reply=QuickReply(items=quick_reply_items))]
+                messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
             )
         )
 
 
 async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
-    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
+    quick_reply = _quick_reply_model(items)
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
@@ -186,7 +191,7 @@ async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
                     messages=[
                         TextMessage(
                             text=text,
-                            quick_reply=QuickReply(items=quick_reply_items)
+                            quick_reply=quick_reply
                         )
                     ]
                 )

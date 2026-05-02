@@ -93,18 +93,35 @@ SETUP_QUICK_REPLIES = [
      "data": "action=set_preferred_arrival_time", "mode": "time"},
 ]
 
-# Shown when waiting for home address
-HOME_QUICK_REPLY = [
-    {"type": "location", "label": "📍 開啟地圖選位置"},
+DONE_QUICK_REPLY = {"type": "message", "label": "完成修改設定", "text": "完成修改設定"}
+
+BASIC_SETTINGS_QUICK_REPLIES = [
+    {"type": "message", "label": "今日建議", "text": "今日通勤建議"},
+    {"type": "message", "label": "查看設定", "text": "查看設定"},
+    {"type": "message", "label": "修改到公司時間", "text": "修改到公司時間"},
+    {"type": "message", "label": "取得Dashboard連結", "text": "取得Dashboard連結"},
+    {"type": "message", "label": "指令說明", "text": "指令說明"},
 ]
+
+
+def with_done_button(items: list[dict]) -> list[dict]:
+    if any(item.get("text") == DONE_QUICK_REPLY["text"] for item in items):
+        return items
+    return [*items, DONE_QUICK_REPLY]
+
+
+# Shown when waiting for home address
+HOME_QUICK_REPLY = with_done_button([
+    {"type": "location", "label": "📍 開啟地圖選位置"},
+])
 
 # Shown when waiting for office address
-OFFICE_QUICK_REPLY = [
+OFFICE_QUICK_REPLY = with_done_button([
     {"type": "location", "label": "🏢 開啟地圖選位置"},
-]
+])
 
 # Shown when waiting for preferred_arrival_time
-ARRIVAL_TIME_QUICK_REPLIES = [
+ARRIVAL_TIME_QUICK_REPLIES = with_done_button([
     {"type": "datetimepicker", "label": "⏰ 選擇到公司時間",
      "data": "action=set_preferred_arrival_time", "mode": "time"},
     {"type": "message", "label": "07:30", "text": "07:30"},
@@ -112,10 +129,10 @@ ARRIVAL_TIME_QUICK_REPLIES = [
     {"type": "message", "label": "08:30", "text": "08:30"},
     {"type": "message", "label": "09:00", "text": "09:00"},
     {"type": "message", "label": "09:30", "text": "09:30"},
-]
+])
 
 # Shown when modifying today's arrival time
-OVERRIDE_TODAY_TIME_QUICK_REPLIES = [
+OVERRIDE_TODAY_TIME_QUICK_REPLIES = with_done_button([
     {"type": "datetimepicker", "label": "⏰ 選擇今天時間",
      "data": "action=set_today_arrival_time", "mode": "time"},
     {"type": "message", "label": "08:00", "text": "08:00"},
@@ -123,10 +140,10 @@ OVERRIDE_TODAY_TIME_QUICK_REPLIES = [
     {"type": "message", "label": "10:00", "text": "10:00"},
     {"type": "message", "label": "14:00", "text": "14:00"},
     {"type": "message", "label": "17:00", "text": "17:00"},
-]
+])
 
 # Shown when modifying tomorrow's arrival time
-OVERRIDE_TOMORROW_TIME_QUICK_REPLIES = [
+OVERRIDE_TOMORROW_TIME_QUICK_REPLIES = with_done_button([
     {"type": "datetimepicker", "label": "⏰ 選擇明天時間",
      "data": "action=set_tomorrow_arrival_time", "mode": "time"},
     {"type": "message", "label": "08:00", "text": "08:00"},
@@ -134,7 +151,7 @@ OVERRIDE_TOMORROW_TIME_QUICK_REPLIES = [
     {"type": "message", "label": "09:00", "text": "09:00"},
     {"type": "message", "label": "10:00", "text": "10:00"},
     {"type": "message", "label": "09:30", "text": "09:30"},
-]
+])
 
 # Rich Menu uses these six top-level message actions. Quick Replies below them
 # contain only the narrower actions inside that topic.
@@ -147,37 +164,37 @@ RICH_MENU_TOPICS = [
     {"type": "message", "label": "指令說明", "text": "指令說明"},
 ]
 
-MAIN_MENU_QUICK_REPLIES = []
+MAIN_MENU_QUICK_REPLIES = BASIC_SETTINGS_QUICK_REPLIES
 
-COMMUTE_TOPIC_QUICK_REPLIES = [
+COMMUTE_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "今日建議", "text": "今日通勤建議"},
     {"type": "message", "label": "最短時間", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "公車優先", "text": "今天搭公車"},
     {"type": "message", "label": "捷運優先", "text": "今天搭捷運"},
     {"type": "message", "label": "公車轉捷運", "text": "今天搭公車轉捷運"},
     {"type": "message", "label": "今天方式", "text": "查看今天交通方式"},
-]
+])
 
-TIME_TOPIC_QUICK_REPLIES = [
+TIME_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "今天到公司", "text": "修改今天到公司時間"},
     {"type": "message", "label": "明天到公司", "text": "修改明天到公司時間"},
     {"type": "message", "label": "明天出門", "text": "明天幾點出門"},
-]
+])
 
 # Shown after commute advice reply
-COMMUTE_RESULT_QUICK_REPLIES = [
+COMMUTE_RESULT_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "🚌 今天搭公車",       "text": "今天搭公車"},
     {"type": "message", "label": "🚇 今天搭捷運",       "text": "今天搭捷運"},
     {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
-]
+])
 
-REMINDER_SETTING_QUICK_REPLIES = [
+REMINDER_SETTING_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "✅ 開啟自動提醒", "text": "開啟自動提醒"},
     {"type": "message", "label": "⏸ 關閉自動提醒", "text": "關閉自動提醒"},
-]
+])
 
-SCHEDULE_QUICK_REPLIES = [
+SCHEDULE_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "平日啟用", "text": "排程平日"},
     {"type": "message", "label": "每天啟用", "text": "排程每天"},
     {"type": "message", "label": "週末啟用", "text": "排程週末"},
@@ -189,35 +206,35 @@ SCHEDULE_QUICK_REPLIES = [
     {"type": "message", "label": "明天休息", "text": "明天休息"},
     {"type": "message", "label": "今天啟用", "text": "今天啟用"},
     {"type": "message", "label": "明天啟用", "text": "明天啟用"},
-]
+])
 
-SCHEDULE_SETUP_QUICK_REPLIES = [
+SCHEDULE_SETUP_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "平日啟用", "text": "排程平日"},
     {"type": "message", "label": "每天啟用", "text": "排程每天"},
     {"type": "message", "label": "週末啟用", "text": "排程週末"},
     {"type": "message", "label": "自訂星期", "text": "自訂日曆排程"},
-]
+])
 
-CUSTOM_SCHEDULE_QUICK_REPLIES = [
+CUSTOM_SCHEDULE_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "週一三五", "text": "週一週三週五"},
     {"type": "message", "label": "週二四", "text": "週二週四"},
     {"type": "message", "label": "週六日", "text": "週六週日"},
-]
+])
 
-HOUSEHOLD_QUICK_REPLIES = [
+HOUSEHOLD_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "查看家庭成員", "text": "查看家庭成員"},
     {"type": "message", "label": "取得邀請碼", "text": "取得家庭邀請碼"},
     {"type": "message", "label": "建立家庭", "text": "建立家庭"},
     {"type": "message", "label": "設定我的名稱", "text": "設定我的名稱"},
     {"type": "message", "label": "家庭看板連結", "text": "取得家庭Dashboard連結"},
-]
+])
 
-DASHBOARD_TOPIC_QUICK_REPLIES = [
+DASHBOARD_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "個人看板", "text": "取得Dashboard連結"},
     {"type": "message", "label": "家庭看板", "text": "取得家庭Dashboard連結"},
     {"type": "message", "label": "家庭管理", "text": "家庭成員管理"},
     {"type": "message", "label": "電腦模式", "text": "電腦Dashboard設定"},
-]
+])
 
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
@@ -235,10 +252,11 @@ COMMAND_ALIASES = {
     "topic_schedule": {"排程設定", "日程排程", "週間設定"},
     "topic_dashboard": {"看板家庭", "看板與家庭", "Dashboard家庭"},
     "topic_help": {"指令說明", "提示詞說明", "使用說明", "幫助"},
+    "finish_settings": {"完成修改設定", "完成設定", "結束設定"},
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
-    "dashboard_link": {"取得Dashboard連結", "取得dashboard連結", "Dashboard連結", "dashboard連結", "取得儀表板連結"},
-    "household_dashboard_link": {"取得家庭Dashboard連結", "取得家用Dashboard連結", "家庭Dashboard連結", "家用Dashboard連結"},
+    "dashboard_link": {"取得Dashboard連結", "取得DASHBOARD連結", "取得dashboard連結", "Dashboard連結", "DASHBOARD連結", "dashboard連結", "取得儀表板連結", "看板連結"},
+    "household_dashboard_link": {"取得家庭Dashboard連結", "取得家庭DASHBOARD連結", "取得家用Dashboard連結", "家庭Dashboard連結", "家庭DASHBOARD連結", "家用Dashboard連結"},
     "tomorrow_departure": {"明天幾點出門"},
     "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
@@ -439,7 +457,7 @@ def build_weekday_picker_flex(profile) -> dict:
 
     def day_button(day: int) -> dict:
         active = day in active_days
-        label = f"{WEEKDAY_NAMES[day]} {'✓' if active else ''}".strip()
+        label = WEEKDAY_NAMES[day]
         return {
             "type": "button",
             "style": "primary" if active else "secondary",
@@ -476,8 +494,9 @@ def build_weekday_picker_flex(profile) -> dict:
             "contents": [
                 {"type": "text", "text": "重複提醒日", "weight": "bold", "size": "xl"},
                 {"type": "text", "text": f"目前：{schedule_label(getattr(profile, 'active_weekdays', None))}", "size": "sm", "color": "#666666", "wrap": True},
-                row([0, 1, 2, 3]),
-                row([4, 5, 6]),
+                row([0, 1, 2]),
+                row([3, 4, 5]),
+                row([6]),
                 {"type": "separator", "margin": "md"},
                 {
                     "type": "box",
@@ -648,18 +667,20 @@ async def line_webhook(
                 if postback_action == "departure_check":
                     if postback_choice == "left":
                         confirm_departure_for_user(db, user.id, today_date)
-                        await reply_text(
+                        await reply_with_quick_reply(
                             reply_token,
                             "收到，今天上班加油！\n已更新為計算明日通勤與提醒時間。",
+                            MAIN_MENU_QUICK_REPLIES,
                         )
                         continue
 
                     if postback_choice == "need_5":
                         override = snooze_departure_for_user(db, user.id, today_date)
                         snooze_text = format_taipei_hhmm(override.departure_snoozed_until)
-                        await reply_text(
+                        await reply_with_quick_reply(
                             reply_token,
                             f"好的，{snooze_text} 再提醒您出門。四分鐘後會先提醒一次，時間到會再提醒一次。",
+                            MAIN_MENU_QUICK_REPLIES,
                         )
                         continue
 
@@ -677,7 +698,7 @@ async def line_webhook(
                     await reply_with_quick_reply(
                         reply_token,
                         f"已設定 {selected_date.strftime('%Y-%m-%d')} {status_text}。",
-                        SCHEDULE_QUICK_REPLIES,
+                        MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
 
@@ -735,7 +756,7 @@ async def line_webhook(
                     set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已更新固定到公司時間：{time_value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                        f"已更新固定到公司時間：{time_value}\n系統已開始重新計算今日提醒。\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
@@ -752,6 +773,7 @@ async def line_webhook(
                         reply_token,
                         (
                             f"已設定今天臨時到公司時間：{time_value}\n"
+                            "已為您調整時間並開始重新計算今天提醒。\n"
                             f"明天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
                         ),
                         MAIN_MENU_QUICK_REPLIES,
@@ -766,6 +788,7 @@ async def line_webhook(
                         reply_token,
                         (
                             f"已設定明天臨時到公司時間：{time_value}\n"
+                            "已為您調整時間並開始重新計算明天提醒。\n"
                             f"明天建議出門：{departure_time}\n"
                             f"後天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
                         ),
@@ -845,6 +868,7 @@ async def line_webhook(
                     COMMAND_ALIASES["send_home_location"]
                     | COMMAND_ALIASES["send_office_location"]
                     | COMMAND_ALIASES["reset"]
+                    | COMMAND_ALIASES["finish_settings"]
                     | COMMAND_ALIASES["dashboard_link"]
                     | COMMAND_ALIASES["household_dashboard_link"]
                     | {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}
@@ -875,6 +899,33 @@ async def line_webhook(
                     continue
             # ===========================================================
 
+            if command_text in COMMAND_ALIASES["finish_settings"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    quick_replies = (
+                        HOME_QUICK_REPLY
+                        if next_step == "home_location"
+                        else OFFICE_QUICK_REPLY
+                        if next_step == "office_location"
+                        else ARRIVAL_TIME_QUICK_REPLIES
+                    )
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "基本設定尚未完成，先完成這一步就能使用完整功能：\n" + FIELD_PROMPTS[next_step],
+                        quick_replies,
+                    )
+                    continue
+
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已完成修改設定，已回到常用選單。",
+                    MAIN_MENU_QUICK_REPLIES,
+                )
+                continue
+
             if is_schedule_setup_pending(_profile_for_guard):
                 schedule_commands = (
                     COMMAND_ALIASES["schedule_workdays"]
@@ -898,7 +949,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
                 if next_step is None:
-                    await reply_text(reply_token, "你好，我是智慧通勤助理。\n" + READY_MENU_TEXT)
+                    await reply_with_quick_reply(reply_token, "你好，我是智慧通勤助理。\n" + READY_MENU_TEXT, MAIN_MENU_QUICK_REPLIES)
                 else:
                     set_pending_field(db, user.id, next_step)
                     await reply_with_quick_reply(
@@ -1005,12 +1056,13 @@ async def line_webhook(
                     public_url=PUBLIC_URL,
                     request_base_url=str(request.base_url),
                 )
-                await reply_text(
+                await reply_with_quick_reply(
                     reply_token,
                     "外接螢幕看板連結：\n"
                     f"{dashboard_url}\n\n"
                     "在要顯示的螢幕上打開這個網址，並把瀏覽器切成全螢幕即可。\n"
                     "若要設定開機自動打開，請傳送「電腦 Dashboard 設定」。",
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1021,12 +1073,13 @@ async def line_webhook(
                     public_url=PUBLIC_URL,
                     request_base_url=str(request.base_url),
                 )
-                await reply_text(
+                await reply_with_quick_reply(
                     reply_token,
                     "家庭外接螢幕看板連結：\n"
                     f"{household_url}\n\n"
                     "家人都加入這個 LINE Bot 後，這個看板會一起顯示每位成員的出門狀態。\n"
                     "若要設定開機自動打開，請傳送「電腦 Dashboard 設定」。",
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1042,7 +1095,7 @@ async def line_webhook(
                     public_url=PUBLIC_URL,
                     request_base_url=str(request.base_url),
                 )
-                await reply_text(reply_token, format_computer_dashboard_guide(dashboard_url, household_url))
+                await reply_with_quick_reply(reply_token, format_computer_dashboard_guide(dashboard_url, household_url), MAIN_MENU_QUICK_REPLIES)
                 continue
 
             join_household_value = extract_command_value(user_text, COMMAND_ALIASES["join_household"])
@@ -1108,12 +1161,12 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["join_household"]:
                 set_pending_field(db, user.id, "household_join_code")
-                await reply_text(reply_token, "請輸入家庭邀請碼，或直接傳送：加入家庭 邀請碼")
+                await reply_with_quick_reply(reply_token, "請輸入家庭邀請碼，或直接傳送：加入家庭 邀請碼", HOUSEHOLD_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["set_display_name"]:
                 set_pending_field(db, user.id, "display_name")
-                await reply_text(reply_token, "請輸入要顯示在家庭 Dashboard 上的名稱，例如：設定我的名稱 小明")
+                await reply_with_quick_reply(reply_token, "請輸入要顯示在家庭 Dashboard 上的名稱，例如：設定我的名稱 小明", HOUSEHOLD_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["leave_household"]:
@@ -1127,12 +1180,12 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["enable_reminder"]:
                 set_reminder_enabled(db, user.id, True)
-                await reply_text(reply_token, "已開啟自動提醒。")
+                await reply_with_quick_reply(reply_token, "已開啟自動提醒，系統會依目前生效的到公司時間重新計算提醒。", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["disable_reminder"]:
                 set_reminder_enabled(db, user.id, False)
-                await reply_text(reply_token, "已關閉自動提醒。")
+                await reply_with_quick_reply(reply_token, "已關閉自動提醒。", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["view_reminder_setting"]:
@@ -1161,7 +1214,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1173,7 +1226,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1185,7 +1238,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1197,7 +1250,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1212,7 +1265,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     "已設定今天休息，今天不會再推送出門提醒。Dashboard 會改看下一個啟用日。",
-                    SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1221,7 +1274,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     "已設定明天休息，明天不會推送通勤提醒。",
-                    SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1231,7 +1284,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     "已啟用今天通勤提醒，會依今天實際到公司時間重新計算。",
-                    SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1240,24 +1293,26 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     "已啟用明天通勤提醒，會依明天實際到公司時間計算。",
-                    SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["departure_left"]:
                 confirm_departure_for_user(db, user.id, today_date)
-                await reply_text(
+                await reply_with_quick_reply(
                     reply_token,
                     "收到，今天上班加油！\n已更新為計算明日通勤與提醒時間。",
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["departure_need_5"]:
                 override = snooze_departure_for_user(db, user.id, today_date)
                 snooze_text = format_taipei_hhmm(override.departure_snoozed_until)
-                await reply_text(
+                await reply_with_quick_reply(
                     reply_token,
                     f"好的，{snooze_text} 再提醒您出門。四分鐘後會先提醒一次，時間到會再提醒一次。",
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1332,12 +1387,12 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db, user.id, today_date)
                 except Exception as e:
                     print(f"[freeze-bus-to-metro] error={e}")
-                await reply_text(reply_token, "已設定今天交通方式為：公車轉捷運")
+                await reply_with_quick_reply(reply_token, "已設定今天交通方式為：公車轉捷運。已開始重新計算今天提醒。", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["view_mode_today"]:
                 current_mode = get_transport_mode_override(db, user.id, today_date) or "auto"
-                await reply_text(reply_token, f"今天交通方式設定：{TRANSPORT_MODE_NAME_MAP.get(current_mode, '自動判斷')}")
+                await reply_with_quick_reply(reply_token, f"今天交通方式設定：{TRANSPORT_MODE_NAME_MAP.get(current_mode, '自動判斷')}", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["today_commute"]:
@@ -1400,9 +1455,10 @@ async def line_webhook(
                     effective_arrival_time = override.target_arrival_time
 
                 departure_time = await calculate_departure_time(profile, tomorrow_date, effective_arrival_time)
-                await reply_text(
+                await reply_with_quick_reply(
                     reply_token,
                     f"明天到公司時間：{effective_arrival_time}\n明天建議出門：{departure_time}",
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1477,7 +1533,7 @@ async def line_webhook(
                 await reply_with_quick_reply(
                     reply_token,
                     schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -1544,6 +1600,7 @@ async def line_webhook(
                         reply_token,
                         (
                             f"已設定今天臨時到公司時間：{value}\n"
+                            "已為您調整時間並開始重新計算今天提醒。\n"
                             f"明天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
                         ),
                         MAIN_MENU_QUICK_REPLIES,
@@ -1558,6 +1615,7 @@ async def line_webhook(
                         reply_token,
                         (
                             f"已設定明天臨時到公司時間：{value}\n"
+                            "已為您調整時間並開始重新計算明天提醒。\n"
                             f"明天建議出門：{departure_time}\n"
                             f"後天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
                         ),
@@ -1590,7 +1648,7 @@ async def line_webhook(
                 set_pending_field(db, user.id, None)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已更新固定到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                    f"已更新固定到公司時間：{value}\n系統已開始重新計算今日提醒。\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
                     MAIN_MENU_QUICK_REPLIES,
                 )
                 continue

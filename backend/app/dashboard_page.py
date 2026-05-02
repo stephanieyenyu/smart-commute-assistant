@@ -561,6 +561,7 @@ def render_dashboard_html_for_paths(
     let ws = null;
     let soundEnabled = localStorage.getItem(`dashboardSoundEnabled:${{userId}}`) === "true";
     let activeSpeechKeys = new Set();
+    let activeDepartureCheckKeys = new Set();
     let currentState = "error";
     let layoutClass = "layout-wide";
 
@@ -602,16 +603,35 @@ def render_dashboard_html_for_paths(
     function spokenStorageKey(payload, moment) {{
       const voiceUserId = payload.user_id || (payload.primary && payload.primary.user_id) || userId;
       const departureMoment = payload.departure_at || payload.departure_time || "unknown-time";
+      const planVersion = payload.plan_key || departureMoment || "unknown-plan";
       return [
         "dashboardSpoken",
         voiceUserId,
         payload.target_date || "unknown-date",
+        planVersion,
         departureMoment,
         moment
       ].join(":");
     }}
 
-    async function notifyDepartureVoiceComplete(payload) {{
+    function departureCheckStorageKey(payload, reason) {{
+      const departureUserId = payload.user_id || (payload.primary && payload.primary.user_id) || userId;
+      const departureMoment = payload.departure_at || payload.departure_time || "unknown-time";
+      const planVersion = payload.plan_key || departureMoment || "unknown-plan";
+      return [
+        "dashboardDepartureCheck",
+        departureUserId,
+        payload.target_date || "unknown-date",
+        planVersion,
+        departureMoment,
+        reason
+      ].join(":");
+    }}
+
+    async function notifyDepartureCheck(payload, reason = "urgent") {{
+      const storageKey = departureCheckStorageKey(payload, reason);
+      if (localStorage.getItem(storageKey) === "true" || activeDepartureCheckKeys.has(storageKey)) return;
+      activeDepartureCheckKeys.add(storageKey);
       try {{
         const departureUserId = payload.user_id || (payload.primary && payload.primary.user_id) || userId;
         if (!departureUserId) return;
@@ -623,12 +643,19 @@ def render_dashboard_html_for_paths(
             departure_time: payload.departure_time
           }})
         }});
+        localStorage.setItem(storageKey, "true");
       }} catch (error) {{
         console.warn("departure check notification failed", error);
+      }} finally {{
+        activeDepartureCheckKeys.delete(storageKey);
       }}
     }}
 
-    function speakReminder(message, storageKey, onDone) {{
+    async function notifyDepartureVoiceComplete(payload) {{
+      await notifyDepartureCheck(payload, "voice-complete");
+    }}
+
+    function speakReminder(message, storageKey, onDone, attempt = 0) {{
       if (!soundEnabled || !("speechSynthesis" in window)) return;
       if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return;
 
@@ -655,7 +682,11 @@ def render_dashboard_html_for_paths(
         utterance.onerror = (event) => {{
           console.warn("speech reminder failed", event);
           activeSpeechKeys.delete(storageKey);
-          if (onDone) onDone();
+          if (attempt < 2) {{
+            window.setTimeout(() => speakReminder(message, storageKey, onDone, attempt + 1), 500);
+          }} else if (onDone) {{
+            onDone();
+          }}
         }};
 
         window.speechSynthesis.cancel();
@@ -665,6 +696,9 @@ def render_dashboard_html_for_paths(
         window.setTimeout(() => {{
           if (!speechStarted && !window.speechSynthesis.speaking) {{
             activeSpeechKeys.delete(storageKey);
+            if (attempt < 2) {{
+              window.setTimeout(() => speakReminder(message, storageKey, onDone, attempt + 1), 500);
+            }}
           }}
         }}, 2500);
       }};
@@ -678,10 +712,14 @@ def render_dashboard_html_for_paths(
     }}
 
     function handleVoiceReminder(payload) {{
-      if (!payload.ok || payload.sleeping || payload.reminder_enabled === false) return;
+      if (!payload.ok || payload.sleeping) return;
       const seconds = payload.seconds_until_departure;
       if (seconds === null || seconds === undefined) return;
 
+      if (payload.state === "urgent") {{
+        notifyDepartureCheck(payload, "urgent");
+      }}
+      if (payload.reminder_enabled === false) return;
       if (!payload.is_snoozed && seconds <= 300 && seconds > 240) {{
         speakReminder("請於五分鐘後出門。", spokenStorageKey(payload, "five-minutes"));
       }}
