@@ -1,7 +1,9 @@
 from datetime import date, datetime
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models import ApiHealthLog, CommuteLog, User, CommuteProfile, CommuteOverride
+from app.commute_schedule import schedule_label
 
 
 def _clear_override_reminder_fields(override: CommuteOverride):
@@ -21,7 +23,7 @@ def get_or_create_user(db: Session, line_user_id: str) -> User:
     if user:
         return user
 
-    user = User(line_user_id=line_user_id)
+    user = User(line_user_id=line_user_id, household_id="default")
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -43,6 +45,7 @@ def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
         user_id=user_id,
         pending_field="home_location",
         reminder_enabled=True,
+        active_weekdays=None,
     )
     db.add(profile)
     db.commit()
@@ -55,6 +58,22 @@ def get_profile(db: Session, user_id: int) -> CommuteProfile:
     if profile:
         return profile
     return get_or_create_profile(db, user_id)
+
+
+def get_household_id_for_user(user: User | None) -> str:
+    if not user:
+        return "default"
+    return user.household_id or "default"
+
+
+def get_users_for_household(db: Session, household_id: str = "default") -> list[User]:
+    household_id = (household_id or "default").strip() or "default"
+    query = db.query(User)
+    if household_id == "default":
+        query = query.filter(or_(User.household_id == "default", User.household_id.is_(None)))
+    else:
+        query = query.filter(User.household_id == household_id)
+    return query.order_by(User.id.asc()).all()
 
 
 def set_pending_field(db: Session, user_id: int, field_name: str | None):
@@ -195,6 +214,8 @@ def get_or_create_override(db: Session, user_id: int, target_date):
 def upsert_override(db: Session, user_id: int, target_date, target_arrival_time: str):
     override = get_or_create_override(db, user_id, target_date)
     override.target_arrival_time = target_arrival_time
+    override.commute_disabled = False
+    override.commute_enabled = True
     _clear_override_reminder_fields(override)
     db.commit()
     db.refresh(override)
@@ -204,6 +225,8 @@ def upsert_override(db: Session, user_id: int, target_date, target_arrival_time:
 def upsert_transport_mode_override(db: Session, user_id: int, target_date, mode: str):
     override = get_or_create_override(db, user_id, target_date)
     override.transport_mode_override = mode
+    override.commute_disabled = False
+    override.commute_enabled = True
     _clear_override_reminder_fields(override)
     db.commit()
     db.refresh(override)
@@ -223,6 +246,29 @@ def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
     db.commit()
     db.refresh(profile)
     return profile
+
+
+def set_active_weekdays(db: Session, user_id: int, weekdays: list[int] | None):
+    profile = get_profile(db, user_id)
+    profile.active_weekdays = weekdays
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def set_commute_disabled_for_date(db: Session, user_id: int, target_date, disabled: bool = True):
+    override = get_or_create_override(db, user_id, target_date)
+    override.commute_disabled = disabled
+    override.commute_enabled = False if disabled else True
+    if disabled:
+        _clear_override_reminder_fields(override)
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def schedule_text_for_profile(profile: CommuteProfile) -> str:
+    return schedule_label(getattr(profile, "active_weekdays", None))
 
 
 def save_frozen_reminder(

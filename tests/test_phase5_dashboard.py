@@ -149,8 +149,13 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('@router.get("/status/{user_id}")', dashboard_py)
         self.assertIn('@router.get("/view/{user_id}", response_class=HTMLResponse)', dashboard_py)
         self.assertIn('@router.websocket("/ws/{user_id}")', dashboard_py)
+        self.assertIn('@router.get("/household/{household_id}/status")', dashboard_py)
+        self.assertIn('@router.get("/household/{household_id}/view", response_class=HTMLResponse)', dashboard_py)
+        self.assertIn('@router.websocket("/household/{household_id}/ws")', dashboard_py)
         self.assertIn('@router.post("/departure-check/{user_id}")', dashboard_py)
         self.assertIn("get_dashboard_status_payload", dashboard_py)
+        self.assertIn("get_household_dashboard_status_payload", dashboard_py)
+        self.assertIn("dashboard_should_sleep", dashboard_py)
         self.assertIn("dashboard_plan_is_expired", dashboard_py)
         self.assertIn("today + timedelta(days=1)", dashboard_py)
         self.assertIn('payload["reminder_enabled"]', dashboard_py)
@@ -164,9 +169,10 @@ class Phase5DashboardTests(unittest.TestCase):
 
         self.assertIn("通勤提醒看板", html)
         self.assertIn("時間還很充裕", html)
+        self.assertIn("系統休息中", html)
         self.assertIn("即時更新中", html)
-        self.assertIn("/api/v1/dashboard/status/${userId}", html)
-        self.assertIn("/api/v1/dashboard/ws/${userId}", html)
+        self.assertIn('const statusPath = "/api/v1/dashboard/status/7"', html)
+        self.assertIn('const wsPath = "/api/v1/dashboard/ws/7"', html)
         self.assertIn("const userId = 7", html)
         self.assertIn("state-urgent", html)
         self.assertIn("white-space: pre-line", html)
@@ -176,18 +182,20 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("layout-stack", html)
         self.assertIn("fitDashboardToViewport", html)
         self.assertIn("visualViewport", html)
+        self.assertIn("membersBand", html)
         self.assertIn("@media (max-width: 1100px)", html)
         self.assertIn("@media (max-height: 700px) and (min-width: 821px)", html)
         self.assertIn("speechSynthesis", html)
         self.assertIn("請於五分鐘後出門", html)
         self.assertIn("已到出門時間，請準時出門", html)
         self.assertIn("notifyDepartureVoiceComplete", html)
-        self.assertIn("/api/v1/dashboard/departure-check/${userId}", html)
+        self.assertIn("/api/v1/dashboard/departure-check/${departureUserId}", html)
         self.assertIn("activeSpeechKeys", html)
         self.assertIn("utterance.onend = handleSpeechDone", html)
         self.assertIn("utterance.onerror", html)
         self.assertIn("speechSynthesis.resume()", html)
         self.assertIn("payload.reminder_enabled === false", html)
+        self.assertIn("payload.sleeping", html)
 
     def test_dashboard_link_builder_prefers_public_url(self):
         links = load_module("dashboard_links_under_test", "backend/app/dashboard_links.py")
@@ -208,14 +216,46 @@ class Phase5DashboardTests(unittest.TestCase):
             ),
             "https://fallback.example.com/api/v1/dashboard/view/8",
         )
+        self.assertEqual(
+            links.build_household_dashboard_view_url(
+                "default",
+                public_url="https://commute.example.com/",
+                request_base_url="https://fallback.example.com/",
+            ),
+            "https://commute.example.com/api/v1/dashboard/household/default/view",
+        )
+
+    def test_commute_schedule_supports_active_days_and_sleep(self):
+        schedule = load_module("commute_schedule_under_test", "backend/app/commute_schedule.py")
+
+        profile = types.SimpleNamespace(active_weekdays=[0, 1, 2, 3, 4])
+        disabled_override = types.SimpleNamespace(commute_disabled=True, commute_enabled=False)
+        enabled_override = types.SimpleNamespace(commute_disabled=False, commute_enabled=True)
+
+        self.assertTrue(schedule.commute_date_is_active(profile, date(2026, 5, 1), None))
+        self.assertFalse(schedule.commute_date_is_active(profile, date(2026, 5, 2), None))
+        self.assertFalse(schedule.commute_date_is_active(profile, date(2026, 5, 1), disabled_override))
+        self.assertTrue(schedule.commute_date_is_active(profile, date(2026, 5, 2), enabled_override))
+        should_sleep, sleep_until = schedule.dashboard_should_sleep(
+            datetime(2026, 5, 1, 20, 0, 0),
+            date(2026, 5, 2),
+            "08:30",
+            None,
+        )
+        self.assertTrue(should_sleep)
+        self.assertEqual(sleep_until.hour, 0)
 
     def test_line_webhook_has_dashboard_link_command(self):
         webhook_py = self.read_repo_file("backend/app/webhook.py")
 
         self.assertIn('"dashboard_link"', webhook_py)
+        self.assertIn('"household_dashboard_link"', webhook_py)
         self.assertIn("取得Dashboard連結", webhook_py)
+        self.assertIn("取得家庭Dashboard連結", webhook_py)
         self.assertIn("build_dashboard_view_url", webhook_py)
+        self.assertIn("build_household_dashboard_view_url", webhook_py)
         self.assertIn("外接螢幕看板連結", webhook_py)
+        self.assertIn("家庭外接螢幕看板連結", webhook_py)
 
     def test_reminder_settings_reply_has_toggle_quick_replies(self):
         webhook_py = self.read_repo_file("backend/app/webhook.py")
@@ -224,6 +264,19 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("✅ 開啟自動提醒", webhook_py)
         self.assertIn("⏸ 關閉自動提醒", webhook_py)
         self.assertIn("可用下方按鈕切換", webhook_py)
+
+    def test_line_webhook_has_schedule_controls(self):
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        scheduler_py = self.read_repo_file("backend/app/reminder_scheduler.py")
+
+        self.assertIn("SCHEDULE_QUICK_REPLIES", webhook_py)
+        self.assertIn('"view_schedule_setting"', webhook_py)
+        self.assertIn('"schedule_workdays"', webhook_py)
+        self.assertIn('"pause_today"', webhook_py)
+        self.assertIn("set_active_weekdays", webhook_py)
+        self.assertIn("set_commute_disabled_for_date", webhook_py)
+        self.assertIn("commute_date_is_active", scheduler_py)
+        self.assertIn("MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8", scheduler_py)
 
 
     def test_line_replies_have_persistent_commute_quick_replies(self):

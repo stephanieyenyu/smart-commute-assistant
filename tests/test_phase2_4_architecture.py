@@ -16,6 +16,9 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
 
         self.assertIn("role = Column", models_py)
         self.assertIn("transport_preference = Column(JSON", models_py)
+        self.assertIn("household_id = Column", models_py)
+        self.assertIn("active_weekdays = Column(JSON", models_py)
+        self.assertIn("commute_disabled = Column", models_py)
         self.assertIn("nightly_brief_plan_key", models_py)
         self.assertIn("watchdog_alert_key", models_py)
         self.assertIn("departure_confirmed_at", models_py)

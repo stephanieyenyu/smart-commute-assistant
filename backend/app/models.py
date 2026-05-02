@@ -22,6 +22,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     line_user_id = Column(String, unique=True, index=True, nullable=False)
     display_name = Column(String, nullable=True)
+    household_id = Column(String, index=True, nullable=True)
     role = Column(String, nullable=False, default="user")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -70,6 +71,7 @@ class CommuteProfile(Base):
     max_walk_mins = Column(Integer, nullable=True)
     pending_field = Column(String, nullable=True)
     reminder_enabled = Column(Boolean, nullable=False, default=True)
+    active_weekdays = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -89,6 +91,8 @@ class CommuteOverride(Base):
 
     target_arrival_time = Column(String, nullable=True)
     transport_mode_override = Column(String, nullable=True)
+    commute_disabled = Column(Boolean, nullable=True)
+    commute_enabled = Column(Boolean, nullable=True)
 
     frozen_plan_key = Column(String, nullable=True)
     frozen_departure_time = Column(String, nullable=True)

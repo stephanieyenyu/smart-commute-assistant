@@ -1,4 +1,36 @@
+import json
+from urllib.parse import quote
+
+
 def render_dashboard_html(user_id: int) -> str:
+    return render_dashboard_html_for_paths(
+        user_id=user_id,
+        status_path=f"/api/v1/dashboard/status/{int(user_id)}",
+        ws_path=f"/api/v1/dashboard/ws/{int(user_id)}",
+        is_household=False,
+    )
+
+
+def render_household_dashboard_html(household_id: str) -> str:
+    household_id = str(household_id or "default")
+    encoded = json.dumps(household_id)
+    path_id = quote(household_id, safe="")
+    return render_dashboard_html_for_paths(
+        user_id=0,
+        status_path=f"/api/v1/dashboard/household/{path_id}/status",
+        ws_path=f"/api/v1/dashboard/household/{path_id}/ws",
+        is_household=True,
+        household_id_js=encoded,
+    )
+
+
+def render_dashboard_html_for_paths(
+    user_id: int,
+    status_path: str,
+    ws_path: str,
+    is_household: bool = False,
+    household_id_js: str = '"default"',
+) -> str:
     return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -145,6 +177,11 @@ def render_dashboard_html(user_id: int) -> str:
     .state-error {{
       --accent: var(--error);
       --accent-soft: rgba(184, 79, 209, 0.2);
+    }}
+
+    .state-sleeping {{
+      --accent: #6aa6d8;
+      --accent-soft: rgba(106, 166, 216, 0.18);
     }}
 
     .topbar {{
@@ -476,6 +513,10 @@ def render_dashboard_html(user_id: int) -> str:
           <div class="label">出門天氣</div>
           <div id="weather" class="value">--</div>
         </section>
+        <section id="membersBand" class="band" style="display: none;">
+          <div class="label">家人通勤狀態</div>
+          <div id="members" class="value transport">--</div>
+        </section>
       </div>
     </section>
 
@@ -488,6 +529,10 @@ def render_dashboard_html(user_id: int) -> str:
 
   <script>
     const userId = {int(user_id)};
+    const householdId = {household_id_js};
+    const statusPath = {json.dumps(status_path)};
+    const wsPath = {json.dumps(ws_path)};
+    const isHouseholdDashboard = {str(bool(is_household)).lower()};
     const screen = document.getElementById("screen");
     const stateLabel = document.getElementById("stateLabel");
     const countdown = document.getElementById("countdown");
@@ -496,6 +541,8 @@ def render_dashboard_html(user_id: int) -> str:
     const arrival = document.getElementById("arrival");
     const transport = document.getElementById("transport");
     const weather = document.getElementById("weather");
+    const membersBand = document.getElementById("membersBand");
+    const members = document.getElementById("members");
     const connection = document.getElementById("connection");
     const updatedAt = document.getElementById("updatedAt");
     const clock = document.getElementById("clock");
@@ -505,6 +552,7 @@ def render_dashboard_html(user_id: int) -> str:
       safe: "時間還很充裕",
       warning: "可以準備出門了",
       urgent: "現在就出門",
+      sleeping: "系統休息中",
       degraded: "資料暫時不穩",
       error: "先完成設定"
     }};
@@ -564,7 +612,9 @@ def render_dashboard_html(user_id: int) -> str:
 
     async function notifyDepartureVoiceComplete(payload) {{
       try {{
-        await fetch(`/api/v1/dashboard/departure-check/${{userId}}`, {{
+        const departureUserId = payload.user_id || (payload.primary && payload.primary.user_id) || userId;
+        if (!departureUserId) return;
+        await fetch(`/api/v1/dashboard/departure-check/${{departureUserId}}`, {{
           method: "POST",
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify({{
@@ -627,7 +677,7 @@ def render_dashboard_html(user_id: int) -> str:
     }}
 
     function handleVoiceReminder(payload) {{
-      if (!payload.ok || payload.reminder_enabled === false) return;
+      if (!payload.ok || payload.sleeping || payload.reminder_enabled === false) return;
       const seconds = payload.seconds_until_departure;
       if (seconds === null || seconds === undefined) return;
 
@@ -685,6 +735,24 @@ def render_dashboard_html(user_id: int) -> str:
       return [text, temp, pop].filter(Boolean).join("，");
     }}
 
+    function renderMembers(payload) {{
+      const list = payload.members || [];
+      if (!isHouseholdDashboard || !list.length) {{
+        membersBand.style.display = "none";
+        members.textContent = "--";
+        return;
+      }}
+
+      membersBand.style.display = "";
+      members.textContent = list.map((member) => {{
+        const name = member.display_name || `成員 ${{member.user_id}}`;
+        const date = member.target_date ? `${{member.target_date}} ` : "";
+        const leave = member.departure_time || "--:--";
+        const stateText = stateLabels[member.state] || member.state || "更新中";
+        return `${{name}}：${{stateText}}｜${{date}}${{leave}} 出門`;
+      }}).join("\\n");
+    }}
+
     function render(payload) {{
       latestPayload = payload;
       const state = payload.state || "error";
@@ -700,33 +768,45 @@ def render_dashboard_html(user_id: int) -> str:
         transport.textContent = payload.reason || "還沒有可顯示的資料";
         weather.textContent = "--";
         updatedAt.textContent = "這次更新沒有成功";
+        renderMembers(payload);
         return;
       }}
 
       countdown.textContent = formatCountdown(payload.seconds_until_departure);
-      countdownCaption.textContent = payload.seconds_until_departure <= 0 ? "已經到出門時間" : "距離該出門還有";
+      countdownCaption.textContent = payload.sleeping
+        ? (payload.sleep_until ? `休息到 ${{new Date(payload.sleep_until).toLocaleString("zh-TW", {{ hour12: false }})}}` : "排程休息中")
+        : (payload.seconds_until_departure <= 0 ? "已經到出門時間" : "距離該出門還有");
       departure.textContent = payload.departure_time || "--:--";
       arrival.textContent = payload.target_arrival_time || "--:--";
       transport.textContent = payload.transport_line || "還沒有通勤建議";
       weather.textContent = formatWeather(payload.weather);
       updatedAt.textContent = payload.updated_at ? `更新 ${{new Date(payload.updated_at).toLocaleTimeString("zh-TW", {{ hour12: false }})}}` : "尚未更新";
+      renderMembers(payload);
       handleVoiceReminder(payload);
       fitDashboardToViewport();
     }}
 
+    let statusRefreshTimer = null;
+    function scheduleStatusRefresh(seconds) {{
+      window.clearTimeout(statusRefreshTimer);
+      statusRefreshTimer = window.setTimeout(fetchStatus, Math.max(15, seconds || 30) * 1000);
+    }}
+
     async function fetchStatus() {{
       try {{
-        const response = await fetch(`/api/v1/dashboard/status/${{userId}}`, {{ cache: "no-store" }});
+        const response = await fetch(statusPath, {{ cache: "no-store" }});
         render(await response.json());
         connection.textContent = ws && ws.readyState === WebSocket.OPEN ? "即時更新中" : "定時更新中";
       }} catch (error) {{
         connection.textContent = "連線不穩，正在重試";
+      }} finally {{
+        scheduleStatusRefresh((latestPayload && latestPayload.refresh_seconds) || 30);
       }}
     }}
 
     function connectWebSocket() {{
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${{protocol}}://${{window.location.host}}/api/v1/dashboard/ws/${{userId}}`);
+      ws = new WebSocket(`${{protocol}}://${{window.location.host}}${{wsPath}}`);
       ws.onopen = () => {{
         connection.textContent = "即時更新中";
       }};
@@ -744,7 +824,6 @@ def render_dashboard_html(user_id: int) -> str:
     }}
 
     setInterval(updateClock, 1000);
-    setInterval(fetchStatus, 30000);
     window.addEventListener("resize", fitDashboardToViewport);
     window.addEventListener("orientationchange", () => setTimeout(fitDashboardToViewport, 250));
     if (window.visualViewport) {{

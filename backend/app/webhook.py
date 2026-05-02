@@ -10,7 +10,8 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessag
 
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
-from app.dashboard_links import build_dashboard_view_url
+from app.commute_schedule import commute_date_is_active, parse_weekday_preset, schedule_label
+from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url
 from app.db import SessionLocal
 from app.departure_confirmation import (
     confirm_departure_for_user,
@@ -22,6 +23,7 @@ from app.crud import (
     get_or_create_profile,
     get_profile,
     get_override_for_date,
+    get_household_id_for_user,
     set_pending_field,
     update_profile_field,
     update_address_and_coords,
@@ -31,6 +33,8 @@ from app.crud import (
     upsert_transport_mode_override,
     get_transport_mode_override,
     set_reminder_enabled,
+    set_active_weekdays,
+    set_commute_disabled_for_date,
 )
 from app.google_maps import geocode_address
 from app.service import (
@@ -140,6 +144,16 @@ REMINDER_SETTING_QUICK_REPLIES = [
     {"type": "message", "label": "⏸ 關閉自動提醒", "text": "關閉自動提醒"},
 ]
 
+SCHEDULE_QUICK_REPLIES = [
+    {"type": "message", "label": "平日啟用", "text": "排程平日"},
+    {"type": "message", "label": "每天啟用", "text": "排程每天"},
+    {"type": "message", "label": "週末啟用", "text": "排程週末"},
+    {"type": "message", "label": "今天休息", "text": "今天休息"},
+    {"type": "message", "label": "明天休息", "text": "明天休息"},
+    {"type": "message", "label": "今天啟用", "text": "今天啟用"},
+    {"type": "message", "label": "明天啟用", "text": "明天啟用"},
+]
+
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
     "auto": "自動判斷",
@@ -153,6 +167,7 @@ COMMAND_ALIASES = {
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
     "dashboard_link": {"取得Dashboard連結", "取得dashboard連結", "Dashboard連結", "dashboard連結", "取得儀表板連結"},
+    "household_dashboard_link": {"取得家庭Dashboard連結", "取得家用Dashboard連結", "家庭Dashboard連結", "家用Dashboard連結"},
     "tomorrow_departure": {"明天幾點出門"},
     "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
@@ -168,6 +183,15 @@ COMMAND_ALIASES = {
     "enable_reminder": {"開啟自動提醒"},
     "disable_reminder": {"關閉自動提醒"},
     "view_reminder_setting": {"查看提醒設定"},
+    "view_schedule_setting": {"查看排程設定", "排程設定", "LINE排程"},
+    "schedule_workdays": {"排程平日", "平日啟用", "只在平日啟用"},
+    "schedule_everyday": {"排程每天", "每天啟用", "每天都啟用"},
+    "schedule_weekend": {"排程週末", "週末啟用", "只在週末啟用"},
+    "schedule_none": {"暫停固定排程", "排程全休"},
+    "pause_today": {"今天休息", "今天不用提醒", "今天不用通勤"},
+    "pause_tomorrow": {"明天休息", "明天不用提醒", "明天不用通勤"},
+    "enable_today": {"今天啟用", "今天恢復提醒", "今天要通勤"},
+    "enable_tomorrow": {"明天啟用", "明天恢復提醒", "明天要通勤"},
     "departure_left": {"已經出門了"},
     "departure_need_5": {"我還需要五分鐘", "還需要五分鐘"},
 }
@@ -176,8 +200,10 @@ READY_MENU_TEXT = (
     "您目前設定已完成。\n"
     "可傳送：\n"
     "查看設定\n"
+    "查看排程設定\n"
     "今天通勤建議\n"
     "取得 Dashboard 連結\n"
+    "取得家庭 Dashboard 連結\n"
     "明天幾點出門\n"
     "修改明天到公司時間\n"
     "重新設定\n"
@@ -206,6 +232,7 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
     today_note = "（今天臨時調整）" if today_override_time else "（固定時間）"
     tomorrow_note = "（明天臨時調整）" if tomorrow_override_time else "（固定時間）"
     reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
+    schedule_status = schedule_label(getattr(profile, "active_weekdays", None))
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
 
     text = (
@@ -216,9 +243,22 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
         f"📍 今天到公司時間：{today_effective_time}{today_note}\n"
         f"📅 明天到公司時間：{tomorrow_effective_time}{tomorrow_note}\n"
         f"📢 自動提醒：{reminder_status}\n"
+        f"🗓 啟用日：{schedule_status}\n"
         f"🚇 今天交通方式：{mode_label}"
     )
     return text
+
+
+def format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override) -> str:
+    today_status = "啟用" if commute_date_is_active(profile, today_date, today_override) else "休息"
+    tomorrow_status = "啟用" if commute_date_is_active(profile, tomorrow_date, tomorrow_override) else "休息"
+    return (
+        "目前通勤排程：\n"
+        f"🗓 固定啟用日：{schedule_label(getattr(profile, 'active_weekdays', None))}\n"
+        f"📍 今天：{today_status}\n"
+        f"📅 明天：{tomorrow_status}\n\n"
+        "可用下方按鈕快速修改。"
+    )
 
 
 def validate_pending_input(field_name: str, user_text: str):
@@ -473,6 +513,7 @@ async def line_webhook(
                     | COMMAND_ALIASES["send_office_location"]
                     | COMMAND_ALIASES["reset"]
                     | COMMAND_ALIASES["dashboard_link"]
+                    | COMMAND_ALIASES["household_dashboard_link"]
                     | {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}
                 )
                 # 例外2：正在填寫設定欄位且輸入內容確實像「地址」或「時間」
@@ -569,6 +610,20 @@ async def line_webhook(
                 )
                 continue
 
+            if command_text in COMMAND_ALIASES["household_dashboard_link"]:
+                household_url = build_household_dashboard_view_url(
+                    household_id=get_household_id_for_user(user),
+                    public_url=PUBLIC_URL,
+                    request_base_url=str(request.base_url),
+                )
+                await reply_text(
+                    reply_token,
+                    "家庭外接螢幕看板連結：\n"
+                    f"{household_url}\n\n"
+                    "家人都加入這個 LINE Bot 後，這個看板會一起顯示每位成員的出門狀態。",
+                )
+                continue
+
             if command_text in COMMAND_ALIASES["enable_reminder"]:
                 set_reminder_enabled(db, user.id, True)
                 await reply_text(reply_token, "已開啟自動提醒。")
@@ -585,6 +640,89 @@ async def line_webhook(
                     reply_token,
                     f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}\n可用下方按鈕切換。",
                     REMINDER_SETTING_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["view_schedule_setting"]:
+                profile = get_profile(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override),
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["schedule_workdays"]:
+                profile = set_active_weekdays(db, user.id, parse_weekday_preset("workdays"))
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["schedule_everyday"]:
+                profile = set_active_weekdays(db, user.id, parse_weekday_preset("everyday"))
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["schedule_weekend"]:
+                profile = set_active_weekdays(db, user.id, parse_weekday_preset("weekend"))
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["schedule_none"]:
+                profile = set_active_weekdays(db, user.id, parse_weekday_preset("none"))
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["pause_today"]:
+                set_commute_disabled_for_date(db, user.id, today_date, True)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已設定今天休息，今天不會再推送出門提醒。Dashboard 會改看下一個啟用日。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["pause_tomorrow"]:
+                set_commute_disabled_for_date(db, user.id, tomorrow_date, True)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已設定明天休息，明天不會推送通勤提醒。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["enable_today"]:
+                set_commute_disabled_for_date(db, user.id, today_date, False)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已啟用今天通勤提醒，會依今天實際到公司時間重新計算。",
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["enable_tomorrow"]:
+                set_commute_disabled_for_date(db, user.id, tomorrow_date, False)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已啟用明天通勤提醒，會依明天實際到公司時間計算。",
+                    SCHEDULE_QUICK_REPLIES,
                 )
                 continue
 
@@ -691,6 +829,13 @@ async def line_webhook(
                     set_pending_field(db, user.id, next_step)
                     await reply_text(reply_token, FIELD_PROMPTS[next_step])
                     continue
+                if not commute_date_is_active(profile, today_date, today_override):
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "今天排程是休息日，不會推送出門提醒。\n若今天臨時要通勤，請按「今天啟用」。",
+                        SCHEDULE_QUICK_REPLIES,
+                    )
+                    continue
 
                 payload = await build_today_commute_payload(
                     db=db,
@@ -726,6 +871,13 @@ async def line_webhook(
 
                 effective_arrival_time = profile.preferred_arrival_time
                 override = get_override_for_date(db, user.id, tomorrow_date)
+                if not commute_date_is_active(profile, tomorrow_date, override):
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "明天排程是休息日，不會推送通勤提醒。\n若明天臨時要通勤，請按「明天啟用」。",
+                        SCHEDULE_QUICK_REPLIES,
+                    )
+                    continue
                 if override and override.target_arrival_time:
                     effective_arrival_time = override.target_arrival_time
 
