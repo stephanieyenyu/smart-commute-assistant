@@ -11,6 +11,8 @@ from linebot.v3.messaging import (
     MessageAction,
     DatetimePickerAction,
 )
+import httpx
+
 from app.config import LINE_CHANNEL_ACCESS_TOKEN
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
@@ -140,3 +142,92 @@ async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
     except Exception as e:
         print(f"[line] push_with_quick_reply error: {e}")
         await push_text(user_id, text)
+
+
+def build_departure_check_flex_message() -> dict:
+    return {
+        "type": "flex",
+        "altText": "您出門了嗎？",
+        "contents": {
+            "type": "bubble",
+            "size": "mega",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "md",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "您出門了嗎？",
+                        "weight": "bold",
+                        "size": "xl",
+                        "color": "#111111",
+                    },
+                    {
+                        "type": "text",
+                        "text": "如果還需要時間，我會五分鐘後再提醒一次。",
+                        "size": "sm",
+                        "color": "#666666",
+                        "wrap": True,
+                    },
+                ],
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "color": "#1fb86a",
+                        "action": {
+                            "type": "postback",
+                            "label": "已經出門了",
+                            "data": "action=departure_check&choice=left",
+                            "displayText": "已經出門了",
+                        },
+                    },
+                    {
+                        "type": "button",
+                        "style": "secondary",
+                        "action": {
+                            "type": "postback",
+                            "label": "我還需要五分鐘",
+                            "data": "action=departure_check&choice=need_5",
+                            "displayText": "我還需要五分鐘",
+                        },
+                    },
+                ],
+            },
+        },
+    }
+
+
+async def push_departure_check_message(user_id: str) -> None:
+    payload = {
+        "to": user_id,
+        "messages": [build_departure_check_flex_message()],
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/push",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+    except Exception as e:
+        print(f"[line] push_departure_check_message error: {e}")
+        await push_with_quick_reply(
+            user_id,
+            "您出門了嗎？",
+            [
+                {"type": "message", "label": "已經出門了", "text": "已經出門了"},
+                {"type": "message", "label": "我還需要五分鐘", "text": "我還需要五分鐘"},
+            ],
+        )

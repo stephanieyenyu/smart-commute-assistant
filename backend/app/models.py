@@ -98,6 +98,12 @@ class CommuteOverride(Base):
     last_sent_plan_key = Column(String, nullable=True)
     last_sent_at = Column(DateTime(timezone=True), nullable=True)
 
+    departure_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    departure_check_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departure_snoozed_until = Column(DateTime(timezone=True), nullable=True)
+    snooze_one_min_sent_at = Column(DateTime(timezone=True), nullable=True)
+    snooze_departure_sent_at = Column(DateTime(timezone=True), nullable=True)
+
     nightly_brief_plan_key = Column(String, nullable=True)
     nightly_brief_sent_at = Column(DateTime(timezone=True), nullable=True)
 

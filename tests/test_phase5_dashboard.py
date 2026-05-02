@@ -126,10 +126,13 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('@router.get("/status/{user_id}")', dashboard_py)
         self.assertIn('@router.get("/view/{user_id}", response_class=HTMLResponse)', dashboard_py)
         self.assertIn('@router.websocket("/ws/{user_id}")', dashboard_py)
+        self.assertIn('@router.post("/departure-check/{user_id}")', dashboard_py)
         self.assertIn("get_dashboard_status_payload", dashboard_py)
         self.assertIn("dashboard_plan_is_expired", dashboard_py)
         self.assertIn("today + timedelta(days=1)", dashboard_py)
         self.assertIn('payload["reminder_enabled"]', dashboard_py)
+        self.assertIn("departure_confirmed_at", dashboard_py)
+        self.assertIn("send_departure_check_for_user", dashboard_py)
         self.assertIn("app.include_router(dashboard_router)", main_py)
 
     def test_dashboard_view_contains_websocket_and_kiosk_layout(self):
@@ -150,6 +153,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("speechSynthesis", html)
         self.assertIn("請於五分鐘後出門", html)
         self.assertIn("已到出門時間，請準時出門", html)
+        self.assertIn("notifyDepartureVoiceComplete", html)
+        self.assertIn("/api/v1/dashboard/departure-check/${userId}", html)
+        self.assertIn("utterance.onend = onDone", html)
         self.assertIn("payload.reminder_enabled === false", html)
 
     def test_dashboard_link_builder_prefers_public_url(self):
@@ -199,6 +205,30 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("with_persistent_quick_replies(items)", line_client_py)
         self.assertIn("with_persistent_quick_replies([])", line_client_py)
         self.assertIn("修改出門時間", webhook_py)
+
+    def test_departure_confirmation_flow_is_wired(self):
+        line_client_py = self.read_repo_file("backend/app/line_client.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        scheduler_py = self.read_repo_file("backend/app/reminder_scheduler.py")
+        crud_py = self.read_repo_file("backend/app/crud.py")
+
+        self.assertIn("build_departure_check_flex_message", line_client_py)
+        self.assertIn("您出門了嗎？", line_client_py)
+        self.assertIn("已經出門了", line_client_py)
+        self.assertIn("我還需要五分鐘", line_client_py)
+        self.assertIn("action=departure_check&choice=left", line_client_py)
+        self.assertIn("action=departure_check&choice=need_5", line_client_py)
+
+        self.assertIn('postback_action == "departure_check"', webhook_py)
+        self.assertIn("confirm_departure_for_user", webhook_py)
+        self.assertIn("snooze_departure_for_user", webhook_py)
+
+        self.assertIn("check_and_send_snoozed_departure_reminders", scheduler_py)
+        self.assertIn("距離出門剩下一分鐘", scheduler_py)
+        self.assertIn("已到出門時間", scheduler_py)
+
+        self.assertIn("mark_departure_confirmed", crud_py)
+        self.assertIn("snooze_departure_confirmation", crud_py)
 
 
 if __name__ == "__main__":
