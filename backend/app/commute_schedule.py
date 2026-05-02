@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, timedelta
 
 
@@ -6,6 +7,23 @@ WORKDAYS = [0, 1, 2, 3, 4]
 WEEKEND = [5, 6]
 SLEEP_BEFORE_DEPARTURE_HOURS = 8
 WEEKDAY_NAMES = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+WEEKDAY_TOKEN_MAP = {
+    "一": 0,
+    "1": 0,
+    "二": 1,
+    "2": 1,
+    "三": 2,
+    "3": 2,
+    "四": 3,
+    "4": 3,
+    "五": 4,
+    "5": 4,
+    "六": 5,
+    "6": 5,
+    "日": 6,
+    "天": 6,
+    "7": 6,
+}
 
 
 def normalize_active_weekdays(value) -> list[int]:
@@ -63,6 +81,54 @@ def parse_weekday_preset(preset: str) -> list[int]:
     if preset == "none":
         return []
     return list(ALL_WEEKDAYS)
+
+
+def parse_custom_weekdays(text: str | None) -> list[int] | None:
+    """Parse LINE-friendly weekday text like '週一週三週五' or '1,3,5'."""
+    if not text:
+        return None
+
+    normalized = (
+        str(text)
+        .strip()
+        .replace(" ", "")
+        .replace("\u3000", "")
+        .replace("，", ",")
+        .replace("、", ",")
+        .replace("/", ",")
+        .replace("星期", "週")
+        .replace("禮拜", "週")
+        .replace("周", "週")
+    )
+    normalized = normalized.replace("自訂日曆排程", "").replace("自訂排程", "").replace("排程", "")
+
+    if normalized in {"每天", "每日", "每天啟用", "全週", "週一到週日", "週一至週日"}:
+        return list(ALL_WEEKDAYS)
+    if normalized in {"平日", "工作日", "上班日", "平日啟用", "週一到週五", "週一至週五"}:
+        return list(WORKDAYS)
+    if normalized in {"週末", "假日", "週末啟用", "週六週日", "週六,週日"}:
+        return list(WEEKEND)
+    if normalized in {"暫停", "全休", "暫停固定", "暫停固定排程", "不啟用", "排程全休"}:
+        return []
+
+    if "一到五" in normalized or "一至五" in normalized:
+        return list(WORKDAYS)
+    if "六到日" in normalized or "六至日" in normalized or "六日" in normalized:
+        return list(WEEKEND)
+
+    found = []
+    for token in re.findall(r"(?:週)?([一二三四五六日天1-7])", normalized):
+        weekday = WEEKDAY_TOKEN_MAP.get(token)
+        if weekday is not None and weekday not in found:
+            found.append(weekday)
+
+    if not found and re.fullmatch(r"[1-7,]+", normalized):
+        for token in normalized.replace(",", ""):
+            weekday = WEEKDAY_TOKEN_MAP.get(token)
+            if weekday is not None and weekday not in found:
+                found.append(weekday)
+
+    return sorted(found) if found else None
 
 
 def combine_target_datetime(target_date: date, hhmm: str, tzinfo) -> datetime | None:

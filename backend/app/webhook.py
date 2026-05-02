@@ -10,7 +10,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessag
 
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
-from app.commute_schedule import commute_date_is_active, parse_weekday_preset, schedule_label
+from app.commute_schedule import commute_date_is_active, parse_custom_weekdays, parse_weekday_preset, schedule_label
 from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url
 from app.db import SessionLocal
 from app.departure_confirmation import (
@@ -24,6 +24,11 @@ from app.crud import (
     get_profile,
     get_override_for_date,
     get_household_id_for_user,
+    get_users_for_household,
+    ensure_personal_household,
+    normalize_household_id,
+    set_user_display_name,
+    set_user_household_id,
     set_pending_field,
     update_profile_field,
     update_address_and_coords,
@@ -148,10 +153,37 @@ SCHEDULE_QUICK_REPLIES = [
     {"type": "message", "label": "平日啟用", "text": "排程平日"},
     {"type": "message", "label": "每天啟用", "text": "排程每天"},
     {"type": "message", "label": "週末啟用", "text": "排程週末"},
+    {"type": "message", "label": "自訂星期", "text": "自訂日曆排程"},
+    {"type": "datetimepicker", "label": "選休息日", "data": "action=pause_date", "mode": "date"},
+    {"type": "datetimepicker", "label": "選啟用日", "data": "action=enable_date", "mode": "date"},
+    {"type": "message", "label": "暫停固定", "text": "暫停固定排程"},
     {"type": "message", "label": "今天休息", "text": "今天休息"},
     {"type": "message", "label": "明天休息", "text": "明天休息"},
     {"type": "message", "label": "今天啟用", "text": "今天啟用"},
     {"type": "message", "label": "明天啟用", "text": "明天啟用"},
+]
+
+SCHEDULE_SETUP_QUICK_REPLIES = [
+    {"type": "message", "label": "平日啟用", "text": "排程平日"},
+    {"type": "message", "label": "每天啟用", "text": "排程每天"},
+    {"type": "message", "label": "週末啟用", "text": "排程週末"},
+    {"type": "message", "label": "自訂星期", "text": "自訂日曆排程"},
+]
+
+CUSTOM_SCHEDULE_QUICK_REPLIES = [
+    {"type": "message", "label": "週一三五", "text": "週一週三週五"},
+    {"type": "message", "label": "週二四", "text": "週二週四"},
+    {"type": "message", "label": "週六日", "text": "週六週日"},
+    {"type": "message", "label": "平日啟用", "text": "排程平日"},
+    {"type": "message", "label": "每天啟用", "text": "排程每天"},
+]
+
+HOUSEHOLD_QUICK_REPLIES = [
+    {"type": "message", "label": "查看家庭成員", "text": "查看家庭成員"},
+    {"type": "message", "label": "取得邀請碼", "text": "取得家庭邀請碼"},
+    {"type": "message", "label": "建立家庭", "text": "建立家庭"},
+    {"type": "message", "label": "設定我的名稱", "text": "設定我的名稱"},
+    {"type": "message", "label": "家庭看板連結", "text": "取得家庭Dashboard連結"},
 ]
 
 TRANSPORT_MODE_NAME_MAP = {
@@ -188,10 +220,19 @@ COMMAND_ALIASES = {
     "schedule_everyday": {"排程每天", "每天啟用", "每天都啟用"},
     "schedule_weekend": {"排程週末", "週末啟用", "只在週末啟用"},
     "schedule_none": {"暫停固定排程", "排程全休"},
+    "schedule_custom": {"自訂日曆排程", "自訂排程", "自訂星期", "自訂啟用日"},
     "pause_today": {"今天休息", "今天不用提醒", "今天不用通勤"},
     "pause_tomorrow": {"明天休息", "明天不用提醒", "明天不用通勤"},
     "enable_today": {"今天啟用", "今天恢復提醒", "今天要通勤"},
     "enable_tomorrow": {"明天啟用", "明天恢復提醒", "明天要通勤"},
+    "household_management": {"家庭成員管理", "家庭管理", "家人管理"},
+    "view_household_members": {"查看家庭成員", "家庭成員", "家人列表"},
+    "create_household": {"建立家庭", "建立家用群組", "建立家庭群組"},
+    "household_invite_code": {"取得家庭邀請碼", "家庭邀請碼", "取得邀請碼"},
+    "join_household": {"加入家庭", "加入家庭群組"},
+    "set_display_name": {"設定我的名稱", "設定暱稱", "修改我的名稱", "修改暱稱"},
+    "leave_household": {"離開家庭", "退出家庭"},
+    "computer_dashboard_guide": {"實體電腦Dashboard操作模式", "電腦Dashboard設定", "Kiosk說明", "外接螢幕設定說明"},
     "departure_left": {"已經出門了"},
     "departure_need_5": {"我還需要五分鐘", "還需要五分鐘"},
 }
@@ -204,6 +245,8 @@ READY_MENU_TEXT = (
     "今天通勤建議\n"
     "取得 Dashboard 連結\n"
     "取得家庭 Dashboard 連結\n"
+    "家庭成員管理\n"
+    "電腦 Dashboard 設定\n"
     "明天幾點出門\n"
     "修改明天到公司時間\n"
     "重新設定\n"
@@ -258,6 +301,85 @@ def format_schedule_text(profile, today_date, today_override, tomorrow_date, tom
         f"📍 今天：{today_status}\n"
         f"📅 明天：{tomorrow_status}\n\n"
         "可用下方按鈕快速修改。"
+    )
+
+
+SCHEDULE_PENDING_FIELDS = {"active_weekdays", "custom_active_weekdays"}
+
+
+def is_schedule_setup_pending(profile) -> bool:
+    return getattr(profile, "pending_field", None) in SCHEDULE_PENDING_FIELDS
+
+
+def schedule_setup_prompt() -> str:
+    return (
+        "最後一步：請設定哪些日子要啟用通勤提醒。\n"
+        "可用下方按鈕選「平日、每天、週末」，也可以按「自訂星期」後輸入例如：週一週三週五。"
+    )
+
+
+def custom_schedule_prompt() -> str:
+    return (
+        "請輸入要固定啟用的星期。\n"
+        "範例：週一週三週五、週二週四、1,3,5。\n"
+        "若要指定某一天臨時休息或啟用，請回到「查看排程設定」後用日期按鈕選擇。"
+    )
+
+
+def schedule_saved_text(profile, was_setup: bool = False) -> str:
+    text = f"已設定固定排程：{schedule_label(profile.active_weekdays)}。"
+    if was_setup:
+        text += "\n\n初始設定完成，可以開始使用通勤建議與自動提醒。"
+    return text
+
+
+def parse_line_date(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def extract_command_value(user_text: str, aliases: set[str]) -> str | None:
+    stripped = (user_text or "").strip()
+    for alias in sorted(aliases, key=len, reverse=True):
+        if stripped.startswith(alias):
+            return stripped[len(alias):].strip(" ：:")
+    return None
+
+
+def format_household_management_text(db, user) -> str:
+    household_id = get_household_id_for_user(user)
+    members = get_users_for_household(db, household_id)
+    member_lines = []
+    for member in members:
+        name = member.display_name or f"成員 {member.id}"
+        suffix = "（你）" if member.id == user.id else ""
+        member_lines.append(f"- {name}{suffix}")
+    members_text = "\n".join(member_lines) if member_lines else "- 目前只有你"
+    return (
+        "家庭成員管理：\n"
+        f"家庭邀請碼：{household_id}\n"
+        f"目前成員：\n{members_text}\n\n"
+        "可傳送：\n"
+        "設定我的名稱 小明\n"
+        "取得家庭邀請碼\n"
+        "加入家庭 邀請碼\n"
+        "取得家庭Dashboard連結"
+    )
+
+
+def format_computer_dashboard_guide(dashboard_url: str, household_url: str) -> str:
+    return (
+        "實體電腦 Dashboard 操作模式：\n"
+        "1. 在要接外接螢幕的電腦打開家庭 Dashboard 連結。\n"
+        f"{household_url}\n"
+        "2. 全螢幕 Kiosk：Windows 可用 F11；若要固定成看板，Chrome 捷徑目標加上 --kiosk \"連結\"。macOS 可用 Chrome 全螢幕，或用指令 open -na \"Google Chrome\" --args --kiosk \"連結\"。\n"
+        "3. 自動開機打開：Windows 把該捷徑放到 shell:startup。macOS 用「登入項目」加入 Chrome 或 Automator App。\n\n"
+        "個人 Dashboard 連結：\n"
+        f"{dashboard_url}"
     )
 
 
@@ -373,6 +495,7 @@ async def line_webhook(
                 postback_parts = parse_qs(postback_data)
                 postback_action = (postback_parts.get("action") or [""])[0]
                 postback_choice = (postback_parts.get("choice") or [""])[0]
+                postback_date = params.get("date") if isinstance(params, dict) else getattr(params, "date", None)
                 if postback_action == "departure_check":
                     if postback_choice == "left":
                         confirm_departure_for_user(db, user.id, today_date)
@@ -391,15 +514,47 @@ async def line_webhook(
                         )
                         continue
 
+                if postback_action in {"pause_date", "enable_date"}:
+                    selected_date = parse_line_date(postback_date)
+                    if selected_date is None:
+                        await reply_with_quick_reply(reply_token, "日期格式讀取失敗，請再選一次。", SCHEDULE_QUICK_REPLIES)
+                        continue
+
+                    disabled = postback_action == "pause_date"
+                    set_commute_disabled_for_date(db, user.id, selected_date, disabled)
+                    if selected_date == today_date:
+                        clear_today_reminder_state_for_user(user.id)
+                    status_text = "休息" if disabled else "啟用"
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已設定 {selected_date.strftime('%Y-%m-%d')} {status_text}。",
+                        SCHEDULE_QUICK_REPLIES,
+                    )
+                    continue
+
                 if postback_data == "action=set_preferred_arrival_time" and time_value:
+                    profile_before = get_profile(db, user.id)
+                    was_initial_arrival = (
+                        profile_before.pending_field == "preferred_arrival_time"
+                        or get_next_setup_step(profile_before) == "preferred_arrival_time"
+                    )
                     update_profile_field(db, user.id, "preferred_arrival_time", time_value)
                     clear_today_reminder_state_for_user(user.id)
-                    set_pending_field(db, user.id, None)
                     try:
                         await freeze_today_reminder_payload(db, user.id, today_date)
                     except Exception as e:
                         print(f"[freeze-postback-preferred] error={e}")
                     updated_profile = get_profile(db, user.id)
+                    if was_initial_arrival:
+                        set_pending_field(db, user.id, "active_weekdays")
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"已設定固定到公司時間：{time_value}\n\n{schedule_setup_prompt()}",
+                            SCHEDULE_SETUP_QUICK_REPLIES,
+                        )
+                        continue
+
+                    set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(
                         reply_token,
                         f"已更新固定到公司時間：{time_value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
@@ -542,6 +697,25 @@ async def line_webhook(
                     continue
             # ===========================================================
 
+            if is_schedule_setup_pending(_profile_for_guard):
+                schedule_commands = (
+                    COMMAND_ALIASES["schedule_workdays"]
+                    | COMMAND_ALIASES["schedule_everyday"]
+                    | COMMAND_ALIASES["schedule_weekend"]
+                    | COMMAND_ALIASES["schedule_none"]
+                    | COMMAND_ALIASES["schedule_custom"]
+                    | COMMAND_ALIASES["reset"]
+                    | COMMAND_ALIASES["dashboard_link"]
+                    | COMMAND_ALIASES["household_dashboard_link"]
+                )
+                if command_text not in schedule_commands and parse_custom_weekdays(user_text) is None:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        schedule_setup_prompt(),
+                        SCHEDULE_SETUP_QUICK_REPLIES,
+                    )
+                    continue
+
             if command_text in {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}:
                 profile = get_profile(db, user.id)
                 next_step = get_next_setup_step(profile)
@@ -606,11 +780,13 @@ async def line_webhook(
                     reply_token,
                     "外接螢幕看板連結：\n"
                     f"{dashboard_url}\n\n"
-                    "在要顯示的螢幕上打開這個網址，並把瀏覽器切成全螢幕即可。",
+                    "在要顯示的螢幕上打開這個網址，並把瀏覽器切成全螢幕即可。\n"
+                    "若要設定開機自動打開，請傳送「電腦 Dashboard 設定」。",
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["household_dashboard_link"]:
+                user = ensure_personal_household(db, user.id)
                 household_url = build_household_dashboard_view_url(
                     household_id=get_household_id_for_user(user),
                     public_url=PUBLIC_URL,
@@ -620,7 +796,103 @@ async def line_webhook(
                     reply_token,
                     "家庭外接螢幕看板連結：\n"
                     f"{household_url}\n\n"
-                    "家人都加入這個 LINE Bot 後，這個看板會一起顯示每位成員的出門狀態。",
+                    "家人都加入這個 LINE Bot 後，這個看板會一起顯示每位成員的出門狀態。\n"
+                    "若要設定開機自動打開，請傳送「電腦 Dashboard 設定」。",
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["computer_dashboard_guide"]:
+                user = ensure_personal_household(db, user.id)
+                dashboard_url = build_dashboard_view_url(
+                    user_id=user.id,
+                    public_url=PUBLIC_URL,
+                    request_base_url=str(request.base_url),
+                )
+                household_url = build_household_dashboard_view_url(
+                    household_id=get_household_id_for_user(user),
+                    public_url=PUBLIC_URL,
+                    request_base_url=str(request.base_url),
+                )
+                await reply_text(reply_token, format_computer_dashboard_guide(dashboard_url, household_url))
+                continue
+
+            join_household_value = extract_command_value(user_text, COMMAND_ALIASES["join_household"])
+            if join_household_value:
+                updated_user = set_user_household_id(db, user.id, join_household_value)
+                user = updated_user
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已加入家庭：{get_household_id_for_user(user)}。\n可用家庭 Dashboard 看板一起顯示成員狀態。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            display_name_value = extract_command_value(user_text, COMMAND_ALIASES["set_display_name"])
+            if display_name_value:
+                updated_user = set_user_display_name(db, user.id, display_name_value)
+                user = updated_user
+                set_pending_field(db, user.id, None)
+                display_name = user.display_name or f"成員 {user.id}"
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已更新你的家庭看板名稱：{display_name}。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["household_management"]:
+                user = ensure_personal_household(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_household_management_text(db, user),
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["view_household_members"]:
+                user = ensure_personal_household(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_household_management_text(db, user),
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["create_household"]:
+                user = ensure_personal_household(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已建立家庭。\n家庭邀請碼：{get_household_id_for_user(user)}\n請家人傳送「加入家庭 {get_household_id_for_user(user)}」。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["household_invite_code"]:
+                user = ensure_personal_household(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"家庭邀請碼：{get_household_id_for_user(user)}\n請家人傳送「加入家庭 {get_household_id_for_user(user)}」。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["join_household"]:
+                set_pending_field(db, user.id, "household_join_code")
+                await reply_text(reply_token, "請輸入家庭邀請碼，或直接傳送：加入家庭 邀請碼")
+                continue
+
+            if command_text in COMMAND_ALIASES["set_display_name"]:
+                set_pending_field(db, user.id, "display_name")
+                await reply_text(reply_token, "請輸入要顯示在家庭 Dashboard 上的名稱，例如：設定我的名稱 小明")
+                continue
+
+            if command_text in COMMAND_ALIASES["leave_household"]:
+                user = set_user_household_id(db, user.id, f"family-{user.id}")
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已離開原本家庭，現在你的個人家庭邀請碼是：{get_household_id_for_user(user)}。",
+                    HOUSEHOLD_QUICK_REPLIES,
                 )
                 continue
 
@@ -653,38 +925,59 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_workdays"]:
+                was_setup_schedule = is_schedule_setup_pending(get_profile(db, user.id))
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("workdays"))
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
-                    SCHEDULE_QUICK_REPLIES,
+                    schedule_saved_text(profile, was_setup_schedule),
+                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_everyday"]:
+                was_setup_schedule = is_schedule_setup_pending(get_profile(db, user.id))
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("everyday"))
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
-                    SCHEDULE_QUICK_REPLIES,
+                    schedule_saved_text(profile, was_setup_schedule),
+                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_weekend"]:
+                was_setup_schedule = is_schedule_setup_pending(get_profile(db, user.id))
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("weekend"))
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
-                    SCHEDULE_QUICK_REPLIES,
+                    schedule_saved_text(profile, was_setup_schedule),
+                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_none"]:
+                was_setup_schedule = is_schedule_setup_pending(get_profile(db, user.id))
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("none"))
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已設定固定排程：{schedule_label(profile.active_weekdays)}。",
-                    SCHEDULE_QUICK_REPLIES,
+                    schedule_saved_text(profile, was_setup_schedule),
+                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["schedule_custom"]:
+                set_pending_field(db, user.id, "custom_active_weekdays")
+                await reply_with_quick_reply(
+                    reply_token,
+                    custom_schedule_prompt(),
+                    CUSTOM_SCHEDULE_QUICK_REPLIES,
                 )
                 continue
 
@@ -923,6 +1216,50 @@ async def line_webhook(
             profile = get_profile(db, user.id)
             current_step = profile.pending_field or get_next_setup_step(profile)
 
+            if current_step == "household_join_code":
+                household_code = normalize_household_id(user_text)
+                user = set_user_household_id(db, user.id, household_code)
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已加入家庭：{get_household_id_for_user(user)}。\n可用家庭 Dashboard 看板一起顯示成員狀態。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if current_step == "display_name":
+                user = set_user_display_name(db, user.id, user_text)
+                set_pending_field(db, user.id, None)
+                display_name = user.display_name or f"成員 {user.id}"
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已更新你的家庭看板名稱：{display_name}。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            if current_step in SCHEDULE_PENDING_FIELDS:
+                weekdays = parse_custom_weekdays(user_text)
+                if weekdays is None:
+                    set_pending_field(db, user.id, "custom_active_weekdays")
+                    await reply_with_quick_reply(
+                        reply_token,
+                        custom_schedule_prompt(),
+                        CUSTOM_SCHEDULE_QUICK_REPLIES,
+                    )
+                    continue
+
+                was_setup_schedule = is_schedule_setup_pending(profile)
+                profile = set_active_weekdays(db, user.id, weekdays)
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    schedule_saved_text(profile, was_setup_schedule),
+                    MAIN_MENU_QUICK_REPLIES if was_setup_schedule else SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
             if current_step in {"home_location", "office_location"}:
                 typed_address = user_text.strip()
                 if not typed_address:
@@ -1007,9 +1344,12 @@ async def line_webhook(
                     )
                     continue
 
+                was_initial_arrival = (
+                    profile.pending_field == "preferred_arrival_time"
+                    or get_next_setup_step(profile) == "preferred_arrival_time"
+                )
                 update_profile_field(db, user.id, "preferred_arrival_time", value)
                 clear_today_reminder_state_for_user(user.id)
-                set_pending_field(db, user.id, None)
 
                 try:
                     await freeze_today_reminder_payload(db, user.id, today_date)
@@ -1017,6 +1357,16 @@ async def line_webhook(
                     print(f"[freeze-preferred-arrival] error={e}")
 
                 updated_profile = get_profile(db, user.id)
+                if was_initial_arrival:
+                    set_pending_field(db, user.id, "active_weekdays")
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已設定固定到公司時間：{value}\n\n{schedule_setup_prompt()}",
+                        SCHEDULE_SETUP_QUICK_REPLIES,
+                    )
+                    continue
+
+                set_pending_field(db, user.id, None)
                 await reply_with_quick_reply(
                     reply_token,
                     f"已更新固定到公司時間：{value}\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
