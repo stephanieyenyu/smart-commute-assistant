@@ -132,6 +132,11 @@ COMMUTE_RESULT_QUICK_REPLIES = [
     {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
 ]
 
+REMINDER_SETTING_QUICK_REPLIES = [
+    {"type": "message", "label": "✅ 開啟自動提醒", "text": "開啟自動提醒"},
+    {"type": "message", "label": "⏸ 關閉自動提醒", "text": "關閉自動提醒"},
+]
+
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷",
     "auto": "自動判斷",
@@ -529,7 +534,7 @@ async def line_webhook(
                 )
                 await reply_text(
                     reply_token,
-                    "外接螢幕 Dashboard 連結：\n"
+                    "外接螢幕看板連結：\n"
                     f"{dashboard_url}\n\n"
                     "在要顯示的螢幕上打開這個網址，並把瀏覽器切成全螢幕即可。",
                 )
@@ -547,7 +552,11 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["view_reminder_setting"]:
                 profile = get_profile(db, user.id)
-                await reply_text(reply_token, f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}")
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}\n可用下方按鈕切換。",
+                    REMINDER_SETTING_QUICK_REPLIES,
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["set_mode_auto"]:

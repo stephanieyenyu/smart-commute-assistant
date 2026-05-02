@@ -4,7 +4,7 @@ def render_dashboard_html(user_id: int) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Smart Commute Dashboard</title>
+  <title>通勤提醒看板</title>
   <style>
     :root {{
       --bg: #090909;
@@ -222,40 +222,40 @@ def render_dashboard_html(user_id: int) -> str:
     <header class="topbar">
       <div class="brand">
         <span class="status-dot" aria-hidden="true"></span>
-        <div class="title">Smart Commute Dashboard</div>
+        <div class="title">通勤提醒看板</div>
       </div>
       <div id="clock" class="clock">--:--:--</div>
     </header>
 
     <section class="main">
       <div class="hero">
-        <div id="stateLabel" class="state-label">載入中</div>
+        <div id="stateLabel" class="state-label">正在準備</div>
         <div id="countdown" class="countdown">--</div>
-        <div id="countdownCaption" class="countdown-caption">正在取得通勤狀態</div>
+        <div id="countdownCaption" class="countdown-caption">正在整理今天的通勤資訊</div>
       </div>
 
       <div class="details">
         <section class="band">
-          <div class="label">建議出門</div>
+          <div class="label">該出門的時間</div>
           <div id="departure" class="value">--:--</div>
         </section>
         <section class="band">
-          <div class="label">目標抵達</div>
+          <div class="label">想抵達的時間</div>
           <div id="arrival" class="value">--:--</div>
         </section>
         <section class="band">
-          <div class="label">通勤方式</div>
+          <div class="label">今天怎麼去</div>
           <div id="transport" class="value transport">尚無資料</div>
         </section>
         <section class="band">
-          <div class="label">天氣</div>
+          <div class="label">出門天氣</div>
           <div id="weather" class="value">--</div>
         </section>
       </div>
     </section>
 
     <footer class="footer">
-      <span id="connection">連線中</span>
+      <span id="connection">正在更新</span>
       <span id="updatedAt">尚未更新</span>
     </footer>
   </main>
@@ -275,11 +275,11 @@ def render_dashboard_html(user_id: int) -> str:
     const clock = document.getElementById("clock");
 
     const stateLabels = {{
-      safe: "正常",
-      warning: "準備出門",
-      urgent: "立刻出門",
-      degraded: "離線預估",
-      error: "需要設定"
+      safe: "時間還很充裕",
+      warning: "可以準備出門了",
+      urgent: "現在就出門",
+      degraded: "資料暫時不穩",
+      error: "先完成設定"
     }};
 
     let latestPayload = null;
@@ -323,20 +323,20 @@ def render_dashboard_html(user_id: int) -> str:
 
       if (!payload.ok) {{
         countdown.textContent = "--";
-        countdownCaption.textContent = payload.next_step ? "請先完成 LINE 初始設定" : "暫時無法建立通勤狀態";
+        countdownCaption.textContent = payload.next_step ? "請先在 LINE 完成基本設定" : "暫時抓不到今天的通勤資訊";
         departure.textContent = "--:--";
         arrival.textContent = "--:--";
-        transport.textContent = payload.reason || "尚無資料";
+        transport.textContent = payload.reason || "還沒有可顯示的資料";
         weather.textContent = "--";
-        updatedAt.textContent = "更新失敗";
+        updatedAt.textContent = "這次更新沒有成功";
         return;
       }}
 
       countdown.textContent = formatCountdown(payload.seconds_until_departure);
-      countdownCaption.textContent = payload.seconds_until_departure <= 0 ? "已到建議出門時間" : "距離建議出門";
+      countdownCaption.textContent = payload.seconds_until_departure <= 0 ? "已經到出門時間" : "距離該出門還有";
       departure.textContent = payload.departure_time || "--:--";
       arrival.textContent = payload.target_arrival_time || "--:--";
-      transport.textContent = payload.transport_line || "尚無通勤方式";
+      transport.textContent = payload.transport_line || "還沒有通勤建議";
       weather.textContent = formatWeather(payload.weather);
       updatedAt.textContent = payload.updated_at ? `更新 ${{new Date(payload.updated_at).toLocaleTimeString("zh-TW", {{ hour12: false }})}}` : "尚未更新";
     }}
@@ -345,9 +345,9 @@ def render_dashboard_html(user_id: int) -> str:
       try {{
         const response = await fetch(`/api/v1/dashboard/status/${{userId}}`, {{ cache: "no-store" }});
         render(await response.json());
-        connection.textContent = ws && ws.readyState === WebSocket.OPEN ? "WebSocket 即時更新" : "REST 輪詢更新";
+        connection.textContent = ws && ws.readyState === WebSocket.OPEN ? "即時更新中" : "定時更新中";
       }} catch (error) {{
-        connection.textContent = "連線中斷，正在重試";
+        connection.textContent = "連線不穩，正在重試";
       }}
     }}
 
@@ -355,17 +355,17 @@ def render_dashboard_html(user_id: int) -> str:
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${{protocol}}://${{window.location.host}}/api/v1/dashboard/ws/${{userId}}`);
       ws.onopen = () => {{
-        connection.textContent = "WebSocket 即時更新";
+        connection.textContent = "即時更新中";
       }};
       ws.onmessage = (event) => {{
         render(JSON.parse(event.data));
       }};
       ws.onclose = () => {{
-        connection.textContent = "WebSocket 已斷線，使用輪詢";
+        connection.textContent = "即時連線中斷，改用定時更新";
         setTimeout(connectWebSocket, 5000);
       }};
       ws.onerror = () => {{
-        connection.textContent = "WebSocket 異常，使用輪詢";
+        connection.textContent = "即時連線不穩，改用定時更新";
         ws.close();
       }};
     }}

@@ -101,7 +101,9 @@ class Phase5DashboardTests(unittest.TestCase):
         page = load_module("dashboard_page_under_test", "backend/app/dashboard_page.py")
         html = page.render_dashboard_html(7)
 
-        self.assertIn("Smart Commute Dashboard", html)
+        self.assertIn("通勤提醒看板", html)
+        self.assertIn("時間還很充裕", html)
+        self.assertIn("即時更新中", html)
         self.assertIn("/api/v1/dashboard/status/${userId}", html)
         self.assertIn("/api/v1/dashboard/ws/${userId}", html)
         self.assertIn("const userId = 7", html)
@@ -134,7 +136,15 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('"dashboard_link"', webhook_py)
         self.assertIn("取得Dashboard連結", webhook_py)
         self.assertIn("build_dashboard_view_url", webhook_py)
-        self.assertIn("外接螢幕 Dashboard 連結", webhook_py)
+        self.assertIn("外接螢幕看板連結", webhook_py)
+
+    def test_reminder_settings_reply_has_toggle_quick_replies(self):
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+
+        self.assertIn("REMINDER_SETTING_QUICK_REPLIES", webhook_py)
+        self.assertIn("✅ 開啟自動提醒", webhook_py)
+        self.assertIn("⏸ 關閉自動提醒", webhook_py)
+        self.assertIn("可用下方按鈕切換", webhook_py)
 
 
 if __name__ == "__main__":
