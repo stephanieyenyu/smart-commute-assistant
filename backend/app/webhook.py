@@ -151,7 +151,7 @@ COMMAND_ALIASES = {
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
     "dashboard_link": {"取得Dashboard連結", "取得dashboard連結", "Dashboard連結", "dashboard連結", "取得儀表板連結"},
     "tomorrow_departure": {"明天幾點出門"},
-    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間"},
+    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間"},
     "edit_tomorrow_arrival": {"修改明天到公司時間"},
     "reset": {"重新設定"},
     "send_home_location": {"傳送住家位置", "設定住家位置"},
