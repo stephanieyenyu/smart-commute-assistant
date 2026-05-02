@@ -186,5 +186,17 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("可用下方按鈕切換", webhook_py)
 
 
+    def test_line_replies_have_persistent_commute_quick_replies(self):
+        line_client_py = self.read_repo_file("backend/app/line_client.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+
+        self.assertIn("PERSISTENT_QUICK_REPLIES", line_client_py)
+        self.assertIn('"label": "今日通勤建議"', line_client_py)
+        self.assertIn('"label": "修改出門時間"', line_client_py)
+        self.assertIn("with_persistent_quick_replies(items)", line_client_py)
+        self.assertIn("with_persistent_quick_replies([])", line_client_py)
+        self.assertIn("修改出門時間", webhook_py)
+
+
 if __name__ == "__main__":
     unittest.main()

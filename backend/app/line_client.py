@@ -14,6 +14,35 @@ from linebot.v3.messaging import (
 from app.config import LINE_CHANNEL_ACCESS_TOKEN
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+LINE_QUICK_REPLY_LIMIT = 13
+
+PERSISTENT_QUICK_REPLIES = [
+    {"type": "message", "label": "今日通勤建議", "text": "今日通勤建議"},
+    {"type": "message", "label": "修改出門時間", "text": "修改出門時間"},
+]
+
+
+def _quick_reply_identity(item: dict) -> tuple:
+    return (
+        item.get("type"),
+        item.get("label"),
+        item.get("text"),
+        item.get("data"),
+    )
+
+
+def with_persistent_quick_replies(items: list | None) -> list:
+    merged = list(items or [])
+    seen = {_quick_reply_identity(item) for item in merged}
+    for item in PERSISTENT_QUICK_REPLIES:
+        identity = _quick_reply_identity(item)
+        if identity in seen:
+            continue
+        if len(merged) >= LINE_QUICK_REPLY_LIMIT:
+            break
+        merged.append(item)
+        seen.add(identity)
+    return merged
 
 
 def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
@@ -42,12 +71,13 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
 
 
 async def reply_text(reply_token: str, text: str) -> None:
+    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies([]))
     async with AsyncApiClient(configuration) as api_client:
         line_bot_api = AsyncMessagingApi(api_client)
         await line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
-                messages=[TextMessage(text=text)]
+                messages=[TextMessage(text=text, quick_reply=QuickReply(items=quick_reply_items))]
             )
         )
 
@@ -57,7 +87,7 @@ async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> No
 
 
 async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[str], items: list) -> None:
-    quick_reply_items = _build_quick_reply_items(items)
+    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
     messages = []
     for i, t in enumerate(texts):
         # Only the last message can have quick replies attached
@@ -80,18 +110,19 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
 
 
 async def push_text(user_id: str, text: str) -> None:
+    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies([]))
     async with AsyncApiClient(configuration) as api_client:
         line_bot_api = AsyncMessagingApi(api_client)
         await line_bot_api.push_message(
             PushMessageRequest(
                 to=user_id,
-                messages=[TextMessage(text=text)]
+                messages=[TextMessage(text=text, quick_reply=QuickReply(items=quick_reply_items))]
             )
         )
 
 
 async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
-    quick_reply_items = _build_quick_reply_items(items)
+    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
