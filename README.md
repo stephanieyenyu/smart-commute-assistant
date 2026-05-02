@@ -8,7 +8,9 @@ LINE 智慧通勤助理是一個以 FastAPI 為後端核心的個人化通勤決
 - PostgreSQL data model prepared for multi-user SaaS expansion
 - Redis-ready integration layer for caching and fallback
 - LINE webhook entry point
-- Commute decision API for dashboard and testing
+- Commute decision engine with shared route formatter
+- API health logs and commute plan logs prepared for ML feedback
+- Nightly brief, morning watchdog, and departure reminder scheduler
 - Docker Compose local development stack
 
 ## Architecture
@@ -39,7 +41,7 @@ http://localhost:8000/docs
 
 ## Regression and stability tests
 
-Phase 0/1 tests protect the current LINE commute advice, reminder behavior, scheduler ownership, and API fallback logging.
+Phase 0-4 tests protect the current LINE commute advice, reminder behavior, scheduler ownership, API fallback logging, schema alignment, formatter extraction, and proactive notification jobs.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -47,8 +49,7 @@ python -m unittest discover -s tests -v
 
 ## MVP next steps
 
-1. Add Alembic migrations.
-2. Implement TDX, Google Maps and weather clients with timeout, retry and Redis caching.
-3. Replace mock commute data with real API data.
-4. Add LINE Messaging API signature verification and reply/push message handling.
-5. Add scheduled nightly brief and morning watchdog jobs.
+1. Add Dashboard status and WebSocket endpoints.
+2. Build the Next.js/Tailwind dashboard with Safe/Warning/Urgent states.
+3. Add feedback collection for actual arrival time and ML shadow-mode prediction.
+4. Harden multi-user settings, auth, and dynamic worker scheduling.

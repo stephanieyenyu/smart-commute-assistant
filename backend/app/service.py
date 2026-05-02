@@ -15,12 +15,14 @@ from app.tdx_bus import (
     simplify_eta_list,
 )
 from app.weather import get_commute_weather
+from app import route_formatter
 from app.crud import (
     get_profile,
     get_next_setup_step,
     get_override_for_date,
     get_transport_mode_override,
     save_frozen_reminder,
+    record_commute_plan_log,
 )
 
 DEFAULT_COMMUTE_MINUTES = 56
@@ -427,8 +429,8 @@ async def choose_commute_option_with_override(
     metro_available = bool(metro_snapshot and metro_snapshot.get("available"))
     google_detailed = google_detailed or {}
     google_steps = google_detailed.get("steps", []) or []
-    google_bus_step = _select_transit_step(google_steps, "bus")
-    google_metro_step = _select_transit_step(google_steps, "metro")
+    google_bus_step = route_formatter.select_transit_step(google_steps, "bus")
+    google_metro_step = route_formatter.select_transit_step(google_steps, "metro")
     bus_snapshot_with_details = dict(bus_snapshot or {})
     metro_snapshot_with_details = dict(metro_snapshot or {})
     if bus_snapshot_with_details:
@@ -453,7 +455,7 @@ async def choose_commute_option_with_override(
         first_stop = bus_snapshot_dict.get("first_stop", {}) or {}
         walk_minutes = bus_snapshot_dict.get("walk_minutes")
         eta_min = chosen_bus.get("eta_min") if chosen_bus else None
-        bus_label = _bus_route_label(bus_snapshot_with_details)
+        bus_label = route_formatter.bus_route_label(bus_snapshot_with_details)
         if not bus_label and google_bus_step:
             bus_label = google_bus_step.get("line_short_name") or google_bus_step.get("line_name")
         bus_label = bus_label or "公車"
@@ -989,6 +991,21 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     }
 
 
+_normalize_exit_label = route_formatter.normalize_exit_label
+_exit_info_from_steps = route_formatter.exit_info_from_steps
+_is_bus_step = route_formatter.is_bus_step
+_is_metro_step = route_formatter.is_metro_step
+_select_transit_step = route_formatter.select_transit_step
+_bus_route_label = route_formatter.bus_route_label
+_bus_route_options_text = route_formatter.bus_route_options_text
+_metro_line_from_station_ids = route_formatter.metro_line_from_station_ids
+_exit_info_from_snapshot = route_formatter.exit_info_from_snapshot
+_format_transport_line = route_formatter.format_transport_line
+_get_transport_line = route_formatter.get_transport_line
+_format_today_commute_text = route_formatter.format_today_commute_text
+_build_reminder_payload_from_plan = route_formatter.build_reminder_payload_from_plan
+
+
 
 async def build_today_commute_payload(
     db,
@@ -1006,7 +1023,11 @@ async def build_today_commute_payload(
     if not plan.get("ok"):
         return plan
 
-    plan["text"] = _format_today_commute_text(plan, header=header)
+    plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
+    try:
+        record_commute_plan_log(db, user_id, plan)
+    except Exception as e:
+        print(f"[commute-log] skipped user_id={user_id} error={e}")
     return plan
 
 
@@ -1026,7 +1047,7 @@ async def build_today_reminder_payload(
     if not plan.get("ok"):
         return plan
 
-    return _build_reminder_payload_from_plan(plan)
+    return route_formatter.build_reminder_payload_from_plan(plan)
 
 
 async def freeze_today_reminder_payload(

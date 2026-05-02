@@ -1,4 +1,5 @@
-from datetime import datetime
+import hashlib
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,10 +12,12 @@ from app.crud import (
     get_next_setup_step,
     get_override_for_date,
     get_profile,
+    mark_nightly_brief_sent,
     mark_reminder_sent,
+    mark_watchdog_alert_sent,
     clear_today_reminder_state_db,
 )
-from app.service import freeze_today_reminder_payload
+from app.service import build_today_commute_payload, freeze_today_reminder_payload
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -23,12 +26,27 @@ PREPARE_RETRY_SECONDS = 300
 BUS_RECOMPUTE_SECONDS = 60
 METRO_RECOMPUTE_SECONDS = 300
 STALE_REMINDER_GRACE_SECONDS = 120
+MORNING_WATCHDOG_LOOKAHEAD_HOURS = 2
+WATCHDOG_DEPARTURE_WARNING_SECONDS = 15 * 60
 
 # Quick Reply buttons shown after departure reminder push
 REMINDER_QUICK_REPLIES = [
     {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
     {"type": "message", "label": "🚇 今天搭捷運",    "text": "今天搭捷運"},
+    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
+]
+
+NIGHTLY_BRIEF_QUICK_REPLIES = [
+    {"type": "datetimepicker", "label": "⏰ 修改明日時間", "data": "action=set_tomorrow_arrival_time", "mode": "time"},
+    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
+    {"type": "message", "label": "🚇 明天幾點出門", "text": "明天幾點出門"},
+]
+
+WATCHDOG_QUICK_REPLIES = [
+    {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
+    {"type": "message", "label": "🚌 今天搭公車", "text": "今天搭公車"},
+    {"type": "message", "label": "🚇 今天搭捷運", "text": "今天搭捷運"},
     {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
 ]
 
@@ -45,6 +63,26 @@ def hhmm_to_seconds(hhmm: str) -> int:
 def current_seconds_of_day() -> int:
     now = now_taipei()
     return now.hour * 3600 + now.minute * 60 + now.second
+
+
+def _parse_hhmm_for_date(target_date, hhmm: str) -> datetime | None:
+    try:
+        parsed = datetime.strptime(hhmm, "%H:%M").time()
+    except (TypeError, ValueError):
+        return None
+    return datetime.combine(target_date, parsed, tzinfo=TAIPEI_TZ)
+
+
+def _effective_arrival_time_for_profile(db, profile, target_date) -> str | None:
+    override = get_override_for_date(db, profile.user_id, target_date)
+    if override and override.target_arrival_time:
+        return override.target_arrival_time
+    return profile.preferred_arrival_time
+
+
+def _hash_notification_key(*parts) -> str:
+    raw = "|".join("" if part is None else str(part) for part in parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
 def _seconds_since(now_dt: datetime, previous_dt: datetime | None) -> float | None:
@@ -193,6 +231,140 @@ async def check_and_send_departure_reminders():
         db.close()
 
 
+async def send_nightly_briefs():
+    db = SessionLocal()
+    try:
+        now_dt = now_taipei()
+        tomorrow = now_dt.date() + timedelta(days=1)
+
+        for profile in get_all_profiles(db):
+            try:
+                if not getattr(profile, "reminder_enabled", True):
+                    continue
+                if get_next_setup_step(profile) is not None:
+                    continue
+
+                user = db.query(User).filter(User.id == profile.user_id).first()
+                if not user or not user.line_user_id:
+                    continue
+
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=tomorrow,
+                    force_mode_override=None,
+                    header="🌙 明日通勤預報：",
+                )
+                if not payload.get("ok"):
+                    continue
+
+                plan_key = _hash_notification_key(
+                    "nightly",
+                    tomorrow.isoformat(),
+                    payload.get("effective_arrival_time"),
+                    payload.get("final_departure_time"),
+                    payload.get("recommended_mode"),
+                    payload.get("text"),
+                )
+                override = get_override_for_date(db, user.id, tomorrow)
+                if override and override.nightly_brief_plan_key == plan_key:
+                    continue
+
+                text = (
+                    f"{payload['text']}\n\n"
+                    "可用下方按鈕修改明日到公司時間。"
+                )
+                await push_with_quick_reply(user.line_user_id, text, NIGHTLY_BRIEF_QUICK_REPLIES)
+                mark_nightly_brief_sent(db, user.id, tomorrow, plan_key, now_dt)
+                print(f"[nightly-brief] sent user_id={user.id} target_date={tomorrow.isoformat()}")
+            except Exception as e:
+                import traceback
+                print(f"[nightly-brief] failed user_id={getattr(profile, 'user_id', None)} error={e}")
+                print(traceback.format_exc())
+    finally:
+        db.close()
+
+
+async def run_morning_watchdog():
+    db = SessionLocal()
+    try:
+        now_dt = now_taipei()
+        today = now_dt.date()
+
+        for profile in get_all_profiles(db):
+            try:
+                if not getattr(profile, "reminder_enabled", True):
+                    continue
+                if get_next_setup_step(profile) is not None:
+                    continue
+
+                effective_arrival_time = _effective_arrival_time_for_profile(db, profile, today)
+                arrival_dt = _parse_hhmm_for_date(today, effective_arrival_time)
+                if arrival_dt is None:
+                    continue
+                if not (arrival_dt - timedelta(hours=MORNING_WATCHDOG_LOOKAHEAD_HOURS) <= now_dt <= arrival_dt):
+                    continue
+
+                user = db.query(User).filter(User.id == profile.user_id).first()
+                if not user or not user.line_user_id:
+                    continue
+
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=today,
+                    force_mode_override=None,
+                    header="⚠️ 早晨通勤監控：",
+                )
+                if not payload.get("ok"):
+                    continue
+
+                departure_sec = hhmm_to_seconds(payload["final_departure_time"])
+                seconds_until_departure = departure_sec - current_seconds_of_day()
+                weather_buffer = payload.get("weather_buffer") or 0
+                recommended_mode = payload.get("recommended_mode")
+                mode_override = payload.get("mode_override") or "auto"
+                should_alert = (
+                    weather_buffer > 0
+                    or 0 <= seconds_until_departure <= WATCHDOG_DEPARTURE_WARNING_SECONDS
+                    or (mode_override == "auto" and recommended_mode == "metro")
+                )
+                if not should_alert:
+                    continue
+
+                alert_key = _hash_notification_key(
+                    "watchdog",
+                    today.isoformat(),
+                    payload.get("effective_arrival_time"),
+                    payload.get("final_departure_time"),
+                    recommended_mode,
+                    weather_buffer,
+                    payload.get("text"),
+                )
+                override = get_override_for_date(db, user.id, today)
+                if override and override.watchdog_alert_key == alert_key:
+                    continue
+
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today, plan=payload)
+                except Exception as e:
+                    print(f"[watchdog] freeze skipped user_id={user.id} error={e}")
+
+                text = (
+                    f"{payload['text']}\n\n"
+                    "系統已更新今天的出門提醒，會持續監控即時交通與天氣。"
+                )
+                await push_with_quick_reply(user.line_user_id, text, WATCHDOG_QUICK_REPLIES)
+                mark_watchdog_alert_sent(db, user.id, today, alert_key, now_dt)
+                print(f"[watchdog] sent user_id={user.id} target_date={today.isoformat()}")
+            except Exception as e:
+                import traceback
+                print(f"[watchdog] failed user_id={getattr(profile, 'user_id', None)} error={e}")
+                print(traceback.format_exc())
+    finally:
+        db.close()
+
+
 def start_reminder_scheduler():
     if scheduler.running:
         return
@@ -202,6 +374,21 @@ def start_reminder_scheduler():
         "interval",
         seconds=10,
         id="departure_reminder_job",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_nightly_briefs,
+        "cron",
+        hour=21,
+        minute=0,
+        id="nightly_brief_job",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_morning_watchdog,
+        "interval",
+        minutes=5,
+        id="morning_watchdog_job",
         replace_existing=True,
     )
     scheduler.start()

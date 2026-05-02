@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 
-from app.db import Base, engine
+from app.db import engine
 from app.webhook import router as webhook_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
+from app.schema_guard import ensure_runtime_schema
 
 from contextlib import asynccontextmanager
 
-Base.metadata.create_all(bind=engine)
+ensure_runtime_schema(engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

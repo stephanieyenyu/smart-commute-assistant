@@ -14,10 +14,17 @@ celery_app.conf.update(
     timezone="Asia/Taipei",
     enable_utc=False,
     beat_schedule={
-        "check_commutes_every_5_mins": {
-            "task": "app.tasks.check_all_commutes",
-            # Run every 5 minutes from 6 AM to 10 AM every day
-            "schedule": crontab(minute="*/5", hour="6-10"),
-        }
+        "check_departure_reminders": {
+            "task": "app.tasks.check_departure_reminders",
+            "schedule": 10.0,
+        },
+        "send_nightly_briefs": {
+            "task": "app.tasks.send_nightly_briefs",
+            "schedule": crontab(minute=0, hour=21),
+        },
+        "run_morning_watchdog": {
+            "task": "app.tasks.run_morning_watchdog",
+            "schedule": crontab(minute="*/5"),
+        },
     }
 )

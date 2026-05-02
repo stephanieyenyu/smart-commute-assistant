@@ -6,6 +6,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -20,10 +21,13 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     line_user_id = Column(String, unique=True, index=True, nullable=False)
+    display_name = Column(String, nullable=True)
+    role = Column(String, nullable=False, default="user")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
+    logs = relationship("CommuteLog", back_populates="user", cascade="all, delete-orphan")
 
 
 class CommuteProfile(Base):
@@ -62,6 +66,8 @@ class CommuteProfile(Base):
 
     preferred_arrival_time = Column(String, nullable=True)
     preferred_mode = Column(String, nullable=True)
+    transport_preference = Column(JSON, nullable=True)
+    max_walk_mins = Column(Integer, nullable=True)
     pending_field = Column(String, nullable=True)
     reminder_enabled = Column(Boolean, nullable=False, default=True)
 
@@ -92,6 +98,12 @@ class CommuteOverride(Base):
     last_sent_plan_key = Column(String, nullable=True)
     last_sent_at = Column(DateTime(timezone=True), nullable=True)
 
+    nightly_brief_plan_key = Column(String, nullable=True)
+    nightly_brief_sent_at = Column(DateTime(timezone=True), nullable=True)
+
+    watchdog_alert_key = Column(String, nullable=True)
+    watchdog_alert_sent_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -113,6 +125,10 @@ class CommuteLog(Base):
     
     suggested_transport = Column(String, nullable=True)
     actual_transport = Column(String, nullable=True)
+    selection_source = Column(String, nullable=True)
+    recommended_mode = Column(String, nullable=True)
+    risk_score = Column(Float, nullable=True)
+    weather_buffer_minutes = Column(Integer, nullable=True)
     
     weather_condition = Column(String, nullable=True)
     rain_prob = Column(Integer, nullable=True)
@@ -123,6 +139,9 @@ class CommuteLog(Base):
     
     actual_arrival_time = Column(String, nullable=True)
     is_late = Column(Boolean, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="logs")
 
 
 class ApiHealthLog(Base):
