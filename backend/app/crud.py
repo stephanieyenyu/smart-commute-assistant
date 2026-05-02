@@ -66,6 +66,46 @@ def get_household_id_for_user(user: User | None) -> str:
     return user.household_id or "default"
 
 
+def normalize_household_id(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return "default"
+    normalized = "".join(ch for ch in raw if ch.isalnum() or ch in {"-", "_"})
+    return (normalized[:32] or "default").lower()
+
+
+def set_user_household_id(db: Session, user_id: int, household_id: str) -> User:
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise ValueError("user not found")
+    user.household_id = normalize_household_id(household_id)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def ensure_personal_household(db: Session, user_id: int) -> User:
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise ValueError("user not found")
+    if get_household_id_for_user(user) == "default":
+        user.household_id = normalize_household_id(f"family-{user.id}")
+        db.commit()
+        db.refresh(user)
+    return user
+
+
+def set_user_display_name(db: Session, user_id: int, display_name: str) -> User:
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise ValueError("user not found")
+    name = (display_name or "").strip()
+    user.display_name = name[:30] if name else None
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def get_users_for_household(db: Session, household_id: str = "default") -> list[User]:
     household_id = (household_id or "default").strip() or "default"
     query = db.query(User)
@@ -183,6 +223,7 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile.preferred_arrival_time = None
     profile.pending_field = "home_location"
     profile.reminder_enabled = True
+    profile.active_weekdays = None
 
     db.commit()
     db.refresh(profile)

@@ -236,6 +236,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertFalse(schedule.commute_date_is_active(profile, date(2026, 5, 2), None))
         self.assertFalse(schedule.commute_date_is_active(profile, date(2026, 5, 1), disabled_override))
         self.assertTrue(schedule.commute_date_is_active(profile, date(2026, 5, 2), enabled_override))
+        self.assertEqual(schedule.parse_custom_weekdays("週一週三週五"), [0, 2, 4])
+        self.assertEqual(schedule.parse_custom_weekdays("1,3,5"), [0, 2, 4])
+        self.assertEqual(schedule.parse_custom_weekdays("週六週日"), [5, 6])
         should_sleep, sleep_until = schedule.dashboard_should_sleep(
             datetime(2026, 5, 1, 20, 0, 0),
             date(2026, 5, 2),
@@ -273,11 +276,41 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('"view_schedule_setting"', webhook_py)
         self.assertIn('"schedule_workdays"', webhook_py)
         self.assertIn('"pause_today"', webhook_py)
+        self.assertIn('"schedule_custom"', webhook_py)
+        self.assertIn("SCHEDULE_SETUP_QUICK_REPLIES", webhook_py)
+        self.assertIn("CUSTOM_SCHEDULE_QUICK_REPLIES", webhook_py)
+        self.assertIn("parse_custom_weekdays", webhook_py)
+        self.assertIn("action=pause_date", webhook_py)
+        self.assertIn("action=enable_date", webhook_py)
+        self.assertIn('set_pending_field(db, user.id, "active_weekdays")', webhook_py)
         self.assertIn("set_active_weekdays", webhook_py)
         self.assertIn("set_commute_disabled_for_date", webhook_py)
         self.assertIn("commute_date_is_active", scheduler_py)
         self.assertIn("MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8", scheduler_py)
 
+    def test_household_management_and_computer_kiosk_guides_are_wired(self):
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        crud_py = self.read_repo_file("backend/app/crud.py")
+        readme = self.read_repo_file("README.md")
+
+        self.assertIn("HOUSEHOLD_QUICK_REPLIES", webhook_py)
+        self.assertIn('"household_management"', webhook_py)
+        self.assertIn('"create_household"', webhook_py)
+        self.assertIn('"household_invite_code"', webhook_py)
+        self.assertIn('"join_household"', webhook_py)
+        self.assertIn('"set_display_name"', webhook_py)
+        self.assertIn("format_household_management_text", webhook_py)
+        self.assertIn("ensure_personal_household", crud_py)
+        self.assertIn("set_user_household_id", crud_py)
+        self.assertIn("set_user_display_name", crud_py)
+
+        self.assertIn('"computer_dashboard_guide"', webhook_py)
+        self.assertIn("format_computer_dashboard_guide", webhook_py)
+        self.assertIn("實體電腦 Dashboard 操作模式", webhook_py)
+        self.assertIn("Physical computer dashboard mode", readme)
+        self.assertIn("--kiosk", readme)
+        self.assertIn("shell:startup", readme)
+        self.assertIn("Login Items", readme)
 
     def test_line_replies_have_persistent_commute_quick_replies(self):
         line_client_py = self.read_repo_file("backend/app/line_client.py")
