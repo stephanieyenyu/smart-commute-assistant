@@ -20,7 +20,6 @@ def build_dashboard_view_url(
         return path
     return f"{base_url}{path}"
 
-
 def build_household_dashboard_view_url(
     household_id: str = "default",
     public_url: str | None = None,
@@ -29,18 +28,6 @@ def build_household_dashboard_view_url(
     base_url = dashboard_public_base_url(public_url, request_base_url)
     safe_household_id = (household_id or "default").strip() or "default"
     path = f"/api/v1/dashboard/household/{quote(safe_household_id, safe='')}/view"
-    if not base_url:
-        return path
-    return f"{base_url}{path}"
-
-
-def build_schedule_weekly_url(
-    user_id: int,
-    public_url: str | None = None,
-    request_base_url: str | None = None,
-) -> str:
-    base_url = dashboard_public_base_url(public_url, request_base_url)
-    path = f"/api/v1/schedule/weekly/{int(user_id)}/view"
     if not base_url:
         return path
     return f"{base_url}{path}"

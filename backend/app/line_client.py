@@ -18,10 +18,7 @@ from app.config import LINE_CHANNEL_ACCESS_TOKEN
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 LINE_QUICK_REPLY_LIMIT = 13
 
-PERSISTENT_QUICK_REPLIES = [
-    {"type": "message", "label": "今日通勤建議", "text": "今日通勤建議"},
-    {"type": "message", "label": "修改到公司時間", "text": "修改到公司時間"},
-]
+PERSISTENT_QUICK_REPLIES = []
 
 
 def _quick_reply_identity(item: dict) -> tuple:
@@ -70,6 +67,61 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
             action = MessageAction(label=item["label"], text=item["text"])
         quick_reply_items.append(QuickReplyItem(action=action))
     return quick_reply_items
+
+
+def _quick_reply_action_payload(item: dict) -> dict:
+    t = item["type"]
+    if t == "location":
+        return {"type": "location", "label": item["label"]}
+    if t == "datetimepicker":
+        return {
+            "type": "datetimepicker",
+            "label": item["label"],
+            "data": item.get("data", "postback"),
+            "mode": item.get("mode", "time"),
+        }
+    return {"type": "message", "label": item["label"], "text": item["text"]}
+
+
+def _quick_reply_payload(items: list | None) -> dict | None:
+    quick_reply_items = [
+        {"type": "action", "action": _quick_reply_action_payload(item)}
+        for item in with_persistent_quick_replies(items)
+    ]
+    if not quick_reply_items:
+        return None
+    return {"items": quick_reply_items}
+
+
+async def reply_flex_with_quick_reply(reply_token: str, alt_text: str, contents: dict, items: list | None = None) -> None:
+    message = {
+        "type": "flex",
+        "altText": alt_text,
+        "contents": contents,
+    }
+    quick_reply = _quick_reply_payload(items)
+    if quick_reply:
+        message["quickReply"] = quick_reply
+
+    payload = {
+        "replyToken": reply_token,
+        "messages": [message],
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/reply",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+    except Exception as e:
+        print(f"[line] reply_flex_with_quick_reply error: {e}")
+        await reply_with_quick_reply(reply_token, alt_text, items or [])
 
 
 async def reply_text(reply_token: str, text: str) -> None:

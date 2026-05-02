@@ -106,6 +106,15 @@ def weather_is_degraded(weather_info: dict) -> bool:
     return "stale" in scope or "failed" in scope or "fallback" in scope
 
 
+def extract_line_field(line_text: str | None, prefix: str) -> str | None:
+    if not line_text:
+        return None
+    for line in str(line_text).splitlines():
+        if line.startswith(prefix):
+            return line.removeprefix(prefix).strip()
+    return None
+
+
 def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
     if not plan.get("ok"):
         return {
@@ -134,20 +143,24 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
 
     degraded = weather_is_degraded(plan.get("weather_info") or {})
     state = dashboard_state_for_departure(seconds_until_departure, degraded=degraded)
+    line_commute_text = plan.get("text")
+    line_transport = extract_line_field(line_commute_text, "通勤方式：")
+    line_arrival = extract_line_field(line_commute_text, "目標抵達：")
 
     return {
         "ok": True,
         "user_id": user_id,
         "state": state,
         "target_date": plan["target_date"].isoformat() if hasattr(plan.get("target_date"), "isoformat") else plan.get("target_date"),
-        "target_arrival_time": plan.get("effective_arrival_time"),
+        "target_arrival_time": line_arrival or plan.get("effective_arrival_time"),
         "departure_time": departure_time,
         "departure_at": departure_at,
         "is_snoozed": bool(plan.get("departure_snoozed_until")),
         "plan_key": plan.get("plan_key"),
         "seconds_until_departure": seconds_until_departure,
         "recommended_mode": plan.get("recommended_mode"),
-        "transport_line": plan.get("transport_line"),
+        "transport_line": line_transport or plan.get("transport_line"),
+        "line_commute_text": line_commute_text,
         "commute_minutes": plan.get("baseline_minutes"),
         "weather": plan.get("weather_info"),
         "updated_at": now.isoformat(),
@@ -180,6 +193,7 @@ def build_no_active_day_payload(user_id: int, now: datetime, reason: str = "sche
         "seconds_until_departure": None,
         "recommended_mode": None,
         "transport_line": "排程休息中，今天不會推送出門提醒。",
+        "line_commute_text": None,
         "commute_minutes": None,
         "weather": None,
         "updated_at": now.isoformat(),

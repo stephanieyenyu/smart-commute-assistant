@@ -119,6 +119,38 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertEqual(payload["departure_time"], "08:30")
         self.assertEqual(payload["transport_line"], plan["transport_line"])
 
+    def test_dashboard_payload_prefers_line_message_fields(self):
+        dashboard_status = load_module("dashboard_status_line_text_under_test", "backend/app/dashboard_status.py")
+        line_text = "\n".join([
+            "今日通勤建議：",
+            "目標抵達：09:10",
+            "建議出門：08:40",
+            "通勤方式：🚇 LINE 基準通勤方式",
+            "通勤時間：約 30 分鐘",
+            "今日天氣：多雲",
+        ])
+        plan = {
+            "ok": True,
+            "target_date": date(2026, 5, 2),
+            "effective_arrival_time": "09:00",
+            "final_departure_time": "08:30",
+            "recommended_mode": "metro",
+            "transport_line": "舊的 dashboard 通勤方式",
+            "text": line_text,
+            "baseline_minutes": 30,
+            "weather_info": {"weather_text": "多雲", "scope": "city"},
+        }
+
+        payload = dashboard_status.build_dashboard_payload(
+            user_id=1,
+            plan=plan,
+            now=datetime(2026, 5, 2, 8, 10, 0),
+        )
+
+        self.assertEqual(payload["target_arrival_time"], "09:10")
+        self.assertEqual(payload["transport_line"], "🚇 LINE 基準通勤方式")
+        self.assertEqual(payload["line_commute_text"], line_text)
+
     def test_dashboard_payload_prefers_precise_departure_datetime(self):
         dashboard_status = load_module("dashboard_status_under_test", "backend/app/dashboard_status.py")
         plan = {
@@ -290,21 +322,22 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("commute_date_is_active", scheduler_py)
         self.assertIn("MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8", scheduler_py)
 
-    def test_schedule_repeat_picker_page_is_registered(self):
+    def test_schedule_repeat_picker_uses_native_line_ui(self):
         main_py = self.read_repo_file("backend/app/main.py")
-        schedule_py = self.read_repo_file("backend/app/schedule.py")
         links_py = self.read_repo_file("backend/app/dashboard_links.py")
         webhook_py = self.read_repo_file("backend/app/webhook.py")
 
-        self.assertIn("schedule_router", main_py)
-        self.assertIn('@router.get("/weekly/{user_id}/view", response_class=HTMLResponse)', schedule_py)
-        self.assertIn('@router.post("/weekly/{user_id}")', schedule_py)
-        self.assertIn("scroll-snap-type", schedule_py)
-        self.assertIn("重複提醒日", schedule_py)
-        self.assertIn("active_weekdays", schedule_py)
-        self.assertIn("build_schedule_weekly_url", links_py)
-        self.assertIn("build_schedule_weekly_url", webhook_py)
-        self.assertIn("滑動式星期選擇頁", webhook_py)
+        self.assertNotIn("schedule_router", main_py)
+        self.assertNotIn("build_schedule_weekly_url", links_py)
+        self.assertNotIn("build_schedule_weekly_url", webhook_py)
+        self.assertNotIn("/api/v1/schedule", webhook_py)
+        self.assertIn("reply_weekday_picker", webhook_py)
+        self.assertIn("build_weekday_picker_flex", webhook_py)
+        self.assertIn("action=toggle_weekday", webhook_py)
+        self.assertIn("action=schedule_preset", webhook_py)
+        self.assertIn("重複提醒日", webhook_py)
+        self.assertIn("active_weekdays", webhook_py)
+        self.assertIn("LINE 原生選擇卡", webhook_py)
 
     def test_household_management_and_computer_kiosk_guides_are_wired(self):
         webhook_py = self.read_repo_file("backend/app/webhook.py")
@@ -335,18 +368,34 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("shell:startup", readme)
         self.assertIn("Login Items", readme)
 
-    def test_line_replies_have_persistent_commute_quick_replies(self):
+    def test_rich_menu_topics_and_prompt_coverage_are_wired(self):
         line_client_py = self.read_repo_file("backend/app/line_client.py")
         webhook_py = self.read_repo_file("backend/app/webhook.py")
 
         self.assertIn("PERSISTENT_QUICK_REPLIES", line_client_py)
-        self.assertIn('"label": "今日通勤建議"', line_client_py)
-        self.assertIn('"label": "修改到公司時間"', line_client_py)
+        self.assertIn("PERSISTENT_QUICK_REPLIES = []", line_client_py)
+        self.assertNotIn('"label": "今日通勤建議"', line_client_py)
+        self.assertNotIn('"label": "修改到公司時間"', line_client_py)
         self.assertNotIn('"label": "修改出門時間"', line_client_py)
         self.assertIn("with_persistent_quick_replies(items)", line_client_py)
         self.assertIn("with_persistent_quick_replies([])", line_client_py)
-        self.assertIn("修改到公司時間", webhook_py)
-        self.assertIn("修改出門時間", webhook_py)
+        self.assertIn("RICH_MENU_TOPICS", webhook_py)
+        self.assertIn('"通勤選單"', webhook_py)
+        self.assertIn('"時間設定"', webhook_py)
+        self.assertIn('"自動提醒"', webhook_py)
+        self.assertIn('"排程設定"', webhook_py)
+        self.assertIn('"看板家庭"', webhook_py)
+        self.assertIn('"指令說明"', webhook_py)
+        self.assertIn("COMMUTE_TOPIC_QUICK_REPLIES", webhook_py)
+        self.assertIn("TIME_TOPIC_QUICK_REPLIES", webhook_py)
+        self.assertIn("DASHBOARD_TOPIC_QUICK_REPLIES", webhook_py)
+        self.assertIn("CANONICAL_PROMPT_GROUPS", webhook_py)
+        self.assertIn("unsupported_canonical_prompts", webhook_py)
+        self.assertIn("build_command_help_carousel", webhook_py)
+
+        self.assertIn("unsupported.append(prompt)", webhook_py)
+        self.assertIn("加入家庭 ", webhook_py)
+        self.assertIn("設定我的名稱 ", webhook_py)
 
     def test_departure_confirmation_flow_is_wired(self):
         line_client_py = self.read_repo_file("backend/app/line_client.py")
