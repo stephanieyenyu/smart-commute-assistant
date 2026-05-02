@@ -10,15 +10,22 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessag
 
 from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
-from app.commute_schedule import commute_date_is_active, parse_custom_weekdays, parse_weekday_preset, schedule_label
-from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url, build_schedule_weekly_url
+from app.commute_schedule import (
+    WEEKDAY_NAMES,
+    commute_date_is_active,
+    normalize_active_weekdays,
+    parse_custom_weekdays,
+    parse_weekday_preset,
+    schedule_label,
+)
+from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url
 from app.db import SessionLocal
 from app.departure_confirmation import (
     confirm_departure_for_user,
     format_taipei_hhmm,
     snooze_departure_for_user,
 )
-from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
+from app.line_client import reply_flex_with_quick_reply, reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
@@ -129,12 +136,32 @@ OVERRIDE_TOMORROW_TIME_QUICK_REPLIES = [
     {"type": "message", "label": "09:30", "text": "09:30"},
 ]
 
-# Shown after setup complete / after commute advice
-MAIN_MENU_QUICK_REPLIES = [
-    {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
-    {"type": "message", "label": "🚌 今天搭公車",    "text": "今天搭公車"},
-    {"type": "message", "label": "🚇 今天搭捷運",    "text": "今天搭捷運"},
-    {"type": "message", "label": "📅 修改到公司時間", "text": "修改今天到公司時間"},
+# Rich Menu uses these six top-level message actions. Quick Replies below them
+# contain only the narrower actions inside that topic.
+RICH_MENU_TOPICS = [
+    {"type": "message", "label": "通勤選單", "text": "通勤選單"},
+    {"type": "message", "label": "時間設定", "text": "時間設定"},
+    {"type": "message", "label": "自動提醒", "text": "自動提醒"},
+    {"type": "message", "label": "排程設定", "text": "排程設定"},
+    {"type": "message", "label": "看板家庭", "text": "看板家庭"},
+    {"type": "message", "label": "指令說明", "text": "指令說明"},
+]
+
+MAIN_MENU_QUICK_REPLIES = []
+
+COMMUTE_TOPIC_QUICK_REPLIES = [
+    {"type": "message", "label": "今日建議", "text": "今日通勤建議"},
+    {"type": "message", "label": "最短時間", "text": "優先選擇通勤時間短"},
+    {"type": "message", "label": "公車優先", "text": "今天搭公車"},
+    {"type": "message", "label": "捷運優先", "text": "今天搭捷運"},
+    {"type": "message", "label": "公車轉捷運", "text": "今天搭公車轉捷運"},
+    {"type": "message", "label": "今天方式", "text": "查看今天交通方式"},
+]
+
+TIME_TOPIC_QUICK_REPLIES = [
+    {"type": "message", "label": "今天到公司", "text": "修改今天到公司時間"},
+    {"type": "message", "label": "明天到公司", "text": "修改明天到公司時間"},
+    {"type": "message", "label": "明天出門", "text": "明天幾點出門"},
 ]
 
 # Shown after commute advice reply
@@ -175,8 +202,6 @@ CUSTOM_SCHEDULE_QUICK_REPLIES = [
     {"type": "message", "label": "週一三五", "text": "週一週三週五"},
     {"type": "message", "label": "週二四", "text": "週二週四"},
     {"type": "message", "label": "週六日", "text": "週六週日"},
-    {"type": "message", "label": "平日啟用", "text": "排程平日"},
-    {"type": "message", "label": "每天啟用", "text": "排程每天"},
 ]
 
 HOUSEHOLD_QUICK_REPLIES = [
@@ -185,6 +210,13 @@ HOUSEHOLD_QUICK_REPLIES = [
     {"type": "message", "label": "建立家庭", "text": "建立家庭"},
     {"type": "message", "label": "設定我的名稱", "text": "設定我的名稱"},
     {"type": "message", "label": "家庭看板連結", "text": "取得家庭Dashboard連結"},
+]
+
+DASHBOARD_TOPIC_QUICK_REPLIES = [
+    {"type": "message", "label": "個人看板", "text": "取得Dashboard連結"},
+    {"type": "message", "label": "家庭看板", "text": "取得家庭Dashboard連結"},
+    {"type": "message", "label": "家庭管理", "text": "家庭成員管理"},
+    {"type": "message", "label": "電腦模式", "text": "電腦Dashboard設定"},
 ]
 
 TRANSPORT_MODE_NAME_MAP = {
@@ -197,6 +229,12 @@ TRANSPORT_MODE_NAME_MAP = {
 }
 
 COMMAND_ALIASES = {
+    "topic_commute": {"通勤選單", "通勤功能"},
+    "topic_time": {"時間設定", "到公司時間設定"},
+    "topic_reminder": {"自動提醒", "提醒設定"},
+    "topic_schedule": {"排程設定", "日程排程", "週間設定"},
+    "topic_dashboard": {"看板家庭", "看板與家庭", "Dashboard家庭"},
+    "topic_help": {"指令說明", "提示詞說明", "使用說明", "幫助"},
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
     "dashboard_link": {"取得Dashboard連結", "取得dashboard連結", "Dashboard連結", "dashboard連結", "取得儀表板連結"},
@@ -216,7 +254,7 @@ COMMAND_ALIASES = {
     "enable_reminder": {"開啟自動提醒"},
     "disable_reminder": {"關閉自動提醒"},
     "view_reminder_setting": {"查看提醒設定"},
-    "view_schedule_setting": {"查看排程設定", "排程設定", "LINE排程"},
+    "view_schedule_setting": {"查看排程設定", "LINE排程"},
     "schedule_workdays": {"排程平日", "平日啟用", "只在平日啟用"},
     "schedule_everyday": {"排程每天", "每天啟用", "每天都啟用"},
     "schedule_weekend": {"排程週末", "週末啟用", "只在週末啟用"},
@@ -238,27 +276,40 @@ COMMAND_ALIASES = {
     "departure_need_5": {"我還需要五分鐘", "還需要五分鐘"},
 }
 
+CANONICAL_PROMPT_GROUPS = {
+    "通勤": ["今日通勤建議", "優先選擇通勤時間短", "今天搭公車", "今天搭捷運", "今天搭公車轉捷運", "查看今天交通方式"],
+    "時間": ["修改今天到公司時間", "修改明天到公司時間", "明天幾點出門"],
+    "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
+    "排程": ["查看排程設定", "排程平日", "排程每天", "排程週末", "自訂日曆排程", "今天休息", "明天休息", "今天啟用", "明天啟用"],
+    "看板家庭": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
+    "基本設定": ["查看設定", "重新設定", "傳送住家位置", "傳送公司位置"],
+}
+
+
+def canonical_prompt_lines() -> list[str]:
+    lines = []
+    for group, prompts in CANONICAL_PROMPT_GROUPS.items():
+        lines.append(f"{group}：" + "、".join(prompts))
+    return lines
+
+
+def unsupported_canonical_prompts() -> list[str]:
+    supported = set().union(*COMMAND_ALIASES.values())
+    unsupported = []
+    for prompts in CANONICAL_PROMPT_GROUPS.values():
+        for prompt in prompts:
+            if prompt in supported:
+                continue
+            if prompt.startswith("加入家庭 ") or prompt.startswith("設定我的名稱 "):
+                continue
+            unsupported.append(prompt)
+    return unsupported
+
+
 READY_MENU_TEXT = (
     "您目前設定已完成。\n"
-    "可傳送：\n"
-    "查看設定\n"
-    "查看排程設定\n"
-    "今天通勤建議\n"
-    "取得 Dashboard 連結\n"
-    "取得家庭 Dashboard 連結\n"
-    "家庭成員管理\n"
-    "電腦 Dashboard 設定\n"
-    "明天幾點出門\n"
-    "修改明天到公司時間\n"
-    "重新設定\n"
-    "傳送住家位置\n"
-    "傳送公司位置\n"
-    "今天自動判斷\n"
-    "優先選擇通勤時間短\n"
-    "今天搭公車\n"
-    "今天搭捷運\n"
-    "今天搭公車轉捷運\n"
-    "查看今天交通方式"
+    "請使用下方 Rich Menu 的 6 個大主題：通勤選單、時間設定、自動提醒、排程設定、看板家庭、指令說明。\n"
+    "需要完整提示詞時，請傳送「指令說明」。"
 )
 
 def normalize_user_text(text: str) -> str:
@@ -293,19 +344,16 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
     return text
 
 
-def format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override, schedule_url: str | None = None) -> str:
+def format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override) -> str:
     today_status = "啟用" if commute_date_is_active(profile, today_date, today_override) else "休息"
     tomorrow_status = "啟用" if commute_date_is_active(profile, tomorrow_date, tomorrow_override) else "休息"
-    text = (
+    return (
         "目前通勤排程：\n"
         f"🗓 固定啟用日：{schedule_label(getattr(profile, 'active_weekdays', None))}\n"
         f"📍 今天：{today_status}\n"
         f"📅 明天：{tomorrow_status}\n\n"
-        "可用下方按鈕快速修改。"
+        "所有設定都可直接在 LINE 中完成。若要自訂星期，請按「自訂星期」。"
     )
-    if schedule_url:
-        text += f"\n\n自訂星期滑動選擇頁：\n{schedule_url}"
-    return text
 
 
 SCHEDULE_PENDING_FIELDS = {"active_weekdays", "custom_active_weekdays"}
@@ -315,25 +363,18 @@ def is_schedule_setup_pending(profile) -> bool:
     return getattr(profile, "pending_field", None) in SCHEDULE_PENDING_FIELDS
 
 
-def schedule_setup_prompt(schedule_url: str | None = None) -> str:
-    text = (
+def schedule_setup_prompt() -> str:
+    return (
         "最後一步：請設定哪些日子要啟用通勤提醒。\n"
-        "可用下方按鈕選「平日、每天、週末」，也可以按「自訂星期」後輸入例如：週一週三週五。"
+        "可用下方按鈕選「平日、每天、週末」，也可以按「自訂星期」在 LINE 內逐日切換。"
     )
-    if schedule_url:
-        text += f"\n\n也可以打開像鬧鐘 Repeat 的滑動選擇頁：\n{schedule_url}"
-    return text
 
 
-def custom_schedule_prompt(schedule_url: str | None = None) -> str:
-    text = (
-        "請輸入要固定啟用的星期。\n"
-        "範例：週一週三週五、週二週四、1,3,5。\n"
-        "若要指定某一天臨時休息或啟用，請回到「查看排程設定」後用日期按鈕選擇。"
+def custom_schedule_prompt() -> str:
+    return (
+        "請選擇要固定啟用的星期。\n"
+        "下方會顯示一張 LINE 原生選擇卡，點星期可開關；也可直接輸入例如：週一週三週五、週二週四、1,3,5。"
     )
-    if schedule_url:
-        text += f"\n\n滑動式星期選擇頁：\n{schedule_url}"
-    return text
 
 
 def schedule_saved_text(profile, was_setup: bool = False) -> str:
@@ -393,12 +434,102 @@ def format_computer_dashboard_guide(dashboard_url: str, household_url: str) -> s
     )
 
 
-def schedule_weekly_url_for_request(request: Request, user_id: int) -> str:
-    return build_schedule_weekly_url(
-        user_id=user_id,
-        public_url=PUBLIC_URL,
-        request_base_url=str(request.base_url),
+def build_weekday_picker_flex(profile) -> dict:
+    active_days = set(normalize_active_weekdays(getattr(profile, "active_weekdays", None)))
+
+    def day_button(day: int) -> dict:
+        active = day in active_days
+        label = f"{WEEKDAY_NAMES[day]} {'✓' if active else ''}".strip()
+        return {
+            "type": "button",
+            "style": "primary" if active else "secondary",
+            "height": "sm",
+            "action": {
+                "type": "postback",
+                "label": label,
+                "data": f"action=toggle_weekday&day={day}",
+                "displayText": f"切換{WEEKDAY_NAMES[day]}",
+            },
+        }
+
+    def row(days: list[int]) -> dict:
+        return {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [day_button(day) for day in days],
+        }
+
+    preset_buttons = [
+        ("平日", "workdays"),
+        ("每天", "everyday"),
+        ("週末", "weekend"),
+        ("全休", "none"),
+    ]
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": "重複提醒日", "weight": "bold", "size": "xl"},
+                {"type": "text", "text": f"目前：{schedule_label(getattr(profile, 'active_weekdays', None))}", "size": "sm", "color": "#666666", "wrap": True},
+                row([0, 1, 2, 3]),
+                row([4, 5, 6]),
+                {"type": "separator", "margin": "md"},
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "spacing": "sm",
+                    "contents": [
+                        {
+                            "type": "button",
+                            "style": "secondary",
+                            "height": "sm",
+                            "action": {
+                                "type": "postback",
+                                "label": label,
+                                "data": f"action=schedule_preset&preset={preset}",
+                                "displayText": f"排程{label}",
+                            },
+                        }
+                        for label, preset in preset_buttons
+                    ],
+                },
+            ],
+        },
+    }
+
+
+async def reply_weekday_picker(reply_token: str, profile, message: str | None = None) -> None:
+    alt_text = message or "請在 LINE 中選擇通勤排程"
+    await reply_flex_with_quick_reply(
+        reply_token,
+        alt_text,
+        build_weekday_picker_flex(profile),
+        SCHEDULE_QUICK_REPLIES,
     )
+
+
+def build_command_help_carousel() -> dict:
+    bubbles = []
+    for title, prompts in CANONICAL_PROMPT_GROUPS.items():
+        bubbles.append({
+            "type": "bubble",
+            "size": "kilo",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {"type": "text", "text": title, "weight": "bold", "size": "lg"},
+                    {"type": "text", "text": "\n".join(prompts), "size": "sm", "wrap": True, "color": "#555555"},
+                ],
+            },
+        })
+    return {"type": "carousel", "contents": bubbles}
 
 
 def validate_pending_input(field_name: str, user_text: str):
@@ -550,6 +681,35 @@ async def line_webhook(
                     )
                     continue
 
+                if postback_action == "toggle_weekday":
+                    try:
+                        day = int((postback_parts.get("day") or [""])[0])
+                    except ValueError:
+                        day = -1
+                    if not 0 <= day <= 6:
+                        await reply_weekday_picker(reply_token, get_profile(db, user.id), "星期讀取失敗，請再選一次。")
+                        continue
+
+                    profile = get_profile(db, user.id)
+                    active_days = set(normalize_active_weekdays(getattr(profile, "active_weekdays", None)))
+                    if day in active_days:
+                        active_days.remove(day)
+                    else:
+                        active_days.add(day)
+                    profile = set_active_weekdays(db, user.id, sorted(active_days))
+                    set_pending_field(db, user.id, None)
+                    clear_today_reminder_state_for_user(user.id)
+                    await reply_weekday_picker(reply_token, profile, f"已更新：{schedule_label(profile.active_weekdays)}")
+                    continue
+
+                if postback_action == "schedule_preset":
+                    preset = (postback_parts.get("preset") or ["everyday"])[0]
+                    profile = set_active_weekdays(db, user.id, parse_weekday_preset(preset))
+                    set_pending_field(db, user.id, None)
+                    clear_today_reminder_state_for_user(user.id)
+                    await reply_weekday_picker(reply_token, profile, f"已更新：{schedule_label(profile.active_weekdays)}")
+                    continue
+
                 if postback_data == "action=set_preferred_arrival_time" and time_value:
                     profile_before = get_profile(db, user.id)
                     was_initial_arrival = (
@@ -567,7 +727,7 @@ async def line_webhook(
                         set_pending_field(db, user.id, "active_weekdays")
                         await reply_with_quick_reply(
                             reply_token,
-                            f"已設定固定到公司時間：{time_value}\n\n{schedule_setup_prompt(schedule_weekly_url_for_request(request, user.id))}",
+                            f"已設定固定到公司時間：{time_value}\n\n{schedule_setup_prompt()}",
                             SCHEDULE_SETUP_QUICK_REPLIES,
                         )
                         continue
@@ -729,7 +889,7 @@ async def line_webhook(
                 if command_text not in schedule_commands and parse_custom_weekdays(user_text) is None:
                     await reply_with_quick_reply(
                         reply_token,
-                        schedule_setup_prompt(schedule_weekly_url_for_request(request, user.id)),
+                        schedule_setup_prompt(),
                         SCHEDULE_SETUP_QUICK_REPLIES,
                     )
                     continue
@@ -745,7 +905,58 @@ async def line_webhook(
                         reply_token,
                         "你好，我是智慧通勤助理！\n請先完成以下設定，點擊下方按鈕可快速完成：",
                         SETUP_QUICK_REPLIES,
-                    )
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_commute"]:
+                await reply_with_quick_reply(
+                    reply_token,
+                    "通勤選單：請選擇今天要怎麼計算。",
+                    COMMUTE_TOPIC_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_time"]:
+                await reply_with_quick_reply(
+                    reply_token,
+                    "時間設定：請選擇要調整今天、明天，或查看明天建議出門時間。",
+                    TIME_TOPIC_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_reminder"]:
+                profile = get_profile(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"自動提醒目前：{'開啟' if profile.reminder_enabled else '關閉'}。\n請選擇是否切換。",
+                    REMINDER_SETTING_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_schedule"]:
+                profile = get_profile(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override),
+                    SCHEDULE_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_dashboard"]:
+                await reply_with_quick_reply(
+                    reply_token,
+                    "看板與家庭：請選擇要取得看板連結、管理家庭成員，或查看電腦外接螢幕模式。",
+                    DASHBOARD_TOPIC_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_help"]:
+                await reply_flex_with_quick_reply(
+                    reply_token,
+                    "指令說明",
+                    build_command_help_carousel(),
+                    [],
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["send_home_location"]:
@@ -937,14 +1148,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    format_schedule_text(
-                        profile,
-                        today_date,
-                        today_override,
-                        tomorrow_date,
-                        tomorrow_override,
-                        schedule_weekly_url_for_request(request, user.id),
-                    ),
+                    format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override),
                     SCHEDULE_QUICK_REPLIES,
                 )
                 continue
@@ -999,11 +1203,7 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["schedule_custom"]:
                 set_pending_field(db, user.id, "custom_active_weekdays")
-                await reply_with_quick_reply(
-                    reply_token,
-                    custom_schedule_prompt(schedule_weekly_url_for_request(request, user.id)),
-                    CUSTOM_SCHEDULE_QUICK_REPLIES,
-                )
+                await reply_weekday_picker(reply_token, get_profile(db, user.id), custom_schedule_prompt())
                 continue
 
             if command_text in COMMAND_ALIASES["pause_today"]:
@@ -1267,11 +1467,7 @@ async def line_webhook(
                 weekdays = parse_custom_weekdays(user_text)
                 if weekdays is None:
                     set_pending_field(db, user.id, "custom_active_weekdays")
-                    await reply_with_quick_reply(
-                        reply_token,
-                        custom_schedule_prompt(schedule_weekly_url_for_request(request, user.id)),
-                        CUSTOM_SCHEDULE_QUICK_REPLIES,
-                    )
+                    await reply_weekday_picker(reply_token, profile, custom_schedule_prompt())
                     continue
 
                 was_setup_schedule = is_schedule_setup_pending(profile)
@@ -1386,7 +1582,7 @@ async def line_webhook(
                     set_pending_field(db, user.id, "active_weekdays")
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已設定固定到公司時間：{value}\n\n{schedule_setup_prompt(schedule_weekly_url_for_request(request, user.id))}",
+                        f"已設定固定到公司時間：{value}\n\n{schedule_setup_prompt()}",
                         SCHEDULE_SETUP_QUICK_REPLIES,
                     )
                     continue
