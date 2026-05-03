@@ -111,7 +111,8 @@ DONE_QUICK_REPLY = {"type": "message", "label": "完成修改設定", "text": "�
 
 BASIC_SETTINGS_QUICK_REPLIES = [
     {"type": "message", "label": "查看設定", "text": "查看設定"},
-    {"type": "message", "label": "通勤建議", "text": "通勤建議"},
+    {"type": "message", "label": "今日通勤建議", "text": "今日通勤建議"},
+    {"type": "message", "label": "明日通勤建議", "text": "明日通勤建議"},
     {"type": "message", "label": "重新設定", "text": "重新設定"},
 ]
 
@@ -488,7 +489,7 @@ CANONICAL_PROMPT_GROUPS = {
     "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
     "排程": ["查看排程設定", "新增常用排程", "管理單一排程", "刪除排程 1", "編輯排程 1"],
     "看板管理": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "移除家庭成員", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
-    "基本設定": ["查看設定", "通勤建議", "重新設定"],
+    "基本設定": ["查看設定", "今日通勤建議", "明日通勤建議", "重新設定"],
 }
 
 
@@ -526,10 +527,7 @@ def normalize_user_text(text: str) -> str:
 
 def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None, today_mode: str | None = None, db=None) -> str:
     home_address = profile.home_address or "尚未設定"
-    office_address = profile.office_address or "尚未設定"
     preferred_arrival_time = profile.preferred_arrival_time or "尚未設定"
-    destination_label = destination_label_for_profile(profile)
-    arrival_label_text = arrival_label(destination_label)
     today_effective_text = f"{today_override_time or preferred_arrival_time}{'（今天臨時調整）' if today_override_time else '（固定時間）'}"
     tomorrow_effective_text = f"{tomorrow_override_time or preferred_arrival_time}{'（明天臨時調整）' if tomorrow_override_time else '（固定時間）'}"
     reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
@@ -556,8 +554,6 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
     text = (
         "您目前設定如下：\n"
         f"🏠 住家位置：{home_address}\n"
-        f"🏢 {destination_label}位置：{office_address}\n"
-        f"⏰ 固定{arrival_label_text}：{preferred_arrival_time}\n"
         f"📍 今天：{today_effective_text}\n"
         f"📅 明天：{tomorrow_effective_text}\n"
         f"📢 自動提醒：{reminder_status}\n"
@@ -2559,28 +2555,40 @@ async def line_webhook(
                     )
                     continue
 
-                payload = await build_today_commute_payload(
-                    db=db,
-                    user_id=user.id,
-                    target_date=today_date,
-                    force_mode_override=None,
-                    header="今日通勤建議：",
-                )
-                if not payload.get("ok"):
-                    await reply_text(reply_token, "今日通勤建議：\n無法建立通勤建議")
-                    continue
-
                 try:
-                    await freeze_today_reminder_payload(
+                    payload = await build_today_commute_payload(
                         db=db,
                         user_id=user.id,
                         target_date=today_date,
-                        plan=payload,
+                        force_mode_override=None,
+                        header="今日通勤建議：",
+                    )
+                    if not payload.get("ok"):
+                        await reply_with_quick_reply(reply_token, "今日通勤建議：\n目前無法計算通勤建議，請稍後再試。", COMMUTE_RESULT_QUICK_REPLIES)
+                        continue
+
+                    try:
+                        await freeze_today_reminder_payload(
+                            db=db,
+                            user_id=user.id,
+                            target_date=today_date,
+                            plan=payload,
+                        )
+                    except Exception as e:
+                        print(f"[freeze-today-commute] error={e}")
+
+                    await reply_multi_messages_with_quick_reply(
+                        reply_token,
+                        [payload["text"]],
+                        COMMUTE_RESULT_QUICK_REPLIES,
                     )
                 except Exception as e:
-                    print(f"[freeze-today-commute] error={e}")
-
-                await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
+                    print(f"[today-commute] unexpected error: {e}")
+                    await reply_multi_messages_with_quick_reply(
+                        reply_token,
+                        ["今日通勤建議：\n系統處理時發生錯誤，請稍後再試。"],
+                        COMMUTE_RESULT_QUICK_REPLIES,
+                    )
                 continue
 
             if command_text in COMMAND_ALIASES["tomorrow_commute"]:
@@ -2598,17 +2606,29 @@ async def line_webhook(
                         SCHEDULE_QUICK_REPLIES,
                     )
                     continue
-                payload = await build_today_commute_payload(
-                    db=db,
-                    user_id=user.id,
-                    target_date=tomorrow_date,
-                    force_mode_override=None,
-                    header="明日通勤建議：",
-                )
-                if not payload.get("ok"):
-                    await reply_text(reply_token, "明日通勤建議：\n無法建立通勤建議")
-                    continue
-                await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
+                try:
+                    payload = await build_today_commute_payload(
+                        db=db,
+                        user_id=user.id,
+                        target_date=tomorrow_date,
+                        force_mode_override=None,
+                        header="明日通勤建議：",
+                    )
+                    if not payload.get("ok"):
+                        await reply_with_quick_reply(reply_token, "明日通勤建議：\n目前無法計算通勤建議，請稍後再試。", COMMUTE_RESULT_QUICK_REPLIES)
+                        continue
+                    await reply_multi_messages_with_quick_reply(
+                        reply_token,
+                        [payload["text"]],
+                        COMMUTE_RESULT_QUICK_REPLIES,
+                    )
+                except Exception as e:
+                    print(f"[tomorrow-commute] unexpected error: {e}")
+                    await reply_multi_messages_with_quick_reply(
+                        reply_token,
+                        ["明日通勤建議：\n系統處理時發生錯誤，請稍後再試。"],
+                        COMMUTE_RESULT_QUICK_REPLIES,
+                    )
                 continue
 
             if command_text in COMMAND_ALIASES["tomorrow_departure"]:
