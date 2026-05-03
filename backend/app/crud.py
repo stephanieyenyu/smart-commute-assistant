@@ -251,6 +251,9 @@ def get_next_setup_step(profile: CommuteProfile) -> str | None:
 def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile = get_profile(db, user_id)
 
+    db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).delete(synchronize_session=False)
+    db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
+
     profile.home_address = None
     profile.home_lat = None
     profile.home_lng = None
@@ -449,8 +452,6 @@ def effective_commute_setting_for_date(db: Session, profile: CommuteProfile, tar
     schedule_template = get_active_schedule_template_for_date(db, user_id, target_date) if templates else None
 
     if override and getattr(override, "commute_disabled", False):
-        return None
-    if templates and schedule_template is None and not (override and getattr(override, "commute_enabled", False)):
         return None
 
     destination_label = destination_label_for_profile(profile)
