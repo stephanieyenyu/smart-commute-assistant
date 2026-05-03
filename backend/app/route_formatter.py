@@ -359,8 +359,9 @@ def format_today_commute_text(plan: dict, header: str = "今日通勤建議：")
     weather_info = plan["weather_info"]
     weather_buffer = plan["weather_buffer"]
     baseline_minutes = plan["baseline_minutes"]
+    target_label = plan.get("target_label_text") or "抵達目的地"
 
-    arrival_line = f"目標抵達：{plan['effective_arrival_time']}"
+    arrival_line = f"目標{target_label}：{plan['effective_arrival_time']}"
 
     departure_note = ""
     if weather_buffer > 0:
@@ -396,6 +397,7 @@ def build_reminder_payload_from_plan(plan: dict) -> dict:
     weather_info = plan["weather_info"]
     weather_buffer = plan["weather_buffer"]
     baseline_minutes = plan["baseline_minutes"]
+    target_label = plan.get("target_label_text") or "抵達目的地"
 
     departure_note = ""
     if weather_buffer > 0:
@@ -422,7 +424,7 @@ def build_reminder_payload_from_plan(plan: dict) -> dict:
     lines = [
         f"🔔 出門提醒：您預計在 {plan['final_departure_time']} 出門{departure_note}",
         f"📍 通勤方式：{get_transport_line(plan)}",
-        f"📅 目標 {plan['effective_arrival_time']} 抵達公司 (通勤約 {baseline_minutes} 分鐘)",
+        f"📅 目標 {plan['effective_arrival_time']} {target_label} (通勤約 {baseline_minutes} 分鐘)",
         f"🌤 天氣：{wx_text}{temp_str}{pop_str}",
     ]
 

@@ -12,11 +12,17 @@ from app.address_utils import looks_like_address, extract_city_from_text
 from app.config import LINE_CHANNEL_SECRET, PUBLIC_URL
 from app.commute_schedule import (
     WEEKDAY_NAMES,
+    arrival_label,
     commute_date_is_active,
+    destination_label_for_identity,
+    destination_label_for_profile,
+    identity_display_name,
     normalize_active_weekdays,
     parse_custom_weekdays,
     parse_weekday_preset,
     schedule_label,
+    template_weekdays,
+    week_schedule_overview,
 )
 from app.dashboard_links import build_dashboard_view_url, build_household_dashboard_view_url
 from app.db import SessionLocal
@@ -31,11 +37,17 @@ from app.crud import (
     get_or_create_profile,
     get_profile,
     get_override_for_date,
+    create_schedule_template,
+    effective_commute_setting_for_date,
+    get_schedule_conflicts,
+    get_schedule_template,
+    get_schedule_templates,
     get_household_id_for_user,
     get_users_for_household,
     ensure_personal_household,
     normalize_household_id,
     remove_user_from_household,
+    set_identity_and_destination_label,
     set_user_display_name,
     set_user_household_id,
     user_is_household_owner,
@@ -72,12 +84,13 @@ FIELD_PROMPTS = {
         "點下方按鈕開啟地圖，或直接輸入完整地址"
     ),
     "office_location": (
-        "請傳送公司位置 🏢\n"
+        "請傳送目的地位置 🏢\n"
         "點下方按鈕開啟地圖，或直接輸入完整地址"
     ),
-    "preferred_arrival_time": "請問您幾點需要到公司？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 08:30）",
-    "override_today_arrival_time": "請問今天幾點需要到公司？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 15:30）",
-    "override_tomorrow_arrival_time": "請問明天幾點需要到公司？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 09:30）",
+    "identity_type": "請先選擇您的身份，系統會依身份顯示「到學校時間」、「到公司時間」或自訂目的地。",
+    "preferred_arrival_time": "請問您幾點需要抵達目的地？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 08:30）",
+    "override_today_arrival_time": "請問今天幾點需要抵達目的地？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 15:30）",
+    "override_tomorrow_arrival_time": "請問明天幾點需要抵達目的地？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 09:30）",
 }
 
 parser = WebhookParser(LINE_CHANNEL_SECRET)
@@ -90,9 +103,12 @@ parser = WebhookParser(LINE_CHANNEL_SECRET)
 # Contains all 3 setup actions in one bar
 SETUP_QUICK_REPLIES = [
     {"type": "location",      "label": "🏠 住家位置"},
-    {"type": "location",      "label": "🏢 公司位置"},
-    {"type": "datetimepicker","label": "⏰ 到公司時間",
+    {"type": "location",      "label": "🏢 目的地位置"},
+    {"type": "datetimepicker","label": "⏰ 抵達時間",
      "data": "action=set_preferred_arrival_time", "mode": "time"},
+    {"type": "message", "label": "學生", "text": "身份 學生"},
+    {"type": "message", "label": "上班族", "text": "身份 上班族"},
+    {"type": "message", "label": "自訂標籤", "text": "自訂目的地標籤"},
 ]
 
 DONE_QUICK_REPLY = {"type": "message", "label": "完成修改設定", "text": "完成修改設定"}
@@ -101,7 +117,7 @@ BASIC_SETTINGS_QUICK_REPLIES = [
     {"type": "message", "label": "查看設定", "text": "查看設定"},
     {"type": "message", "label": "重新設定", "text": "重新設定"},
     {"type": "message", "label": "傳送住家地址", "text": "傳送住家地址"},
-    {"type": "message", "label": "傳送公司地址", "text": "傳送公司地址"},
+    {"type": "message", "label": "傳送目的地地址", "text": "傳送目的地地址"},
 ]
 
 
@@ -131,7 +147,7 @@ OFFICE_QUICK_REPLY = with_done_button([
 
 # Shown when waiting for preferred_arrival_time
 ARRIVAL_TIME_QUICK_REPLIES = with_done_button([
-    {"type": "datetimepicker", "label": "⏰ 選擇到公司時間",
+    {"type": "datetimepicker", "label": "⏰ 選擇抵達時間",
      "data": "action=set_preferred_arrival_time", "mode": "time"},
     {"type": "message", "label": "07:30", "text": "07:30"},
     {"type": "message", "label": "08:00", "text": "08:00"},
@@ -185,9 +201,44 @@ COMMUTE_TOPIC_QUICK_REPLIES = with_done_button([
 ])
 
 TIME_TOPIC_QUICK_REPLIES = with_done_button([
-    {"type": "message", "label": "今天到公司", "text": "修改今天到公司時間"},
-    {"type": "message", "label": "明天到公司", "text": "修改明天到公司時間"},
+    {"type": "message", "label": "身份設定", "text": "身份設定"},
+    {"type": "message", "label": "新增排程", "text": "新增常用排程"},
+    {"type": "message", "label": "複製排程", "text": "複製常用排程"},
+    {"type": "message", "label": "今天時間", "text": "修改今天到達時間"},
+    {"type": "message", "label": "明天時間", "text": "修改明天到達時間"},
     {"type": "message", "label": "明天出門", "text": "明天幾點出門"},
+])
+
+IDENTITY_QUICK_REPLIES = with_done_button([
+    {"type": "message", "label": "學生", "text": "身份 學生"},
+    {"type": "message", "label": "上班族", "text": "身份 上班族"},
+    {"type": "message", "label": "斜槓族", "text": "身份 斜槓族"},
+    {"type": "message", "label": "自訂標籤", "text": "自訂目的地標籤"},
+])
+
+
+def setup_quick_replies_for_step(step: str | None) -> list[dict]:
+    if step == "home_location":
+        return HOME_QUICK_REPLY
+    if step == "identity_type":
+        return IDENTITY_QUICK_REPLIES
+    if step == "office_location":
+        return OFFICE_QUICK_REPLY
+    if step == "preferred_arrival_time":
+        return ARRIVAL_TIME_QUICK_REPLIES
+    return MAIN_MENU_QUICK_REPLIES
+
+SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES = with_done_button([
+    {"type": "message", "label": "學校", "text": "學校"},
+    {"type": "message", "label": "公司", "text": "公司"},
+    {"type": "message", "label": "兼職公司", "text": "兼職公司"},
+    {"type": "message", "label": "其他", "text": "自訂目的地"},
+])
+
+SCHEDULE_CONFLICT_QUICK_REPLIES = with_done_button([
+    {"type": "message", "label": "以新排程為準", "text": "以新排程為準"},
+    {"type": "message", "label": "保留原排程", "text": "保留原排程"},
+    {"type": "message", "label": "取消", "text": "取消新增排程"},
 ])
 
 # Shown after commute advice reply: return to the clean default state.
@@ -263,11 +314,21 @@ COMMAND_ALIASES = {
     "dashboard_link": {"取得Dashboard連結", "取得DASHBOARD連結", "取得dashboard連結", "Dashboard連結", "DASHBOARD連結", "dashboard連結", "取得儀表板連結", "看板連結"},
     "household_dashboard_link": {"取得家庭Dashboard連結", "取得家庭DASHBOARD連結", "取得家用Dashboard連結", "家庭Dashboard連結", "家庭DASHBOARD連結", "家用Dashboard連結"},
     "tomorrow_departure": {"明天幾點出門"},
-    "edit_today_arrival": {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
-    "edit_tomorrow_arrival": {"修改明天到公司時間"},
+    "edit_today_arrival": {"修改今天到達時間", "修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
+    "edit_tomorrow_arrival": {"修改明天到達時間", "修改明天到公司時間"},
+    "identity_settings": {"身份設定", "設定身份", "目的地標籤設定"},
+    "set_identity_student": {"身份 學生", "身份學生", "我是學生", "學生"},
+    "set_identity_worker": {"身份 上班族", "身份上班族", "我是上班族", "上班族"},
+    "set_identity_slash": {"身份 斜槓族", "身份斜槓族", "我是斜槓族", "斜槓族"},
+    "custom_destination_label": {"自訂目的地標籤", "設定目的地標籤", "自訂標籤"},
+    "add_schedule_template": {"新增常用排程", "新增排程", "新增週間排程"},
+    "copy_schedule_template": {"複製常用排程", "複製排程"},
+    "replace_schedule_conflict": {"以新排程為準"},
+    "keep_schedule_conflict": {"保留原排程"},
+    "cancel_schedule_template": {"取消新增排程", "取消排程設定"},
     "reset": {"重新設定"},
     "send_home_location": {"傳送住家位置", "設定住家位置", "傳送住家地址", "設定住家地址"},
-    "send_office_location": {"傳送公司位置", "設定公司位置", "傳送公司地址", "設定公司地址"},
+    "send_office_location": {"傳送目的地位置", "設定目的地位置", "傳送目的地地址", "設定目的地地址", "傳送公司位置", "設定公司位置", "傳送公司地址", "設定公司地址"},
     "set_mode_auto": {"今天自動判斷", "今天交通自動"},
     "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間"},
     "set_mode_bus": {"今天搭公車", "今天坐公車"},
@@ -304,11 +365,11 @@ COMMAND_ALIASES = {
 
 CANONICAL_PROMPT_GROUPS = {
     "通勤": ["今日通勤建議", "優先選擇通勤時間短", "今天搭公車", "今天搭捷運", "今天搭公車轉捷運", "查看今天交通方式"],
-    "時間": ["修改今天到公司時間", "修改明天到公司時間", "明天幾點出門"],
+    "時間": ["身份設定", "新增常用排程", "複製常用排程", "修改今天到達時間", "修改明天到達時間", "明天幾點出門"],
     "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
     "排程": ["查看排程設定", "排程平日", "排程每天", "排程週末", "自訂日曆排程", "今天休息", "明天休息", "今天啟用", "明天啟用"],
     "看板家庭": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "移除家庭成員", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
-    "基本設定": ["查看設定", "重新設定", "傳送住家地址", "傳送公司地址"],
+    "基本設定": ["查看設定", "重新設定", "傳送住家地址", "傳送目的地地址"],
 }
 
 
@@ -344,41 +405,64 @@ def normalize_user_text(text: str) -> str:
     return text.strip().replace("\u3000", " ").replace("\n", "").replace("\r", "").replace(" ", "")
 
 
-def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None, today_mode: str | None = None) -> str:
+def format_profile_text(profile, today_override_time: str | None = None, tomorrow_override_time: str | None = None, today_mode: str | None = None, db=None) -> str:
     home_address = profile.home_address or "尚未設定"
     office_address = profile.office_address or "尚未設定"
     preferred_arrival_time = profile.preferred_arrival_time or "尚未設定"
-    today_effective_time = today_override_time or preferred_arrival_time
-    tomorrow_effective_time = tomorrow_override_time or preferred_arrival_time
-    today_note = "（今天臨時調整）" if today_override_time else "（固定時間）"
-    tomorrow_note = "（明天臨時調整）" if tomorrow_override_time else "（固定時間）"
+    destination_label = destination_label_for_profile(profile)
+    arrival_label_text = arrival_label(destination_label)
+    today_effective_text = f"{today_override_time or preferred_arrival_time}{'（今天臨時調整）' if today_override_time else '（固定時間）'}"
+    tomorrow_effective_text = f"{tomorrow_override_time or preferred_arrival_time}{'（明天臨時調整）' if tomorrow_override_time else '（固定時間）'}"
     reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
     schedule_status = schedule_label(getattr(profile, "active_weekdays", None))
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
+    identity_text = identity_display_name(getattr(profile, "identity_type", None))
+    multi_schedule_text = ""
+    if db is not None:
+        today_date = today_taipei()
+        tomorrow_date = today_date + timedelta(days=1)
+        today_setting = effective_commute_setting_for_date(db, profile, today_date, get_override_for_date(db, profile.user_id, today_date))
+        tomorrow_setting = effective_commute_setting_for_date(db, profile, tomorrow_date, get_override_for_date(db, profile.user_id, tomorrow_date))
+        today_effective_text = (
+            f"{today_setting['arrival_time']} 到{today_setting['destination_label']}（今天生效）"
+            if today_setting
+            else "休息"
+        )
+        tomorrow_effective_text = (
+            f"{tomorrow_setting['arrival_time']} 到{tomorrow_setting['destination_label']}（明天生效）"
+            if tomorrow_setting
+            else "休息"
+        )
+        multi_schedule_text = "\n📆 本週排程：\n" + week_schedule_overview(get_schedule_templates(db, profile.user_id, active_only=True), profile)
 
     text = (
         "您目前設定如下：\n"
         f"🏠 住家位置：{home_address}\n"
-        f"🏢 公司位置：{office_address}\n"
-        f"⏰ 固定到公司時間：{preferred_arrival_time}\n"
-        f"📍 今天到公司時間：{today_effective_time}{today_note}\n"
-        f"📅 明天到公司時間：{tomorrow_effective_time}{tomorrow_note}\n"
+        f"🏢 {destination_label}位置：{office_address}\n"
+        f"👤 身份：{identity_text}（目的地顯示為「{destination_label}」）\n"
+        f"⏰ 固定{arrival_label_text}：{preferred_arrival_time}\n"
+        f"📍 今天：{today_effective_text}\n"
+        f"📅 明天：{tomorrow_effective_text}\n"
         f"📢 自動提醒：{reminder_status}\n"
         f"🗓 啟用日：{schedule_status}\n"
         f"🚇 今天交通方式：{mode_label}"
+        f"{multi_schedule_text}"
     )
     return text
 
 
-def format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override) -> str:
-    today_status = "啟用" if commute_date_is_active(profile, today_date, today_override) else "休息"
-    tomorrow_status = "啟用" if commute_date_is_active(profile, tomorrow_date, tomorrow_override) else "休息"
+def format_schedule_text(db, profile, today_date, today_override, tomorrow_date, tomorrow_override) -> str:
+    today_setting = effective_commute_setting_for_date(db, profile, today_date, today_override)
+    tomorrow_setting = effective_commute_setting_for_date(db, profile, tomorrow_date, tomorrow_override)
+    today_status = f"{today_setting['arrival_time']} 到{today_setting['destination_label']}" if today_setting else "休息"
+    tomorrow_status = f"{tomorrow_setting['arrival_time']} 到{tomorrow_setting['destination_label']}" if tomorrow_setting else "休息"
     return (
         "目前通勤排程：\n"
         f"🗓 固定啟用日：{schedule_label(getattr(profile, 'active_weekdays', None))}\n"
         f"📍 今天：{today_status}\n"
         f"📅 明天：{tomorrow_status}\n\n"
-        "所有設定都可直接在 LINE 中完成。若要自訂星期，請按「自訂星期」。"
+        f"{schedule_templates_text(db, profile)}\n\n"
+        "所有設定都可直接在 LINE 中完成。若要新增多組常用排程，請傳送「新增常用排程」。"
     )
 
 
@@ -387,6 +471,60 @@ SCHEDULE_PENDING_FIELDS = {"active_weekdays", "custom_active_weekdays"}
 
 def is_schedule_setup_pending(profile) -> bool:
     return getattr(profile, "pending_field", None) in SCHEDULE_PENDING_FIELDS
+
+
+def hhmm_is_valid(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        datetime.strptime(value.strip(), "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+
+def encode_pending_part(value: str) -> str:
+    return str(value or "").replace("|", "／").replace(":", "：").strip()
+
+
+def parse_schedule_template_pending(value: str | None) -> dict:
+    parts = (value or "").split("|")
+    if len(parts) < 5:
+        return {}
+    action, time_value, label, days_text, copy_from_text = parts[:5]
+    days = []
+    if days_text:
+        for item in days_text.split(","):
+            try:
+                day = int(item)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= day <= 6 and day not in days:
+                days.append(day)
+    copy_from = None
+    try:
+        copy_from = int(copy_from_text) if copy_from_text else None
+    except ValueError:
+        copy_from = None
+    return {
+        "action": action,
+        "time": time_value,
+        "label": label,
+        "days": sorted(days),
+        "copy_from": copy_from,
+    }
+
+
+def build_schedule_template_pending(action: str, time_value: str, label: str, days: list[int] | None = None, copy_from: int | None = None) -> str:
+    days_text = ",".join(str(day) for day in sorted(days or []))
+    copy_text = "" if copy_from is None else str(copy_from)
+    return "|".join([
+        action,
+        encode_pending_part(time_value),
+        encode_pending_part(label),
+        days_text,
+        copy_text,
+    ])
 
 
 def schedule_setup_prompt() -> str:
@@ -400,6 +538,38 @@ def custom_schedule_prompt() -> str:
     return (
         "請選擇要固定啟用的星期。\n"
         "下方會顯示一張 LINE 原生選擇卡，點星期可開關；也可直接輸入例如：週一週三週五、週二週四、1,3,5。"
+    )
+
+
+def schedule_templates_text(db, profile) -> str:
+    templates = get_schedule_templates(db, profile.user_id, active_only=True)
+    return (
+        "週間常用排程：\n"
+        f"{week_schedule_overview(templates, profile)}"
+    )
+
+
+def format_schedule_conflict_text(db, user_id: int, weekdays: list[int]) -> str:
+    conflicts = get_schedule_conflicts(db, user_id, weekdays)
+    if not conflicts:
+        return ""
+    lines = []
+    for template in conflicts:
+        overlap = sorted(set(weekdays).intersection(template_weekdays(template)))
+        day_text = "、".join(WEEKDAY_NAMES[day] for day in overlap)
+        lines.append(f"- {day_text} 已有 {template.target_arrival_time} 到{template.destination_label}")
+    return "這些星期已經有排程：\n" + "\n".join(lines)
+
+
+def save_schedule_template_from_pending(db, user_id: int, pending: dict, *, replace_conflicts: bool = False):
+    return create_schedule_template(
+        db,
+        user_id=user_id,
+        target_arrival_time=pending["time"],
+        destination_label=pending["label"],
+        active_weekdays=pending["days"],
+        name=f"{pending['label']} {pending['time']}",
+        replace_conflicts=replace_conflicts,
     )
 
 
@@ -620,6 +790,75 @@ async def reply_weekday_picker(reply_token: str, profile, message: str | None = 
     )
 
 
+def schedule_template_summary(time_value: str, label: str, days: list[int]) -> str:
+    day_text = "、".join(WEEKDAY_NAMES[day] for day in sorted(days)) if days else "尚未選擇"
+    return f"{time_value} 到{label}｜{day_text}"
+
+
+def build_schedule_template_weekday_picker_flex(time_value: str, label: str, selected_days: list[int]) -> dict:
+    active_days = set(selected_days or [])
+
+    def day_button(day: int) -> dict:
+        active = day in active_days
+        return {
+            "type": "button",
+            "style": "primary" if active else "secondary",
+            "height": "sm",
+            "action": {
+                "type": "postback",
+                "label": WEEKDAY_NAMES[day],
+                "data": f"action=template_toggle_weekday&day={day}",
+                "displayText": f"切換{WEEKDAY_NAMES[day]}",
+            },
+        }
+
+    def row(days: list[int]) -> dict:
+        return {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [day_button(day) for day in days],
+        }
+
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": "這組排程適用星期", "weight": "bold", "size": "xl"},
+                {"type": "text", "text": schedule_template_summary(time_value, label, sorted(active_days)), "size": "sm", "color": "#666666", "wrap": True},
+                row([0, 1, 2]),
+                row([3, 4, 5]),
+                row([6]),
+                {"type": "separator", "margin": "md"},
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "儲存排程",
+                        "data": "action=template_save",
+                        "displayText": "儲存排程",
+                    },
+                },
+            ],
+        },
+    }
+
+
+async def reply_schedule_template_weekday_picker(reply_token: str, time_value: str, label: str, selected_days: list[int], message: str | None = None) -> None:
+    await reply_flex_with_quick_reply(
+        reply_token,
+        message or "請選擇這組排程適用的星期",
+        build_schedule_template_weekday_picker_flex(time_value, label, selected_days),
+        with_done_button([{"type": "message", "label": "取消", "text": "取消新增排程"}]),
+    )
+
+
 def build_command_help_carousel() -> dict:
     bubbles = []
     for title, prompts in CANONICAL_PROMPT_GROUPS.items():
@@ -763,6 +1002,13 @@ async def line_webhook(
                         continue
 
                     if postback_choice == "need_5":
+                        if today_override and today_override.departure_timeout_at:
+                            await reply_with_quick_reply(
+                                reply_token,
+                                "今日通勤追蹤已自動暫停，Dashboard 會改看下一個排程。",
+                                MAIN_MENU_QUICK_REPLIES,
+                            )
+                            continue
                         override = snooze_departure_for_user(db, user.id, today_date)
                         snooze_text = format_taipei_hhmm(override.departure_snoozed_until)
                         await reply_with_quick_reply(
@@ -819,8 +1065,87 @@ async def line_webhook(
                     await reply_weekday_picker(reply_token, profile, f"已更新：{schedule_label(profile.active_weekdays)}")
                     continue
 
+                if postback_action in {"template_toggle_weekday", "template_save"}:
+                    profile = get_profile(db, user.id)
+                    pending = parse_schedule_template_pending(profile.pending_field)
+                    if pending.get("action") not in {"template_days", "template_conflict"}:
+                        await reply_with_quick_reply(reply_token, "目前沒有正在新增的常用排程，請先傳送「新增常用排程」。", TIME_TOPIC_QUICK_REPLIES)
+                        continue
+
+                    if postback_action == "template_toggle_weekday":
+                        try:
+                            day = int((postback_parts.get("day") or [""])[0])
+                        except ValueError:
+                            day = -1
+                        if not 0 <= day <= 6:
+                            await reply_schedule_template_weekday_picker(reply_token, pending["time"], pending["label"], pending["days"], "星期讀取失敗，請再選一次。")
+                            continue
+                        days = set(pending["days"])
+                        if day in days:
+                            days.remove(day)
+                        else:
+                            days.add(day)
+                        pending["days"] = sorted(days)
+                        set_pending_field(
+                            db,
+                            user.id,
+                            build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
+                        )
+                        await reply_schedule_template_weekday_picker(reply_token, pending["time"], pending["label"], pending["days"], "已更新星期，選好後請按「儲存排程」。")
+                        continue
+
+                    if not pending["days"]:
+                        await reply_schedule_template_weekday_picker(reply_token, pending["time"], pending["label"], pending["days"], "請至少選擇一天。")
+                        continue
+                    conflicts = get_schedule_conflicts(db, user.id, pending["days"])
+                    if conflicts:
+                        set_pending_field(
+                            db,
+                            user.id,
+                            build_schedule_template_pending("template_conflict", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
+                        )
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"{format_schedule_conflict_text(db, user.id, pending['days'])}\n\n要以哪一組為準？",
+                            SCHEDULE_CONFLICT_QUICK_REPLIES,
+                        )
+                        continue
+
+                    save_schedule_template_from_pending(db, user.id, pending)
+                    set_pending_field(db, user.id, None)
+                    clear_today_reminder_state_for_user(user.id)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已新增常用排程：{schedule_template_summary(pending['time'], pending['label'], pending['days'])}\n\n{schedule_templates_text(db, get_profile(db, user.id))}",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    continue
+
                 if postback_data == "action=set_preferred_arrival_time" and time_value:
                     profile_before = get_profile(db, user.id)
+                    if profile_before.pending_field == "template_time":
+                        set_pending_field(db, user.id, build_schedule_template_pending("template_label", time_value, ""))
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"這組排程是 {time_value} 要到哪裡？請選擇或輸入目的地標籤。",
+                            SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES,
+                        )
+                        continue
+                    if profile_before.pending_field and profile_before.pending_field.startswith("copy_template_time:"):
+                        template_id_text = profile_before.pending_field.split(":", 1)[1]
+                        try:
+                            template_id = int(template_id_text)
+                        except ValueError:
+                            template_id = None
+                        template = get_schedule_template(db, user.id, template_id) if template_id else None
+                        if template is None:
+                            set_pending_field(db, user.id, None)
+                            await reply_with_quick_reply(reply_token, "找不到原本排程，請重新選擇。", TIME_TOPIC_QUICK_REPLIES)
+                            continue
+                        days = template_weekdays(template)
+                        set_pending_field(db, user.id, build_schedule_template_pending("template_days", time_value, template.destination_label, days, copy_from=template.id))
+                        await reply_schedule_template_weekday_picker(reply_token, time_value, template.destination_label, days, "已複製原排程，請確認星期後按「儲存排程」。")
+                        continue
                     was_initial_arrival = (
                         profile_before.pending_field == "preferred_arrival_time"
                         or get_next_setup_step(profile_before) == "preferred_arrival_time"
@@ -833,10 +1158,11 @@ async def line_webhook(
                         print(f"[freeze-postback-preferred] error={e}")
                     updated_profile = get_profile(db, user.id)
                     if was_initial_arrival:
+                        destination_label = destination_label_for_profile(updated_profile)
                         set_pending_field(db, user.id, "active_weekdays")
                         await reply_with_quick_reply(
                             reply_token,
-                            f"已設定固定到公司時間：{time_value}\n\n{schedule_setup_prompt()}",
+                            f"已設定固定{arrival_label(destination_label)}：{time_value}\n\n{schedule_setup_prompt()}",
                             SCHEDULE_SETUP_QUICK_REPLIES,
                         )
                         continue
@@ -844,13 +1170,15 @@ async def line_webhook(
                     set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已更新固定到公司時間：{time_value}\n系統已開始重新計算今日提醒。\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                        f"已更新固定{arrival_label(destination_label_for_profile(updated_profile))}：{time_value}\n系統已開始重新計算今日提醒。\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time, db=db)}",
                         MAIN_MENU_QUICK_REPLIES,
                     )
                     continue
 
                 if postback_data == "action=set_today_arrival_time" and time_value:
                     upsert_override(db, user.id, today_date, time_value)
+                    profile = get_profile(db, user.id)
+                    destination_label = destination_label_for_profile(profile)
                     clear_today_reminder_state_for_user(user.id)
                     try:
                         await freeze_today_reminder_payload(db, user.id, today_date)
@@ -860,9 +1188,9 @@ async def line_webhook(
                     await reply_with_quick_reply(
                         reply_token,
                         (
-                            f"已設定今天臨時到公司時間：{time_value}\n"
+                            f"已設定今天臨時{arrival_label(destination_label)}：{time_value}\n"
                             "已為您調整時間並開始重新計算今天提醒。\n"
-                            f"明天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                            f"明天會自動回到固定{arrival_label(destination_label)} {profile.preferred_arrival_time}。"
                         ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
@@ -870,15 +1198,17 @@ async def line_webhook(
 
                 if postback_data == "action=set_tomorrow_arrival_time" and time_value:
                     upsert_override(db, user.id, tomorrow_date, time_value)
+                    profile = get_profile(db, user.id)
+                    destination_label = destination_label_for_profile(profile)
                     set_pending_field(db, user.id, None)
                     departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, time_value)
                     await reply_with_quick_reply(
                         reply_token,
                         (
-                            f"已設定明天臨時到公司時間：{time_value}\n"
+                            f"已設定明天臨時{arrival_label(destination_label)}：{time_value}\n"
                             "已為您調整時間並開始重新計算明天提醒。\n"
                             f"明天建議出門：{departure_time}\n"
-                            f"後天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                            f"後天會自動回到固定{arrival_label(destination_label)} {profile.preferred_arrival_time}。"
                         ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
@@ -907,22 +1237,34 @@ async def line_webhook(
                 if current_step == "home_location":
                     await save_location_or_address(db, user.id, "home", raw_address, lat=lat, lng=lng)
                     clear_today_reminder_state_for_user(user.id)
-                    set_pending_field(db, user.id, "office_location")
+                    profile = get_profile(db, user.id)
+                    next_step = get_next_setup_step(profile)
+                    if next_step is None:
+                        set_pending_field(db, user.id, None)
+                        await reply_with_quick_reply(reply_token, "已儲存住家位置，設定已更新。", MAIN_MENU_QUICK_REPLIES)
+                        continue
+                    set_pending_field(db, user.id, next_step)
                     await reply_with_quick_reply(
                         reply_token,
-                        "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"],
-                        OFFICE_QUICK_REPLY,
+                        "已儲存住家位置。\n" + FIELD_PROMPTS[next_step],
+                        setup_quick_replies_for_step(next_step),
                     )
                     continue
 
                 if current_step == "office_location":
                     await save_location_or_address(db, user.id, "office", raw_address, lat=lat, lng=lng)
                     clear_today_reminder_state_for_user(user.id)
-                    set_pending_field(db, user.id, "preferred_arrival_time")
+                    profile = get_profile(db, user.id)
+                    next_step = get_next_setup_step(profile)
+                    if next_step is None:
+                        set_pending_field(db, user.id, None)
+                        await reply_with_quick_reply(reply_token, f"已儲存{destination_label_for_profile(profile)}位置，設定已更新。", MAIN_MENU_QUICK_REPLIES)
+                        continue
+                    set_pending_field(db, user.id, next_step)
                     await reply_with_quick_reply(
                         reply_token,
-                        "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"],
-                        ARRIVAL_TIME_QUICK_REPLIES,
+                        f"已儲存{destination_label_for_profile(profile)}位置。\n" + FIELD_PROMPTS[next_step],
+                        setup_quick_replies_for_step(next_step),
                     )
                     continue
 
@@ -955,6 +1297,11 @@ async def line_webhook(
                 _setup_commands = (
                     COMMAND_ALIASES["send_home_location"]
                     | COMMAND_ALIASES["send_office_location"]
+                    | COMMAND_ALIASES["identity_settings"]
+                    | COMMAND_ALIASES["set_identity_student"]
+                    | COMMAND_ALIASES["set_identity_worker"]
+                    | COMMAND_ALIASES["set_identity_slash"]
+                    | COMMAND_ALIASES["custom_destination_label"]
                     | COMMAND_ALIASES["reset"]
                     | COMMAND_ALIASES["finish_settings"]
                     | COMMAND_ALIASES["dashboard_link"]
@@ -976,6 +1323,8 @@ async def line_webhook(
                             _is_valid_setup_input = 0 <= _h <= 23 and 0 <= _m <= 59
                         except ValueError:
                             pass
+                elif _current_pending == "destination_label":
+                    _is_valid_setup_input = bool(user_text.strip())
 
                 if command_text not in _setup_commands and not _is_valid_setup_input:
                     set_pending_field(db, user.id, _next_step)
@@ -992,17 +1341,10 @@ async def line_webhook(
                 next_step = get_next_setup_step(profile)
                 if next_step is not None:
                     set_pending_field(db, user.id, next_step)
-                    quick_replies = (
-                        HOME_QUICK_REPLY
-                        if next_step == "home_location"
-                        else OFFICE_QUICK_REPLY
-                        if next_step == "office_location"
-                        else ARRIVAL_TIME_QUICK_REPLIES
-                    )
                     await reply_with_quick_reply(
                         reply_token,
                         "基本設定尚未完成，先完成這一步就能使用完整功能：\n" + FIELD_PROMPTS[next_step],
-                        quick_replies,
+                        setup_quick_replies_for_step(next_step),
                     )
                     continue
 
@@ -1058,7 +1400,7 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["topic_time"]:
                 await reply_with_quick_reply(
                     reply_token,
-                    "時間設定：請選擇要調整今天、明天，或查看明天建議出門時間。",
+                    "時間設定：可設定身份標籤、新增週間常用排程，也可臨時調整今天或明天的到達時間。",
                     TIME_TOPIC_QUICK_REPLIES,
                 )
                 continue
@@ -1076,7 +1418,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override),
+                    format_schedule_text(db, profile, today_date, today_override, tomorrow_date, tomorrow_override),
                     SCHEDULE_QUICK_REPLIES,
                 )
                 continue
@@ -1126,16 +1468,151 @@ async def line_webhook(
                     set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(
                         reply_token, 
-                        format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode),
+                        format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode, db=db),
                         MAIN_MENU_QUICK_REPLIES
                     )
                 else:
                     set_pending_field(db, user.id, next_step)
                     await reply_with_quick_reply(
                         reply_token,
-                        format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode) + "\n\n" + FIELD_PROMPTS[next_step],
-                        MAIN_MENU_QUICK_REPLIES
+                        format_profile_text(profile, today_override_time, tomorrow_override_time, today_mode, db=db) + "\n\n" + FIELD_PROMPTS[next_step],
+                        setup_quick_replies_for_step(next_step)
                     )
+                continue
+
+            if command_text in COMMAND_ALIASES["identity_settings"]:
+                profile = get_profile(db, user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"目前身份：{identity_display_name(getattr(profile, 'identity_type', None))}\n目前目的地顯示為：{destination_label_for_profile(profile)}\n請選擇身份，或自訂目的地標籤。",
+                    IDENTITY_QUICK_REPLIES,
+                )
+                continue
+
+            identity_map = {
+                "set_identity_student": ("student", destination_label_for_identity("student")),
+                "set_identity_worker": ("worker", destination_label_for_identity("worker")),
+                "set_identity_slash": ("slash", destination_label_for_identity("slash")),
+            }
+            handled_identity = False
+            for alias_key, (identity_type, label) in identity_map.items():
+                if command_text in COMMAND_ALIASES[alias_key]:
+                    profile = set_identity_and_destination_label(db, user.id, identity_type, label)
+                    clear_today_reminder_state_for_user(user.id)
+                    next_step = get_next_setup_step(profile)
+                    if next_step is not None:
+                        set_pending_field(db, user.id, next_step)
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"已設定身份為「{identity_display_name(identity_type)}」。\n接下來訊息會顯示為「{arrival_label(destination_label_for_profile(profile))}」。\n\n{FIELD_PROMPTS[next_step]}",
+                            setup_quick_replies_for_step(next_step),
+                        )
+                        handled_identity = True
+                        break
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已設定身份為「{identity_display_name(identity_type)}」。\n接下來訊息會顯示為「{arrival_label(destination_label_for_profile(profile))}」。",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    handled_identity = True
+                    break
+            if handled_identity:
+                continue
+
+            if command_text in COMMAND_ALIASES["custom_destination_label"]:
+                set_pending_field(db, user.id, "destination_label")
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請輸入想顯示的目的地名稱，例如：學校、公司、實驗室、兼職公司。",
+                    with_done_button([
+                        {"type": "message", "label": "學校", "text": "學校"},
+                        {"type": "message", "label": "公司", "text": "公司"},
+                        {"type": "message", "label": "兼職公司", "text": "兼職公司"},
+                    ]),
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["add_schedule_template"]:
+                set_pending_field(db, user.id, "template_time")
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請輸入這組常用排程的目標到達時間，例如：09:00。",
+                    ARRIVAL_TIME_QUICK_REPLIES,
+                )
+                continue
+
+            copy_schedule_value = extract_command_value(user_text, COMMAND_ALIASES["copy_schedule_template"])
+            if copy_schedule_value:
+                template_id_text = copy_schedule_value.replace("排程", "").strip()
+                try:
+                    template_id = int(template_id_text)
+                except ValueError:
+                    template_id = None
+                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                if template is None:
+                    await reply_with_quick_reply(reply_token, "找不到這組排程，請重新選擇。", TIME_TOPIC_QUICK_REPLIES)
+                    continue
+                set_pending_field(db, user.id, f"copy_template_time:{template.id}")
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"要複製「{template.target_arrival_time} 到{template.destination_label}」。\n請輸入新的到達時間，例如：08:30。",
+                    ARRIVAL_TIME_QUICK_REPLIES,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["copy_schedule_template"]:
+                templates = get_schedule_templates(db, user.id, active_only=True)
+                if not templates:
+                    await reply_with_quick_reply(reply_token, "目前還沒有可複製的常用排程，請先新增一組。", TIME_TOPIC_QUICK_REPLIES)
+                    continue
+                items = [
+                    {
+                        "type": "message",
+                        "label": f"複製 {template.id}",
+                        "text": f"複製常用排程 {template.id}",
+                    }
+                    for template in templates[:10]
+                ]
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請選擇要複製的排程：\n" + "\n".join(
+                        f"{template.id}. {template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）"
+                        for template in templates
+                    ),
+                    with_done_button(items),
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["cancel_schedule_template"]:
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(reply_token, "已取消新增常用排程。", TIME_TOPIC_QUICK_REPLIES)
+                continue
+
+            if command_text in COMMAND_ALIASES["replace_schedule_conflict"] or command_text in COMMAND_ALIASES["keep_schedule_conflict"]:
+                profile = get_profile(db, user.id)
+                pending = parse_schedule_template_pending(profile.pending_field)
+                if pending.get("action") != "template_conflict":
+                    await reply_with_quick_reply(reply_token, "目前沒有待處理的排程衝突。", TIME_TOPIC_QUICK_REPLIES)
+                    continue
+                replace_conflicts = command_text in COMMAND_ALIASES["replace_schedule_conflict"]
+                if not replace_conflicts:
+                    conflict_days = set()
+                    for template in get_schedule_conflicts(db, user.id, pending["days"]):
+                        conflict_days.update(set(pending["days"]).intersection(template_weekdays(template)))
+                    pending["days"] = [day for day in pending["days"] if day not in conflict_days]
+                    if not pending["days"]:
+                        set_pending_field(db, user.id, None)
+                        await reply_with_quick_reply(reply_token, "已保留原排程，這次沒有新增任何星期。", TIME_TOPIC_QUICK_REPLIES)
+                        continue
+                save_schedule_template_from_pending(db, user.id, pending, replace_conflicts=replace_conflicts)
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已新增常用排程：{schedule_template_summary(pending['time'], pending['label'], pending['days'])}\n\n{schedule_templates_text(db, get_profile(db, user.id))}",
+                    MAIN_MENU_QUICK_REPLIES,
+                )
                 continue
 
             if command_text in COMMAND_ALIASES["dashboard_link"]:
@@ -1320,8 +1797,8 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["enable_reminder"]:
-                set_reminder_enabled(db, user.id, True)
-                await reply_with_quick_reply(reply_token, "已開啟自動提醒，系統會依目前生效的到公司時間重新計算提醒。", MAIN_MENU_QUICK_REPLIES)
+                profile = set_reminder_enabled(db, user.id, True)
+                await reply_with_quick_reply(reply_token, f"已開啟自動提醒，系統會依目前生效的{arrival_label(destination_label_for_profile(profile))}重新計算提醒。", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["disable_reminder"]:
@@ -1342,7 +1819,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    format_schedule_text(profile, today_date, today_override, tomorrow_date, tomorrow_override),
+                    format_schedule_text(db, profile, today_date, today_override, tomorrow_date, tomorrow_override),
                     SCHEDULE_QUICK_REPLIES,
                 )
                 continue
@@ -1424,7 +1901,7 @@ async def line_webhook(
                 clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    "已啟用今天通勤提醒，會依今天實際到公司時間重新計算。",
+                    "已啟用今天通勤提醒，會依今天實際到達時間重新計算。",
                     MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
@@ -1433,7 +1910,7 @@ async def line_webhook(
                 set_commute_disabled_for_date(db, user.id, tomorrow_date, False)
                 await reply_with_quick_reply(
                     reply_token,
-                    "已啟用明天通勤提醒，會依明天實際到公司時間計算。",
+                    "已啟用明天通勤提醒，會依明天實際到達時間計算。",
                     MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
@@ -1448,6 +1925,14 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["departure_need_5"]:
+                today_override = get_override_for_date(db, user.id, today_date)
+                if today_override and today_override.departure_timeout_at:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "今日通勤追蹤已自動暫停，Dashboard 會改看下一個排程。",
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    continue
                 override = snooze_departure_for_user(db, user.id, today_date)
                 snooze_text = format_taipei_hhmm(override.departure_snoozed_until)
                 await reply_with_quick_reply(
@@ -1541,9 +2026,10 @@ async def line_webhook(
                 next_step = get_next_setup_step(profile)
                 if next_step is not None:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], setup_quick_replies_for_step(next_step))
                     continue
-                if not commute_date_is_active(profile, today_date, today_override):
+                today_setting = effective_commute_setting_for_date(db, profile, today_date, today_override)
+                if today_setting is None:
                     await reply_with_quick_reply(
                         reply_token,
                         "今天排程是休息日，不會推送出門提醒。\n若今天臨時要通勤，請按「今天啟用」。",
@@ -1580,25 +2066,25 @@ async def line_webhook(
                 next_step = get_next_setup_step(profile)
                 if next_step is not None:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], setup_quick_replies_for_step(next_step))
                     continue
 
-                effective_arrival_time = profile.preferred_arrival_time
                 override = get_override_for_date(db, user.id, tomorrow_date)
-                if not commute_date_is_active(profile, tomorrow_date, override):
+                tomorrow_setting = effective_commute_setting_for_date(db, profile, tomorrow_date, override)
+                if tomorrow_setting is None:
                     await reply_with_quick_reply(
                         reply_token,
                         "明天排程是休息日，不會推送通勤提醒。\n若明天臨時要通勤，請按「明天啟用」。",
                         SCHEDULE_QUICK_REPLIES,
                     )
                     continue
-                if override and override.target_arrival_time:
-                    effective_arrival_time = override.target_arrival_time
+                effective_arrival_time = tomorrow_setting["arrival_time"]
+                destination_label = tomorrow_setting["destination_label"]
 
                 departure_time = await calculate_departure_time(profile, tomorrow_date, effective_arrival_time)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"明天到公司時間：{effective_arrival_time}\n明天建議出門：{departure_time}",
+                    f"明天{arrival_label(destination_label)}：{effective_arrival_time}\n明天建議出門：{departure_time}",
                     MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
@@ -1608,7 +2094,7 @@ async def line_webhook(
                 next_step = get_next_setup_step(profile)
                 if next_step is not None:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], setup_quick_replies_for_step(next_step))
                     continue
 
                 set_pending_field(db, user.id, "override_today_arrival_time")
@@ -1624,7 +2110,7 @@ async def line_webhook(
                 next_step = get_next_setup_step(profile)
                 if next_step is not None:
                     set_pending_field(db, user.id, next_step)
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], setup_quick_replies_for_step(next_step))
                     continue
 
                 set_pending_field(db, user.id, "override_tomorrow_arrival_time")
@@ -1697,6 +2183,99 @@ async def line_webhook(
                     )
                     continue
 
+            if current_step == "destination_label":
+                label = user_text.strip()
+                if not label or label in COMMAND_ALIASES["custom_destination_label"]:
+                    await reply_with_quick_reply(reply_token, "請輸入目的地名稱，例如：學校、公司、實驗室、兼職公司。", IDENTITY_QUICK_REPLIES)
+                    continue
+                identity_type = getattr(profile, "identity_type", None) or "slash"
+                profile = set_identity_and_destination_label(db, user.id, identity_type, label)
+                clear_today_reminder_state_for_user(user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已設定目的地標籤為「{destination_label_for_profile(profile)}」。\n之後會顯示「{arrival_label(destination_label_for_profile(profile))}」。\n\n{FIELD_PROMPTS[next_step]}",
+                        setup_quick_replies_for_step(next_step),
+                    )
+                    continue
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已設定目的地標籤為「{destination_label_for_profile(profile)}」。\n之後會顯示「{arrival_label(destination_label_for_profile(profile))}」。",
+                    MAIN_MENU_QUICK_REPLIES,
+                )
+                continue
+
+            if current_step == "template_time":
+                value = user_text.strip()
+                if not hhmm_is_valid(value):
+                    await reply_with_quick_reply(reply_token, "時間格式錯誤，請輸入 HH:MM，例如 09:00。", ARRIVAL_TIME_QUICK_REPLIES)
+                    continue
+                set_pending_field(db, user.id, build_schedule_template_pending("template_label", value, ""))
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"這組排程是 {value} 要到哪裡？請選擇或輸入目的地標籤。",
+                    SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES,
+                )
+                continue
+
+            if current_step and current_step.startswith("copy_template_time:"):
+                template_id_text = current_step.split(":", 1)[1]
+                try:
+                    template_id = int(template_id_text)
+                except ValueError:
+                    template_id = None
+                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                value = user_text.strip()
+                if template is None:
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "找不到原本排程，請重新選擇。", TIME_TOPIC_QUICK_REPLIES)
+                    continue
+                if not hhmm_is_valid(value):
+                    await reply_with_quick_reply(reply_token, "時間格式錯誤，請輸入 HH:MM，例如 08:30。", ARRIVAL_TIME_QUICK_REPLIES)
+                    continue
+                days = template_weekdays(template)
+                set_pending_field(db, user.id, build_schedule_template_pending("template_days", value, template.destination_label, days, copy_from=template.id))
+                await reply_schedule_template_weekday_picker(reply_token, value, template.destination_label, days, "已複製原排程，請確認星期後按「儲存排程」。")
+                continue
+
+            pending_template = parse_schedule_template_pending(current_step)
+            if pending_template.get("action") == "template_label":
+                label = user_text.strip()
+                if not label or label == "自訂目的地":
+                    await reply_with_quick_reply(reply_token, "請直接輸入目的地標籤，例如：學校、公司、兼職公司。", SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES)
+                    continue
+                set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], label, []))
+                await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], label, [], "請批次勾選這組時間適用的星期。")
+                continue
+
+            if pending_template.get("action") == "template_days":
+                weekdays = parse_custom_weekdays(user_text)
+                if weekdays is None:
+                    await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], pending_template["days"], "請用下方卡片勾選星期，或輸入例如：週一週三週五。")
+                    continue
+                pending_template["days"] = weekdays
+                conflicts = get_schedule_conflicts(db, user.id, pending_template["days"])
+                if conflicts:
+                    set_pending_field(db, user.id, build_schedule_template_pending("template_conflict", pending_template["time"], pending_template["label"], pending_template["days"], pending_template.get("copy_from")))
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"{format_schedule_conflict_text(db, user.id, pending_template['days'])}\n\n要以哪一組為準？",
+                        SCHEDULE_CONFLICT_QUICK_REPLIES,
+                    )
+                    continue
+                save_schedule_template_from_pending(db, user.id, pending_template)
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已新增常用排程：{schedule_template_summary(pending_template['time'], pending_template['label'], pending_template['days'])}\n\n{schedule_templates_text(db, get_profile(db, user.id))}",
+                    MAIN_MENU_QUICK_REPLIES,
+                )
+                continue
+
             if current_step in SCHEDULE_PENDING_FIELDS:
                 weekdays = parse_custom_weekdays(user_text)
                 if weekdays is None:
@@ -1731,22 +2310,34 @@ async def line_webhook(
                     if current_step == "home_location":
                         await save_location_or_address(db, user.id, "home", typed_address)
                         clear_today_reminder_state_for_user(user.id)
-                        set_pending_field(db, user.id, "office_location")
+                        profile = get_profile(db, user.id)
+                        next_step = get_next_setup_step(profile)
+                        if next_step is None:
+                            set_pending_field(db, user.id, None)
+                            await reply_with_quick_reply(reply_token, "已儲存住家位置，設定已更新。", MAIN_MENU_QUICK_REPLIES)
+                            continue
+                        set_pending_field(db, user.id, next_step)
                         await reply_with_quick_reply(
                             reply_token,
-                            "已儲存住家位置。\n" + FIELD_PROMPTS["office_location"],
-                            OFFICE_QUICK_REPLY,
+                            "已儲存住家位置。\n" + FIELD_PROMPTS[next_step],
+                            setup_quick_replies_for_step(next_step),
                         )
                         continue
 
                     if current_step == "office_location":
                         await save_location_or_address(db, user.id, "office", typed_address)
                         clear_today_reminder_state_for_user(user.id)
-                        set_pending_field(db, user.id, "preferred_arrival_time")
+                        profile = get_profile(db, user.id)
+                        next_step = get_next_setup_step(profile)
+                        if next_step is None:
+                            set_pending_field(db, user.id, None)
+                            await reply_with_quick_reply(reply_token, f"已儲存{destination_label_for_profile(profile)}位置，設定已更新。", MAIN_MENU_QUICK_REPLIES)
+                            continue
+                        set_pending_field(db, user.id, next_step)
                         await reply_with_quick_reply(
                             reply_token,
-                            "已儲存公司位置。\n" + FIELD_PROMPTS["preferred_arrival_time"],
-                            ARRIVAL_TIME_QUICK_REPLIES,
+                            f"已儲存{destination_label_for_profile(profile)}位置。\n" + FIELD_PROMPTS[next_step],
+                            setup_quick_replies_for_step(next_step),
                         )
                         continue
                 except Exception as e:
@@ -1768,6 +2359,7 @@ async def line_webhook(
 
                 if current_step == "override_today_arrival_time":
                     upsert_override(db, user.id, today_date, value)
+                    destination_label = destination_label_for_profile(get_profile(db, user.id))
                     clear_today_reminder_state_for_user(user.id)
                     try:
                         await freeze_today_reminder_payload(db, user.id, today_date)
@@ -1777,9 +2369,9 @@ async def line_webhook(
                     await reply_with_quick_reply(
                         reply_token,
                         (
-                            f"已設定今天臨時到公司時間：{value}\n"
+                            f"已設定今天臨時{arrival_label(destination_label)}：{value}\n"
                             "已為您調整時間並開始重新計算今天提醒。\n"
-                            f"明天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                            f"明天會自動回到固定{arrival_label(destination_label)} {get_profile(db, user.id).preferred_arrival_time}。"
                         ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
@@ -1787,15 +2379,16 @@ async def line_webhook(
 
                 if current_step == "override_tomorrow_arrival_time":
                     upsert_override(db, user.id, tomorrow_date, value)
+                    destination_label = destination_label_for_profile(get_profile(db, user.id))
                     set_pending_field(db, user.id, None)
                     departure_time = await calculate_departure_time(get_profile(db, user.id), tomorrow_date, value)
                     await reply_with_quick_reply(
                         reply_token,
                         (
-                            f"已設定明天臨時到公司時間：{value}\n"
+                            f"已設定明天臨時{arrival_label(destination_label)}：{value}\n"
                             "已為您調整時間並開始重新計算明天提醒。\n"
                             f"明天建議出門：{departure_time}\n"
-                            f"後天會自動回到固定到公司時間 {get_profile(db, user.id).preferred_arrival_time}。"
+                            f"後天會自動回到固定{arrival_label(destination_label)} {get_profile(db, user.id).preferred_arrival_time}。"
                         ),
                         MAIN_MENU_QUICK_REPLIES,
                     )
@@ -1815,10 +2408,11 @@ async def line_webhook(
 
                 updated_profile = get_profile(db, user.id)
                 if was_initial_arrival:
+                    destination_label = destination_label_for_profile(updated_profile)
                     set_pending_field(db, user.id, "active_weekdays")
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已設定固定到公司時間：{value}\n\n{schedule_setup_prompt()}",
+                        f"已設定固定{arrival_label(destination_label)}：{value}\n\n{schedule_setup_prompt()}",
                         SCHEDULE_SETUP_QUICK_REPLIES,
                     )
                     continue
@@ -1826,7 +2420,7 @@ async def line_webhook(
                 set_pending_field(db, user.id, None)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已更新固定到公司時間：{value}\n系統已開始重新計算今日提醒。\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time)}",
+                    f"已更新固定{arrival_label(destination_label_for_profile(updated_profile))}：{value}\n系統已開始重新計算今日提醒。\n\n{format_profile_text(updated_profile, today_override_time, tomorrow_override_time, db=db)}",
                     MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
@@ -1836,14 +2430,11 @@ async def line_webhook(
                 await reply_with_quick_reply(reply_token, READY_MENU_TEXT, MAIN_MENU_QUICK_REPLIES)
             else:
                 set_pending_field(db, user.id, next_step)
-                if next_step == "home_location":
-                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], HOME_QUICK_REPLY)
-                elif next_step == "office_location":
-                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], OFFICE_QUICK_REPLY)
-                elif next_step == "preferred_arrival_time":
-                    await reply_with_quick_reply(reply_token, FIELD_PROMPTS[next_step], ARRIVAL_TIME_QUICK_REPLIES)
-                else:
-                    await reply_text(reply_token, FIELD_PROMPTS[next_step])
+                await reply_with_quick_reply(
+                    reply_token,
+                    FIELD_PROMPTS[next_step],
+                    setup_quick_replies_for_step(next_step),
+                )
 
     finally:
         db.close()

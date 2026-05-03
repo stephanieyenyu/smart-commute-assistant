@@ -115,6 +115,15 @@ def extract_line_field(line_text: str | None, prefix: str) -> str | None:
     return None
 
 
+def extract_arrival_time_from_line_text(line_text: str | None) -> str | None:
+    if not line_text:
+        return None
+    for line in str(line_text).splitlines():
+        if line.startswith("目標") and "：" in line:
+            return line.split("：", 1)[1].strip()
+    return None
+
+
 def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
     if not plan.get("ok"):
         return {
@@ -145,7 +154,7 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
     state = dashboard_state_for_departure(seconds_until_departure, degraded=degraded)
     line_commute_text = plan.get("text")
     line_transport = extract_line_field(line_commute_text, "通勤方式：")
-    line_arrival = extract_line_field(line_commute_text, "目標抵達：")
+    line_arrival = extract_line_field(line_commute_text, "目標抵達：") or extract_arrival_time_from_line_text(line_commute_text)
 
     return {
         "ok": True,
@@ -153,6 +162,9 @@ def build_dashboard_payload(user_id: int, plan: dict, now: datetime) -> dict:
         "state": state,
         "target_date": plan["target_date"].isoformat() if hasattr(plan.get("target_date"), "isoformat") else plan.get("target_date"),
         "target_arrival_time": line_arrival or plan.get("effective_arrival_time"),
+        "destination_label": plan.get("destination_label") or "目的地",
+        "arrival_label": plan.get("arrival_label") or "到目的地時間",
+        "target_label_text": plan.get("target_label_text") or "抵達目的地",
         "departure_time": departure_time,
         "departure_at": departure_at,
         "is_snoozed": bool(plan.get("departure_snoozed_until")),
@@ -186,6 +198,9 @@ def build_no_active_day_payload(user_id: int, now: datetime, reason: str = "sche
         "reason": reason,
         "target_date": None,
         "target_arrival_time": "--:--",
+        "destination_label": "目的地",
+        "arrival_label": "到目的地時間",
+        "target_label_text": "抵達目的地",
         "departure_time": "--:--",
         "departure_at": None,
         "is_snoozed": False,

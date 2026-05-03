@@ -4,21 +4,30 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.commute_schedule import commute_date_is_active
 from app.db import SessionLocal
 from app.line_client import push_text, push_with_quick_reply
 from app.models import CommuteOverride, User
 from app.crud import (
     get_all_profiles,
+    get_household_id_for_user,
     get_next_setup_step,
     get_override_for_date,
     get_profile,
+    get_users_for_household,
+    mark_departure_timeout,
     mark_snooze_departure_sent,
     mark_snooze_one_min_sent,
     mark_nightly_brief_sent,
     mark_reminder_sent,
     mark_watchdog_alert_sent,
     clear_today_reminder_state_db,
+    effective_commute_date_is_active,
+    effective_commute_setting_for_date,
+)
+from app.departure_confirmation import (
+    DEPARTURE_TIMEOUT_LINE_MESSAGE,
+    DEPARTURE_TIMEOUT_LOOKAHEAD_HOURS,
+    DEPARTURE_TIMEOUT_MINUTES,
 )
 from app.reminder_timing import (
     ReminderTimingDecision,
@@ -37,6 +46,7 @@ METRO_RECOMPUTE_SECONDS = 300
 MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8
 WATCHDOG_DEPARTURE_WARNING_SECONDS = 15 * 60
 SNOOZE_ONE_MINUTE_WARNING_SECONDS = 60
+DEPARTURE_TIMEOUT_SECONDS = DEPARTURE_TIMEOUT_MINUTES * 60
 
 # Quick Reply buttons shown after departure reminder push
 REMINDER_QUICK_REPLIES = [
@@ -79,9 +89,8 @@ def _parse_hhmm_for_date(target_date, hhmm: str) -> datetime | None:
 
 def _effective_arrival_time_for_profile(db, profile, target_date) -> str | None:
     override = get_override_for_date(db, profile.user_id, target_date)
-    if override and override.target_arrival_time:
-        return override.target_arrival_time
-    return profile.preferred_arrival_time
+    setting = effective_commute_setting_for_date(db, profile, target_date, override)
+    return setting["arrival_time"] if setting else None
 
 
 def _hash_notification_key(*parts) -> str:
@@ -123,7 +132,7 @@ async def ensure_today_reminders_prepared(db, today):
                 continue
 
             override = get_override_for_date(db, profile.user_id, today)
-            if not commute_date_is_active(profile, today, override):
+            if not effective_commute_date_is_active(db, profile, today, override):
                 continue
             if override and override.departure_confirmed_at:
                 continue
@@ -195,7 +204,7 @@ async def check_and_send_departure_reminders():
                 profile = user.profile or get_profile(db, user.id)
                 if not profile.reminder_enabled:
                     continue
-                if not commute_date_is_active(profile, today, override):
+                if not effective_commute_date_is_active(db, profile, today, override):
                     continue
                 if override.departure_confirmed_at:
                     continue
@@ -254,6 +263,7 @@ async def check_and_send_departure_reminders():
                 print(traceback.format_exc())
 
         await check_and_send_snoozed_departure_reminders(db, today, now_dt)
+        await check_and_close_departure_timeouts(db, today, now_dt)
 
     finally:
         db.close()
@@ -279,7 +289,7 @@ async def check_and_send_snoozed_departure_reminders(db, today, now_dt: datetime
             profile = user.profile or get_profile(db, user.id)
             if not profile.reminder_enabled:
                 continue
-            if not commute_date_is_active(profile, today, override):
+            if not effective_commute_date_is_active(db, profile, today, override):
                 continue
 
             seconds_until = (snoozed_until - now_dt).total_seconds()
@@ -309,6 +319,92 @@ async def check_and_send_snoozed_departure_reminders(db, today, now_dt: datetime
             print(traceback.format_exc())
 
 
+async def _member_departure_datetime(db, member: User, today, now_dt: datetime) -> datetime | None:
+    profile = member.profile or get_profile(db, member.id)
+    if not getattr(profile, "reminder_enabled", True):
+        return None
+    if get_next_setup_step(profile) is not None:
+        return None
+
+    override = get_override_for_date(db, member.id, today)
+    if override and (override.departure_confirmed_at or override.departure_timeout_at):
+        return None
+    if not effective_commute_date_is_active(db, profile, today, override):
+        return None
+
+    departure_hhmm = override.frozen_departure_time if override else None
+    if not departure_hhmm:
+        plan = await build_today_commute_payload(
+            db=db,
+            user_id=member.id,
+            target_date=today,
+            force_mode_override=None,
+            header="今日通勤建議：",
+            log_plan=False,
+        )
+        if not plan.get("ok"):
+            return None
+        departure_hhmm = plan.get("final_departure_time")
+
+    departure_dt = _parse_hhmm_for_date(today, departure_hhmm)
+    if departure_dt is None or departure_dt <= now_dt:
+        return None
+    return departure_dt
+
+
+async def household_has_upcoming_departure_window(db, user: User, today, now_dt: datetime) -> bool:
+    household_id = get_household_id_for_user(user)
+    members = [
+        member
+        for member in get_users_for_household(db, household_id)
+        if member.id != user.id
+    ]
+    if not members:
+        return False
+
+    for member in members:
+        try:
+            departure_dt = await _member_departure_datetime(db, member, today, now_dt)
+            if departure_dt is None:
+                continue
+            window_start = departure_dt - timedelta(hours=DEPARTURE_TIMEOUT_LOOKAHEAD_HOURS)
+            if window_start <= now_dt <= departure_dt:
+                return True
+        except Exception as e:
+            print(f"[departure-timeout] household member check skipped member_id={member.id} error={e}")
+    return False
+
+
+async def check_and_close_departure_timeouts(db, today, now_dt: datetime):
+    overrides = db.query(CommuteOverride).filter(
+        CommuteOverride.target_date == today,
+        CommuteOverride.departure_check_sent_at.isnot(None),
+        CommuteOverride.departure_confirmed_at.is_(None),
+        CommuteOverride.departure_timeout_at.is_(None),
+    ).all()
+
+    for override in overrides:
+        try:
+            sent_at = _as_taipei_datetime(override.departure_check_sent_at)
+            if sent_at is None or (now_dt - sent_at).total_seconds() < DEPARTURE_TIMEOUT_SECONDS:
+                continue
+
+            user = db.query(User).filter(User.id == override.user_id).first()
+            if not user:
+                continue
+
+            silent = await household_has_upcoming_departure_window(db, user, today, now_dt)
+            if user.line_user_id:
+                await push_text(user.line_user_id, DEPARTURE_TIMEOUT_LINE_MESSAGE)
+            mark_departure_timeout(db, user.id, today, now_dt, silent=silent)
+            mode_text = "silent" if silent else "normal"
+            print(f"[departure-timeout] closed user_id={user.id} mode={mode_text}")
+        except Exception as e:
+            import traceback
+            print(f"[departure-timeout] failed user_id={override.user_id} error={e}")
+            print(traceback.format_exc())
+
+
 async def send_nightly_briefs():
     db = SessionLocal()
     try:
@@ -322,7 +418,7 @@ async def send_nightly_briefs():
                 if get_next_setup_step(profile) is not None:
                     continue
                 override = get_override_for_date(db, profile.user_id, tomorrow)
-                if not commute_date_is_active(profile, tomorrow, override):
+                if not effective_commute_date_is_active(db, profile, tomorrow, override):
                     continue
 
                 user = db.query(User).filter(User.id == profile.user_id).first()
@@ -352,7 +448,7 @@ async def send_nightly_briefs():
 
                 text = (
                     f"{payload['text']}\n\n"
-                    "可用下方按鈕修改明日到公司時間。"
+                    "可用下方按鈕修改明日到達時間。"
                 )
                 await push_with_quick_reply(user.line_user_id, text, NIGHTLY_BRIEF_QUICK_REPLIES)
                 mark_nightly_brief_sent(db, user.id, tomorrow, plan_key, now_dt)
@@ -378,7 +474,7 @@ async def run_morning_watchdog():
                 if get_next_setup_step(profile) is not None:
                     continue
                 override = get_override_for_date(db, profile.user_id, today)
-                if not commute_date_is_active(profile, today, override):
+                if not effective_commute_date_is_active(db, profile, today, override):
                     continue
 
                 effective_arrival_time = _effective_arrival_time_for_profile(db, profile, today)

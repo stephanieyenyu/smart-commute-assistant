@@ -28,6 +28,7 @@ class User(Base):
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
+    schedule_templates = relationship("CommuteScheduleTemplate", back_populates="user", cascade="all, delete-orphan")
     logs = relationship("CommuteLog", back_populates="user", cascade="all, delete-orphan")
 
 
@@ -66,6 +67,8 @@ class CommuteProfile(Base):
     walk_to_bus_stop_min = Column(Integer, nullable=True)
 
     preferred_arrival_time = Column(String, nullable=True)
+    identity_type = Column(String, nullable=True)
+    destination_label = Column(String, nullable=True)
     preferred_mode = Column(String, nullable=True)
     transport_preference = Column(JSON, nullable=True)
     max_walk_mins = Column(Integer, nullable=True)
@@ -77,6 +80,23 @@ class CommuteProfile(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="profile")
+
+
+class CommuteScheduleTemplate(Base):
+    __tablename__ = "commute_schedule_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    name = Column(String, nullable=True)
+    target_arrival_time = Column(String, nullable=False)
+    destination_label = Column(String, nullable=False, default="目的地")
+    active_weekdays = Column(JSON, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="schedule_templates")
 
 
 class CommuteOverride(Base):
@@ -107,6 +127,8 @@ class CommuteOverride(Base):
     departure_snoozed_until = Column(DateTime(timezone=True), nullable=True)
     snooze_one_min_sent_at = Column(DateTime(timezone=True), nullable=True)
     snooze_departure_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departure_timeout_at = Column(DateTime(timezone=True), nullable=True)
+    departure_timeout_silent = Column(Boolean, nullable=False, default=False)
 
     nightly_brief_plan_key = Column(String, nullable=True)
     nightly_brief_sent_at = Column(DateTime(timezone=True), nullable=True)
