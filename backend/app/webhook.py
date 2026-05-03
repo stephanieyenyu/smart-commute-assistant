@@ -2564,7 +2564,15 @@ async def line_webhook(
                         header="今日通勤建議：",
                     )
                     if not payload.get("ok"):
-                        await reply_with_quick_reply(reply_token, "今日通勤建議：\n目前無法計算通勤建議，請稍後再試。", COMMUTE_RESULT_QUICK_REPLIES)
+                        reason = payload.get("reason", "")
+                        user_message = payload.get("message")
+                        if reason == "missing_home_address":
+                            error_text = user_message or "您的住家地址設定不完整，請重新傳送住家位置 📍"
+                        elif reason == "missing_destination_address":
+                            error_text = user_message or "您的排程缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！"
+                        else:
+                            error_text = "今日通勤建議：\n目前無法計算通勤建議，請稍後再試。"
+                        await reply_with_quick_reply(reply_token, error_text, COMMUTE_RESULT_QUICK_REPLIES)
                         continue
 
                     try:
@@ -2584,9 +2592,9 @@ async def line_webhook(
                     )
                 except Exception as e:
                     print(f"[today-commute] unexpected error: {e}")
-                    await reply_multi_messages_with_quick_reply(
+                    await reply_with_quick_reply(
                         reply_token,
-                        ["今日通勤建議：\n系統處理時發生錯誤，請稍後再試。"],
+                        "今日通勤建議：\n系統處理時發生錯誤，請稍後再試。",
                         COMMUTE_RESULT_QUICK_REPLIES,
                     )
                 continue
@@ -2615,7 +2623,15 @@ async def line_webhook(
                         header="明日通勤建議：",
                     )
                     if not payload.get("ok"):
-                        await reply_with_quick_reply(reply_token, "明日通勤建議：\n目前無法計算通勤建議，請稍後再試。", COMMUTE_RESULT_QUICK_REPLIES)
+                        reason = payload.get("reason", "")
+                        user_message = payload.get("message")
+                        if reason == "missing_home_address":
+                            error_text = user_message or "您的住家地址設定不完整，請重新傳送住家位置 📍"
+                        elif reason == "missing_destination_address":
+                            error_text = user_message or "您的排程缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！"
+                        else:
+                            error_text = "明日通勤建議：\n目前無法計算通勤建議，請稍後再試。"
+                        await reply_with_quick_reply(reply_token, error_text, COMMUTE_RESULT_QUICK_REPLIES)
                         continue
                     await reply_multi_messages_with_quick_reply(
                         reply_token,
@@ -2624,9 +2640,9 @@ async def line_webhook(
                     )
                 except Exception as e:
                     print(f"[tomorrow-commute] unexpected error: {e}")
-                    await reply_multi_messages_with_quick_reply(
+                    await reply_with_quick_reply(
                         reply_token,
-                        ["明日通勤建議：\n系統處理時發生錯誤，請稍後再試。"],
+                        "明日通勤建議：\n系統處理時發生錯誤，請稍後再試。",
                         COMMUTE_RESULT_QUICK_REPLIES,
                     )
                 continue
