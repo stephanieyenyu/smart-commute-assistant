@@ -35,8 +35,10 @@ from app.crud import (
     get_users_for_household,
     ensure_personal_household,
     normalize_household_id,
+    remove_user_from_household,
     set_user_display_name,
     set_user_household_id,
+    user_is_household_owner,
     set_pending_field,
     update_profile_field,
     update_address_and_coords,
@@ -221,6 +223,7 @@ CUSTOM_SCHEDULE_QUICK_REPLIES = with_done_button([
 
 HOUSEHOLD_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "查看家庭成員", "text": "查看家庭成員"},
+    {"type": "message", "label": "移除成員", "text": "移除家庭成員"},
     {"type": "message", "label": "取得邀請碼", "text": "取得家庭邀請碼"},
     {"type": "message", "label": "建立家庭", "text": "建立家庭"},
     {"type": "message", "label": "設定我的名稱", "text": "設定我的名稱"},
@@ -231,6 +234,7 @@ DASHBOARD_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "個人看板", "text": "取得Dashboard連結"},
     {"type": "message", "label": "家庭看板", "text": "取得家庭Dashboard連結"},
     {"type": "message", "label": "家庭管理", "text": "家庭成員管理"},
+    {"type": "message", "label": "移除成員", "text": "移除家庭成員"},
     {"type": "message", "label": "電腦模式", "text": "電腦Dashboard設定"},
 ])
 
@@ -289,6 +293,9 @@ COMMAND_ALIASES = {
     "household_invite_code": {"取得家庭邀請碼", "家庭邀請碼", "取得邀請碼"},
     "join_household": {"加入家庭", "加入家庭群組"},
     "set_display_name": {"設定我的名稱", "設定暱稱", "修改我的名稱", "修改暱稱"},
+    "remove_household_member": {"移除家庭成員", "移除成員", "刪除家庭成員", "刪除成員"},
+    "confirm_remove_household_member": {"確認移除家庭成員", "確認移除成員", "確認移除"},
+    "cancel_remove_household_member": {"取消移除成員", "取消移除"},
     "leave_household": {"離開家庭", "退出家庭"},
     "computer_dashboard_guide": {"實體電腦Dashboard操作模式", "電腦Dashboard設定", "Kiosk說明", "外接螢幕設定說明"},
     "departure_left": {"已經出門了"},
@@ -300,7 +307,7 @@ CANONICAL_PROMPT_GROUPS = {
     "時間": ["修改今天到公司時間", "修改明天到公司時間", "明天幾點出門"],
     "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
     "排程": ["查看排程設定", "排程平日", "排程每天", "排程週末", "自訂日曆排程", "今天休息", "明天休息", "今天啟用", "明天啟用"],
-    "看板家庭": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
+    "看板家庭": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "移除家庭成員", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
     "基本設定": ["查看設定", "重新設定", "傳送住家地址", "傳送公司地址"],
 }
 
@@ -420,12 +427,86 @@ def extract_command_value(user_text: str, aliases: set[str]) -> str | None:
     return None
 
 
+def household_member_name(member) -> str:
+    return member.display_name or f"成員 {member.id}"
+
+
+def household_member_label(member) -> str:
+    name = household_member_name(member)
+    label = f"移除 {name}"
+    return label if len(label) <= 20 else f"移除 {name[:16]}..."
+
+
+def removable_household_members(db, user) -> list:
+    household_id = get_household_id_for_user(user)
+    return [member for member in get_users_for_household(db, household_id) if member.id != user.id]
+
+
+def find_household_member_for_removal(db, user, raw_value: str | None):
+    value = (raw_value or "").strip()
+    if not value:
+        return None
+
+    members = removable_household_members(db, user)
+    for member in members:
+        names = {
+            str(member.id),
+            f"成員 {member.id}",
+            household_member_name(member),
+        }
+        if value in names:
+            return member
+    return None
+
+
+def remove_member_quick_replies(db, user) -> list[dict]:
+    items = [
+        {"type": "message", "label": household_member_label(member), "text": f"移除家庭成員 {member.id}"}
+        for member in removable_household_members(db, user)
+    ]
+    items.append({"type": "message", "label": "取消", "text": "取消移除成員"})
+    return with_done_button(items)
+
+
+def confirm_remove_member_quick_replies(member_id: int) -> list[dict]:
+    return with_done_button([
+        {"type": "message", "label": "確認移除", "text": f"確認移除家庭成員 {member_id}"},
+        {"type": "message", "label": "取消", "text": "取消移除成員"},
+    ])
+
+
+def format_remove_member_prompt(db, user) -> str:
+    if not user_is_household_owner(user):
+        return (
+            "只有家庭建立者可以移除家庭成員。\n"
+            "如果你想離開目前家庭，請傳送「離開家庭」。"
+        )
+
+    members = removable_household_members(db, user)
+    if not members:
+        return "目前沒有其他家庭成員可以移除。"
+
+    member_lines = [f"- {household_member_name(member)}（編號 {member.id}）" for member in members]
+    return (
+        "請選擇要移除的家庭成員：\n"
+        + "\n".join(member_lines)
+        + "\n\n被移除的成員會回到自己的個人家庭群組，原本的通勤設定會保留。"
+    )
+
+
+def format_remove_member_confirm_text(member) -> str:
+    return (
+        f"確定要將「{household_member_name(member)}」移出家庭嗎？\n"
+        "對方的帳號和通勤設定會保留，只是不再顯示於這個家庭 Dashboard。"
+    )
+
+
 def format_household_management_text(db, user) -> str:
     household_id = get_household_id_for_user(user)
     members = get_users_for_household(db, household_id)
     member_lines = []
     for member in members:
-        name = member.display_name or f"成員 {member.id}"
+        name = household_member_name(member)
         suffix = "（你）" if member.id == user.id else ""
         member_lines.append(f"- {name}{suffix}")
     members_text = "\n".join(member_lines) if member_lines else "- 目前只有你"
@@ -437,6 +518,7 @@ def format_household_management_text(db, user) -> str:
         "設定我的名稱 小明\n"
         "取得家庭邀請碼\n"
         "加入家庭 邀請碼\n"
+        "移除家庭成員\n"
         "取得家庭Dashboard連結"
     )
 
@@ -1129,6 +1211,59 @@ async def line_webhook(
                 )
                 continue
 
+            if command_text in COMMAND_ALIASES["cancel_remove_household_member"]:
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(reply_token, "已取消移除家庭成員。", HOUSEHOLD_QUICK_REPLIES)
+                continue
+
+            confirm_remove_value = extract_command_value(user_text, COMMAND_ALIASES["confirm_remove_household_member"])
+            if confirm_remove_value:
+                user = ensure_personal_household(db, user.id)
+                member = find_household_member_for_removal(db, user, confirm_remove_value)
+                if not user_is_household_owner(user):
+                    await reply_with_quick_reply(reply_token, format_remove_member_prompt(db, user), HOUSEHOLD_QUICK_REPLIES)
+                    continue
+                if member is None:
+                    await reply_with_quick_reply(reply_token, "找不到這位家庭成員，請重新選擇。", remove_member_quick_replies(db, user))
+                    continue
+                removed_name = household_member_name(member)
+                remove_user_from_household(db, user.id, member.id)
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已將「{removed_name}」移出家庭。\n對方會回到自己的個人家庭群組，原本通勤設定仍會保留。",
+                    HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
+            remove_member_value = extract_command_value(user_text, COMMAND_ALIASES["remove_household_member"])
+            if remove_member_value:
+                user = ensure_personal_household(db, user.id)
+                if not user_is_household_owner(user):
+                    await reply_with_quick_reply(reply_token, format_remove_member_prompt(db, user), HOUSEHOLD_QUICK_REPLIES)
+                    continue
+                member = find_household_member_for_removal(db, user, remove_member_value)
+                if member is None:
+                    await reply_with_quick_reply(reply_token, "找不到這位家庭成員，請重新選擇。", remove_member_quick_replies(db, user))
+                    continue
+                set_pending_field(db, user.id, f"confirm_remove_household_member:{member.id}")
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_remove_member_confirm_text(member),
+                    confirm_remove_member_quick_replies(member.id),
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["remove_household_member"]:
+                user = ensure_personal_household(db, user.id)
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_remove_member_prompt(db, user),
+                    remove_member_quick_replies(db, user) if user_is_household_owner(user) and removable_household_members(db, user) else HOUSEHOLD_QUICK_REPLIES,
+                )
+                continue
+
             if command_text in COMMAND_ALIASES["household_management"]:
                 user = ensure_personal_household(db, user.id)
                 await reply_with_quick_reply(
@@ -1524,6 +1659,43 @@ async def line_webhook(
                     HOUSEHOLD_QUICK_REPLIES,
                 )
                 continue
+
+            if current_step and current_step.startswith("confirm_remove_household_member:"):
+                member_id_text = current_step.split(":", 1)[1]
+                if command_text in COMMAND_ALIASES["cancel_remove_household_member"] or command_text in COMMAND_ALIASES["finish_settings"]:
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "已取消移除家庭成員。", HOUSEHOLD_QUICK_REPLIES)
+                    continue
+
+                if command_text in COMMAND_ALIASES["confirm_remove_household_member"]:
+                    user = ensure_personal_household(db, user.id)
+                    member = find_household_member_for_removal(db, user, member_id_text)
+                    if not user_is_household_owner(user):
+                        set_pending_field(db, user.id, None)
+                        await reply_with_quick_reply(reply_token, format_remove_member_prompt(db, user), HOUSEHOLD_QUICK_REPLIES)
+                        continue
+                    if member is None:
+                        set_pending_field(db, user.id, None)
+                        await reply_with_quick_reply(reply_token, "找不到這位家庭成員，請重新選擇。", HOUSEHOLD_QUICK_REPLIES)
+                        continue
+                    removed_name = household_member_name(member)
+                    remove_user_from_household(db, user.id, member.id)
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已將「{removed_name}」移出家庭。\n對方會回到自己的個人家庭群組，原本通勤設定仍會保留。",
+                        HOUSEHOLD_QUICK_REPLIES,
+                    )
+                    continue
+
+                member = find_household_member_for_removal(db, user, member_id_text)
+                if member is not None:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        format_remove_member_confirm_text(member),
+                        confirm_remove_member_quick_replies(member.id),
+                    )
+                    continue
 
             if current_step in SCHEDULE_PENDING_FIELDS:
                 weekdays = parse_custom_weekdays(user_text)

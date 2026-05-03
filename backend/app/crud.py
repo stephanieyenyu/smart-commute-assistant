@@ -66,6 +66,21 @@ def get_household_id_for_user(user: User | None) -> str:
     return user.household_id or "default"
 
 
+def household_owner_user_id(household_id: str | None) -> int | None:
+    household_id = normalize_household_id(household_id)
+    if not household_id.startswith("family-"):
+        return None
+    raw_id = household_id.removeprefix("family-")
+    return int(raw_id) if raw_id.isdigit() else None
+
+
+def user_is_household_owner(user: User | None) -> bool:
+    if not user:
+        return False
+    owner_id = household_owner_user_id(get_household_id_for_user(user))
+    return owner_id == user.id
+
+
 def normalize_household_id(value: str | None) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -82,6 +97,26 @@ def set_user_household_id(db: Session, user_id: int, household_id: str) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+def remove_user_from_household(db: Session, requester_user_id: int, member_user_id: int) -> User:
+    requester = get_user_by_id(db, requester_user_id)
+    member = get_user_by_id(db, member_user_id)
+    if requester is None or member is None:
+        raise ValueError("user not found")
+
+    household_id = get_household_id_for_user(requester)
+    if not user_is_household_owner(requester):
+        raise PermissionError("only household owner can remove members")
+    if member.id == requester.id:
+        raise ValueError("owner cannot remove self")
+    if get_household_id_for_user(member) != household_id:
+        raise ValueError("member is not in requester household")
+
+    member.household_id = normalize_household_id(f"family-{member.id}")
+    db.commit()
+    db.refresh(member)
+    return member
 
 
 def ensure_personal_household(db: Session, user_id: int) -> User:
