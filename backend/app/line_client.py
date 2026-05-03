@@ -240,7 +240,7 @@ async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> No
 
 
 async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[str], items: list) -> None:
-    quick_reply = _quick_reply_model(items)
+    quick_reply = _quick_reply_payload(items)
     messages = []
     for i, t in enumerate(texts):
         qr = quick_reply if i == len(texts) - 1 else None
