@@ -483,7 +483,8 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("wizard_time_prompt", webhook_py)
         self.assertIn("setting_overview_text", webhook_py)
         self.assertIn("onboarding_complete_text", webhook_py)
-        self.assertIn("太棒了！您的第一組通勤排程已設定完成。", webhook_py)
+        self.assertIn("可點選 [看板管理] 取得看板連結！若一週內有其他排程請點選 [排程設定] 新增排程", webhook_py)
+        self.assertNotIn("太棒了！您的第一組通勤排程已設定完成。", webhook_py)
         self.assertIn("SWITCH_SETTING_QUICK_REPLIES", webhook_py)
         self.assertIn("是否先前往新選單", webhook_py)
         self.assertNotIn("是否要取消並切換", webhook_py)
@@ -514,6 +515,25 @@ class Phase5DashboardTests(unittest.TestCase):
         mixed_overview = schedule.week_schedule_overview([template], student)
         self.assertIn("週一：09:00 到學校（固定）", mixed_overview)
         self.assertIn("週二：08:00 到公司", mixed_overview)
+
+    def test_linear_onboarding_and_weekday_feedback_are_wired(self):
+        crud_py = self.read_repo_file("backend/app/crud.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+
+        self.assertIn('pending_field="identity_type"', crud_py)
+        self.assertIn("weekdays_ready = profile.active_weekdays is not None", crud_py)
+        self.assertLess(crud_py.index('return "identity_type"'), crud_py.index('return "home_location"'))
+        self.assertLess(crud_py.index('return "home_location"'), crud_py.index('return "office_location"'))
+        self.assertLess(crud_py.index('return "office_location"'), crud_py.index('return "preferred_arrival_time"'))
+        self.assertLess(crud_py.index('return "preferred_arrival_time"'), crud_py.index('return "active_weekdays"'))
+
+        self.assertIn("raw_active_days = getattr(profile, \"active_weekdays\", None)", webhook_py)
+        self.assertIn("active_days = set([] if raw_active_days is None else normalize_active_weekdays(raw_active_days))", webhook_py)
+        self.assertIn('"color": "#22C55E"', webhook_py)
+        self.assertIn("reply_weekday_picker(", webhook_py)
+        self.assertIn("請先完成設定再繼續下一步功能", webhook_py)
+        self.assertNotIn("⚙️ 請先完成基本設定", webhook_py)
+        self.assertIn('await reply_topic_menu(reply_token, "topic_dashboard"', webhook_py)
 
     def test_departure_confirmation_flow_is_wired(self):
         line_client_py = self.read_repo_file("backend/app/line_client.py")
