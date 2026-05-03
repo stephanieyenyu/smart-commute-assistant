@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models import ApiHealthLog, CommuteLog, User, CommuteProfile, CommuteOverride, CommuteScheduleTemplate
+from app.models import ApiHealthLog, CommuteDestination, CommuteLog, User, CommuteProfile, CommuteOverride, CommuteScheduleTemplate
 from app.commute_schedule import (
     commute_date_is_active,
     destination_label_for_profile,
@@ -51,7 +51,7 @@ def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
 
     profile = CommuteProfile(
         user_id=user_id,
-        pending_field="identity_type",
+        pending_field="home_location",
         reminder_enabled=True,
         active_weekdays=None,
     )
@@ -175,12 +175,7 @@ def update_profile_field(db: Session, user_id: int, field_name: str, value):
     return profile
 
 
-def set_identity_and_destination_label(
-    db: Session,
-    user_id: int,
-    identity_type: str | None,
-    destination_label: str | None,
-):
+def set_identity_and_destination_label(db: Session, user_id: int, identity_type: str | None, destination_label: str | None):
     profile = get_profile(db, user_id)
     profile.identity_type = identity_type
     profile.destination_label = (destination_label or "").strip()[:20] or None
@@ -234,20 +229,12 @@ def update_address_and_coords(
 def get_next_setup_step(profile: CommuteProfile) -> str | None:
     home_ready = bool(profile.home_address) and profile.home_lat is not None and profile.home_lng is not None
     office_ready = bool(profile.office_address) and profile.office_lat is not None and profile.office_lng is not None
-    identity_ready = bool(profile.identity_type or profile.destination_label)
     arrival_ready = bool(profile.preferred_arrival_time)
-    weekdays_ready = profile.active_weekdays is not None
 
-    if not identity_ready:
-        return "identity_type"
     if not home_ready:
         return "home_location"
-    if not office_ready:
-        return "office_location"
     if not arrival_ready:
         return "preferred_arrival_time"
-    if not weekdays_ready:
-        return "active_weekdays"
     return None
 
 
@@ -289,7 +276,7 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile.preferred_arrival_time = None
     profile.identity_type = None
     profile.destination_label = None
-    profile.pending_field = "identity_type"
+    profile.pending_field = "home_location"
     profile.reminder_enabled = True
     profile.active_weekdays = None
 
@@ -372,6 +359,56 @@ def get_schedule_templates(db: Session, user_id: int, active_only: bool = False)
     return query.order_by(CommuteScheduleTemplate.id.asc()).all()
 
 
+def get_user_destinations(db: Session, user_id: int) -> list[CommuteDestination]:
+    return db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).order_by(CommuteDestination.id.asc()).all()
+
+
+def get_destination_by_label(db: Session, user_id: int, label: str | None) -> CommuteDestination | None:
+    normalized = (label or "").strip()
+    if not normalized:
+        return None
+    return db.query(CommuteDestination).filter(
+        CommuteDestination.user_id == user_id,
+        CommuteDestination.label == normalized,
+    ).first()
+
+
+def get_destination_by_id(db: Session, user_id: int, destination_id: int | None) -> CommuteDestination | None:
+    if destination_id is None:
+        return None
+    return db.query(CommuteDestination).filter(
+        CommuteDestination.user_id == user_id,
+        CommuteDestination.id == destination_id,
+    ).first()
+
+
+def upsert_destination(
+    db: Session,
+    user_id: int,
+    label: str,
+    address: str | None,
+    lat: float | None,
+    lng: float | None,
+    city: str | None = None,
+    township: str | None = None,
+    place_name: str | None = None,
+) -> CommuteDestination:
+    normalized_label = (label or "").strip()[:40] or "目的地"
+    destination = get_destination_by_label(db, user_id, normalized_label)
+    if destination is None:
+        destination = CommuteDestination(user_id=user_id, label=normalized_label)
+        db.add(destination)
+    destination.address = address
+    destination.lat = lat
+    destination.lng = lng
+    destination.city = city
+    destination.township = township
+    destination.place_name = place_name
+    db.commit()
+    db.refresh(destination)
+    return destination
+
+
 def get_schedule_template(db: Session, user_id: int, template_id: int) -> CommuteScheduleTemplate | None:
     return db.query(CommuteScheduleTemplate).filter(
         CommuteScheduleTemplate.user_id == user_id,
@@ -428,6 +465,8 @@ def create_schedule_template(
     destination_label: str,
     active_weekdays: list[int],
     name: str | None = None,
+    destination_id: int | None = None,
+    is_fixed: bool = True,
     *,
     replace_conflicts: bool = False,
 ) -> CommuteScheduleTemplate:
@@ -437,10 +476,12 @@ def create_schedule_template(
 
     template = CommuteScheduleTemplate(
         user_id=user_id,
+        destination_id=destination_id,
         name=(name or "").strip()[:40] or None,
         target_arrival_time=target_arrival_time,
         destination_label=(destination_label or "目的地").strip()[:20],
         active_weekdays=weekdays,
+        is_fixed=bool(is_fixed),
         is_active=True,
     )
     db.add(template)
@@ -483,7 +524,49 @@ def effective_commute_setting_for_date(db: Session, profile: CommuteProfile, tar
         "source": source,
         "schedule_template_id": template_id,
         "schedule_template": schedule_template,
+        "destination": getattr(schedule_template, "destination", None) if schedule_template is not None else None,
     }
+
+
+def update_schedule_template(
+    db: Session,
+    user_id: int,
+    template_id: int,
+    *,
+    target_arrival_time: str | None = None,
+    destination_label: str | None = None,
+    destination_id: int | None = None,
+    active_weekdays: list[int] | None = None,
+    is_fixed: bool | None = None,
+    is_active: bool | None = None,
+) -> CommuteScheduleTemplate | None:
+    template = get_schedule_template(db, user_id, template_id)
+    if template is None:
+        return None
+    if target_arrival_time is not None:
+        template.target_arrival_time = target_arrival_time
+    if destination_label is not None:
+        template.destination_label = (destination_label or "目的地").strip()[:20]
+    if destination_id is not None:
+        template.destination_id = destination_id
+    if active_weekdays is not None:
+        template.active_weekdays = sorted({int(day) for day in active_weekdays if 0 <= int(day) <= 6})
+    if is_fixed is not None:
+        template.is_fixed = bool(is_fixed)
+    if is_active is not None:
+        template.is_active = bool(is_active)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def delete_schedule_template(db: Session, user_id: int, template_id: int) -> bool:
+    template = get_schedule_template(db, user_id, template_id)
+    if template is None:
+        return False
+    db.delete(template)
+    db.commit()
+    return True
 
 
 def effective_commute_date_is_active(db: Session, profile: CommuteProfile, target_date, override=None) -> bool:
