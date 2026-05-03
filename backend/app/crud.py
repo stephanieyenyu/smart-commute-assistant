@@ -51,7 +51,7 @@ def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
 
     profile = CommuteProfile(
         user_id=user_id,
-        pending_field="home_location",
+        pending_field="identity_type",
         reminder_enabled=True,
         active_weekdays=None,
     )
@@ -236,15 +236,18 @@ def get_next_setup_step(profile: CommuteProfile) -> str | None:
     office_ready = bool(profile.office_address) and profile.office_lat is not None and profile.office_lng is not None
     identity_ready = bool(profile.identity_type or profile.destination_label)
     arrival_ready = bool(profile.preferred_arrival_time)
+    weekdays_ready = profile.active_weekdays is not None
 
-    if not home_ready:
-        return "home_location"
     if not identity_ready:
         return "identity_type"
+    if not home_ready:
+        return "home_location"
     if not office_ready:
         return "office_location"
     if not arrival_ready:
         return "preferred_arrival_time"
+    if not weekdays_ready:
+        return "active_weekdays"
     return None
 
 
@@ -286,7 +289,7 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile.preferred_arrival_time = None
     profile.identity_type = None
     profile.destination_label = None
-    profile.pending_field = "home_location"
+    profile.pending_field = "identity_type"
     profile.reminder_enabled = True
     profile.active_weekdays = None
 
