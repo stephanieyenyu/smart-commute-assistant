@@ -2,11 +2,32 @@ import hashlib
 import re
 
 
+BUS_VEHICLE_TYPES = {"BUS", "INTERCITY_BUS", "TROLLEYBUS"}
+METRO_VEHICLE_TYPES = {"SUBWAY", "METRO_RAIL"}
+LIGHT_RAIL_VEHICLE_TYPES = {"LIGHT_RAIL", "TRAM", "MONORAIL"}
+RAIL_VEHICLE_TYPES = {
+    "RAIL",
+    "HEAVY_RAIL",
+    "COMMUTER_TRAIN",
+    "LONG_DISTANCE_TRAIN",
+    "HIGH_SPEED_TRAIN",
+    "TRAIN",
+}
+
+
+def _plain_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = re.sub(r"<[^>]+>", "", str(value)).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text or None
+
+
 def normalize_exit_label(text: str | None) -> str | None:
-    if not text:
+    compact = _plain_text(text)
+    if not compact:
         return None
 
-    compact = re.sub(r"\s+", " ", str(text).strip())
     patterns = [
         r"(?:出口|Exit)\s*([0-9A-Za-z]+)",
         r"([0-9A-Za-z]+)\s*(?:號)?\s*出口",
@@ -32,27 +53,92 @@ def exit_info_from_steps(steps: list[dict], matched_step: dict) -> str:
     return ""
 
 
+def vehicle_type(step: dict) -> str:
+    return str(step.get("vehicle_type") or "").upper()
+
+
 def is_bus_step(step: dict) -> bool:
-    vehicle_type = str(step.get("vehicle_type", "")).upper()
+    value = vehicle_type(step)
+    if value in BUS_VEHICLE_TYPES or "BUS" in value:
+        return True
     line_text = f"{step.get('line_name', '')} {step.get('line_full_name', '')}".upper()
-    return "BUS" in vehicle_type or "BUS" in line_text or "公車" in line_text
+    return "BUS" in line_text or "公車" in line_text
 
 
 def is_metro_step(step: dict) -> bool:
-    vehicle_type = str(step.get("vehicle_type", "")).upper()
-    return any(kind in vehicle_type for kind in ("SUBWAY", "RAIL", "LIGHT_RAIL", "TRAM"))
+    value = vehicle_type(step)
+    return value in METRO_VEHICLE_TYPES
+
+
+def is_light_rail_step(step: dict) -> bool:
+    return vehicle_type(step) in LIGHT_RAIL_VEHICLE_TYPES
+
+
+def is_rail_step(step: dict) -> bool:
+    return vehicle_type(step) in RAIL_VEHICLE_TYPES
+
+
+def is_station_exit_step(step: dict) -> bool:
+    return is_metro_step(step) or is_light_rail_step(step) or is_rail_step(step)
+
+
+def transit_steps(steps: list[dict]) -> list[dict]:
+    return [step for step in steps if step.get("type") == "TRANSIT"]
+
+
+def vehicle_category(step: dict) -> str:
+    if is_bus_step(step):
+        return "bus"
+    if is_metro_step(step):
+        return "metro"
+    if is_light_rail_step(step):
+        return "light_rail"
+    if is_rail_step(step):
+        return "rail"
+
+    value = vehicle_type(step)
+    if value == "FERRY":
+        return "ferry"
+    if value in {"CABLE_CAR", "GONDOLA_LIFT", "FUNICULAR"}:
+        return "other_transit"
+    return "google_transit"
+
+
+def route_mode_from_steps(steps: list[dict]) -> str:
+    categories = [vehicle_category(step) for step in transit_steps(steps)]
+    if not categories:
+        return "google_transit"
+
+    unique = set(categories)
+    if unique == {"bus"}:
+        return "bus"
+    if unique == {"metro"}:
+        return "metro"
+    if unique == {"light_rail"}:
+        return "light_rail"
+    if unique == {"rail"}:
+        return "rail"
+    if "bus" in unique and any(kind in unique for kind in ("metro", "light_rail", "rail")):
+        return "mixed_transit"
+    if len(unique) == 1:
+        return next(iter(unique))
+    return "mixed_transit"
 
 
 def select_transit_step(steps: list[dict], recommended_mode: str) -> dict | None:
-    transit_steps = [step for step in steps if step.get("type") == "TRANSIT"]
-    if not transit_steps:
+    candidates = transit_steps(steps)
+    if not candidates:
         return None
 
     if recommended_mode == "bus":
-        return next((step for step in transit_steps if is_bus_step(step)), None)
+        return next((step for step in candidates if is_bus_step(step)), None)
     if recommended_mode == "metro":
-        return next((step for step in transit_steps if is_metro_step(step)), None)
-    return transit_steps[0]
+        return next((step for step in candidates if is_metro_step(step)), None)
+    if recommended_mode == "rail":
+        return next((step for step in candidates if is_rail_step(step)), None)
+    if recommended_mode == "light_rail":
+        return next((step for step in candidates if is_light_rail_step(step)), None)
+    return candidates[0]
 
 
 def bus_route_label(bus_snapshot: dict) -> str | None:
@@ -102,7 +188,7 @@ def normalize_route_name(value: str | None) -> str:
         return ""
     text = str(value).upper()
     text = re.sub(r"\s+", "", text)
-    text = text.replace("號公車", "").replace("公車", "").replace("BUS", "")
+    text = text.replace("號公車", "").replace("路線公車", "").replace("公車", "").replace("BUS", "")
     return text
 
 
@@ -112,106 +198,154 @@ def route_names_match(left: str | None, right: str | None) -> bool:
     return bool(normalized_left and normalized_right and normalized_left == normalized_right)
 
 
+def _raw_line_label_from_step(step: dict) -> str | None:
+    return _plain_text(
+        step.get("line_short_name")
+        or step.get("line_name")
+        or step.get("line_full_name")
+        or step.get("vehicle_name")
+    )
+
+
+def bus_display_label(route: str | None) -> str:
+    label = _plain_text(route)
+    if not label:
+        return "Google Maps 未提供公車路線名稱"
+    if "公車" in label or "BUS" in label.upper():
+        return label
+    if any(char.isdigit() for char in label):
+        return f"{label}號公車"
+    return f"{label}公車"
+
+
+def line_label_from_step(step: dict) -> str:
+    label = _raw_line_label_from_step(step)
+    category = vehicle_category(step)
+    if not label:
+        if category == "bus":
+            return "Google Maps 未提供公車路線名稱"
+        if category == "metro":
+            return "Google Maps 未提供捷運線名稱"
+        if category == "light_rail":
+            return "Google Maps 未提供輕軌線名稱"
+        if category == "rail":
+            return "Google Maps 未提供鐵路車次或路線名稱"
+        return "Google Maps 未提供路線名稱"
+    if category == "bus":
+        return bus_display_label(label)
+    return label
+
+
 def bus_arrival_text(route: str | None, eta_min, stop_name: str | None) -> str:
-    if eta_min is None or not route or route == "公車" or not stop_name:
+    if eta_min is None or not route or not stop_name:
         return ""
 
-    route_label = str(route).strip()
-    bus_label = f"{route_label}號公車" if any(char.isdigit() for char in route_label) else f"{route_label}公車"
-    return f"{bus_label}將於 {eta_min} 分鐘後抵達『{stop_name}』。"
+    route_label = bus_display_label(route)
+    return f"{route_label}將於 {eta_min} 分鐘後抵達『{stop_name}』。"
 
 
 def metro_line_from_station_ids(origin_station: dict, destination_station: dict) -> str:
-    line_names = {
-        "BL": "板南線",
-        "BR": "文湖線",
-        "R": "淡水信義線",
-        "G": "松山新店線",
-        "O": "中和新蘆線",
-        "Y": "環狀線",
-    }
-
-    station_id = str(origin_station.get("id") or destination_station.get("id") or "")
-    for prefix in ("BR", "BL", "R", "G", "O", "Y"):
-        if station_id.startswith(prefix):
-            return line_names[prefix]
-    return "捷運"
+    return "Google Maps 未提供捷運線名稱"
 
 
 def exit_info_from_snapshot(snapshot: dict) -> str:
-    suggested_exit = snapshot.get("suggested_exit") or {}
-    exit_id = suggested_exit.get("exit_id")
-    exit_name = suggested_exit.get("name")
-    exit_label = normalize_exit_label(exit_name) if exit_name else None
-    if not exit_label and exit_id:
-        exit_label = f"出口 {exit_id}"
-    return f"從『{exit_label}』走" if exit_label else ""
+    return ""
+
+
+def _stop_label(value: str | None, missing_label: str) -> str:
+    return _plain_text(value) or missing_label
+
+
+def _exit_instruction_after_step(steps: list[dict], final_transit_step: dict) -> str:
+    if not is_station_exit_step(final_transit_step):
+        return ""
+
+    try:
+        matched_index = steps.index(final_transit_step)
+    except ValueError:
+        matched_index = -1
+
+    for step in steps[matched_index + 1:]:
+        exit_label = normalize_exit_label(step.get("instructions"))
+        if exit_label:
+            return f" ➔ 走『{exit_label}』出站"
+    return " ➔ 依站內指標出站"
+
+
+def _format_transit_step(step: dict, is_first: bool) -> str:
+    category = vehicle_category(step)
+    dep_stop = _stop_label(step.get("departure_stop"), "Google Maps 未提供上車站名")
+    arr_stop = _stop_label(step.get("arrival_stop"), "Google Maps 未提供下車站名")
+    line = line_label_from_step(step)
+
+    if category == "bus":
+        if is_first:
+            return f"於『{dep_stop}』上車 ➔ 搭乘 {line} ➔ 於『{arr_stop}』下車"
+        return f"➔ (轉乘) 步行至『{dep_stop}』改搭乘 {line} ➔ 並於『{arr_stop}』下車"
+
+    if is_first:
+        return f"搭乘 {line} ➔ 於『{dep_stop}』上車並在『{arr_stop}』下車"
+    return f"➔ (轉乘) 於『{dep_stop}』改乘 {line} ➔ 並於『{arr_stop}』下車"
+
+
+def route_title_from_steps(steps: list[dict]) -> str:
+    mode = route_mode_from_steps(steps)
+    if mode == "bus":
+        return "🚌 建議搭公車！"
+    if mode == "metro":
+        return "🚇 建議搭捷運！"
+    if mode == "light_rail":
+        return "🚈 建議搭輕軌！"
+    if mode == "rail":
+        return "🚆 建議搭鐵路！"
+    if mode == "mixed_transit":
+        return "🚉 建議搭大眾運輸！"
+    return "🚉 建議參考 Google Maps 大眾運輸路線！"
+
+
+def format_google_transit_steps(steps: list[dict], bus_snapshot: dict | None = None) -> str:
+    transit = transit_steps(steps)
+    if not transit:
+        return "🚶 Google Maps 目前未提供大眾運輸步驟，請依 Google Maps 路線前往。"
+
+    phrases = []
+    for index, step in enumerate(transit):
+        phrase = _format_transit_step(step, index == 0)
+        next_transit = transit[index + 1] if index + 1 < len(transit) else None
+        if is_station_exit_step(step) and (next_transit is None or is_bus_step(next_transit)):
+            phrase += _exit_instruction_after_step(steps, step)
+        phrases.append(phrase)
+    body = " ".join(phrases)
+
+    realtime_text = ""
+    bus_snapshot = bus_snapshot or {}
+    first_bus = next((step for step in transit if is_bus_step(step)), None)
+    if first_bus:
+        google_route = _raw_line_label_from_step(first_bus)
+        chosen = bus_snapshot.get("chosen_bus") or {}
+        chosen_route = chosen.get("route_name") or chosen.get("subroute_name")
+        if route_names_match(chosen_route, google_route):
+            realtime_text = bus_arrival_text(
+                google_route,
+                chosen.get("eta_min"),
+                first_bus.get("departure_stop"),
+            )
+
+    suffix = realtime_text if realtime_text else ""
+    return f"{route_title_from_steps(transit)}{body}。{suffix}"
 
 
 def format_transport_line(plan: dict) -> str:
     best_option = plan["best_option"]
-    recommended_mode = plan["recommended_mode"]
     snapshot = best_option.get("snapshot") or {}
 
     google_detailed = snapshot.get("google_detailed") or {}
-    steps = (google_detailed or {}).get("steps", [])
-    matched_step = select_transit_step(steps, recommended_mode)
+    steps = (google_detailed or {}).get("steps", []) or []
+    if steps:
+        bus_snapshot = snapshot if best_option.get("mode") == "bus" else snapshot.get("bus_snapshot", {})
+        return format_google_transit_steps(steps, bus_snapshot=bus_snapshot)
 
-    if matched_step:
-        is_bus = is_bus_step(matched_step)
-        bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
-        if is_bus:
-            line = matched_step.get("line_short_name") or matched_step.get("line_name") or bus_route_label(bus_snap) or "公車"
-        else:
-            line = matched_step.get("line_name") or matched_step.get("line_short_name") or "捷運"
-
-        dep_stop = matched_step.get("departure_stop") or "最近站點"
-        arr_stop = matched_step.get("arrival_stop") or "目的地站點"
-        v_emoji = "🚌" if is_bus else "🚇"
-        mode_text = "搭公車" if is_bus else "搭捷運"
-        exit_info = "" if is_bus else exit_info_from_steps(steps, matched_step)
-
-        arrival_text = ""
-        route_options = ""
-        if is_bus:
-            chosen = bus_snap.get("chosen_bus") or {}
-            eta = chosen.get("eta_min")
-            chosen_route = chosen.get("route_name") or chosen.get("subroute_name")
-            if route_names_match(chosen_route, line):
-                arrival_text = bus_arrival_text(line, eta, dep_stop)
-            route_options = bus_route_options_text(bus_snap, line)
-
-        options_text = f"\n{route_options}。" if route_options else ""
-        realtime_text = f"{arrival_text}" if arrival_text else ""
-        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}。{realtime_text}{options_text}"
-
-    if recommended_mode == "metro":
-        metro_snap = snapshot
-        station = metro_snap.get("station") or {}
-        destination_station = metro_snap.get("destination_station") or {}
-        walk_min = metro_snap.get("walk_minutes")
-        dep_stop = station.get("name", "最近捷運站")
-        arr_stop = destination_station.get("name", "目的地附近捷運站")
-        line = metro_line_from_station_ids(station, destination_station)
-        exit_info = ""
-        walk_str = f"步行約 {walk_min} 分鐘抵達『{dep_stop}』，" if walk_min else ""
-        return f"🚇 建議搭捷運！{walk_str}請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}。"
-
-    if recommended_mode == "bus":
-        bus_snap = snapshot
-        first_stop = bus_snap.get("first_stop") or {}
-        chosen = bus_snap.get("chosen_bus") or {}
-        stop_name = first_stop.get("stop_name", "最近站牌")
-        route = bus_route_label(bus_snap)
-        eta = chosen.get("eta_min")
-        route_str = route or "公車"
-        arrival_text = bus_arrival_text(route_str, eta, stop_name)
-        route_options = bus_route_options_text(bus_snap, route_str)
-        options_text = f"\n{route_options}。" if route_options else ""
-        realtime_text = f"{arrival_text}" if arrival_text else ""
-        return f"🚌 建議搭公車！請搭乘 {route_str}，於『{stop_name}』上車，並在『目的地附近站牌』下車。{realtime_text}{options_text}"
-
-    return "🚶 建議參考 Google 地圖最快路徑。"
+    return "🚉 Google Maps 目前未提供可用的大眾運輸路線；請開啟 Google Maps 確認最新路線。"
 
 
 def get_transport_line(plan: dict) -> str:

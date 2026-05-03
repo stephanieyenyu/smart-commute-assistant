@@ -1,4 +1,5 @@
 import importlib.util
+import importlib.util
 import unittest
 from datetime import date
 from pathlib import Path
@@ -110,13 +111,13 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
         metro_line = formatter.format_transport_line(metro_plan)
         bus_line = formatter.format_transport_line(bus_plan)
 
-        self.assertIn("請搭乘 淡水信義線", metro_line)
+        self.assertIn("搭乘 淡水信義線", metro_line)
         self.assertIn("在『芝山』下車", metro_line)
-        self.assertIn("從『出口 3』走", metro_line)
-        self.assertNotIn("從『出口 1』走", metro_line)
-        self.assertIn("請搭乘 307", bus_line)
+        self.assertIn("走『出口 3』出站", metro_line)
+        self.assertNotIn("走『出口 1』出站", metro_line)
+        self.assertIn("搭乘 307號公車", bus_line)
         self.assertIn("307號公車將於 8 分鐘後抵達『南京敦化路口』", bus_line)
-        self.assertIn("\n可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", bus_line)
+        self.assertNotIn("可選路線", bus_line)
 
     def test_phase4_scheduler_has_nightly_and_watchdog_jobs(self):
         scheduler_py = self.read_repo_file("backend/app/reminder_scheduler.py")

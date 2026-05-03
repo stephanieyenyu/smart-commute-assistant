@@ -7,6 +7,28 @@ from app.integrations.redis_cache import get_cache, set_cache
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
+
+def _route_duration_seconds(route: dict) -> int | None:
+    duration = route.get("duration")
+    if not isinstance(duration, str) or not duration.endswith("s"):
+        return None
+    try:
+        return round(float(duration[:-1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _select_shortest_route(routes: list[dict]) -> dict | None:
+    if not routes:
+        return None
+    return min(
+        routes,
+        key=lambda route: (
+            _route_duration_seconds(route) is None,
+            _route_duration_seconds(route) or float("inf"),
+        ),
+    )
+
 def _normalize_city_name(name: str | None) -> str | None:
     if not name:
         return None
@@ -85,11 +107,15 @@ async def estimate_transit_minutes_detailed(
     dest_lng: float,
     arrival_datetime: datetime,
     allowed_travel_modes: list[str] | None = None,
+    routing_preference: str | None = None,
+    compute_alternatives: bool = True,
 ):
     # Create cache key, round coordinates and minute precision
     time_str = arrival_datetime.strftime('%Y%m%d%H%M')
     mode_key = ",".join(allowed_travel_modes or ["ANY"])
-    cache_key = f"maps:transit:detailed:{origin_lat:.4f},{origin_lng:.4f}:{dest_lat:.4f},{dest_lng:.4f}:{time_str}:{mode_key}"
+    preference_key = routing_preference or "FASTEST"
+    alternatives_key = "alts" if compute_alternatives else "single"
+    cache_key = f"maps:transit:detailed:v2:{origin_lat:.4f},{origin_lng:.4f}:{dest_lat:.4f},{dest_lng:.4f}:{time_str}:{mode_key}:{preference_key}:{alternatives_key}"
     
     cached = await get_cache(cache_key)
     if cached:
@@ -103,24 +129,31 @@ async def estimate_transit_minutes_detailed(
     if arrival_datetime.tzinfo is None:
         arrival_datetime = arrival_datetime.replace(tzinfo=timezone.utc)
 
-    transit_preferences = {
-        "routingPreference": "LESS_WALKING"
-    }
+    transit_preferences = {}
     if allowed_travel_modes:
         transit_preferences["allowedTravelModes"] = allowed_travel_modes
+    if routing_preference:
+        transit_preferences["routingPreference"] = routing_preference
 
     body = {
         "origin": {"location": {"latLng": {"latitude": origin_lat, "longitude": origin_lng}}},
         "destination": {"location": {"latLng": {"latitude": dest_lat, "longitude": dest_lng}}},
         "travelMode": "TRANSIT",
         "arrivalTime": arrival_datetime.isoformat(),
-        "transitPreferences": transit_preferences
     }
+    if transit_preferences:
+        body["transitPreferences"] = transit_preferences
+    if compute_alternatives:
+        body["computeAlternativeRoutes"] = True
 
     timer = api_timer_start()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
             response = await client.post(ROUTES_URL, headers=headers, json=body)
+            if response.status_code == 400 and compute_alternatives:
+                retry_body = dict(body)
+                retry_body.pop("computeAlternativeRoutes", None)
+                response = await client.post(ROUTES_URL, headers=headers, json=retry_body)
             log_api_health("google.routes.transit", timer, status_code=response.status_code)
             response.raise_for_status()
             data = response.json()
@@ -132,12 +165,12 @@ async def estimate_transit_minutes_detailed(
     if not routes:
         return None
 
-    route = routes[0]
-    duration_str = route.get("duration")
-    if not duration_str or not duration_str.endswith("s"):
+    route = _select_shortest_route(routes)
+    duration_seconds = _route_duration_seconds(route or {})
+    if duration_seconds is None:
         return None
 
-    minutes = round(float(duration_str[:-1]) / 60)
+    minutes = round(duration_seconds / 60)
     
     steps = []
     legs = route.get("legs", [])
@@ -157,6 +190,7 @@ async def estimate_transit_minutes_detailed(
                     "line_short_name": line_short_name,
                     "line_full_name": line.get("name"),
                     "vehicle_type": line.get("vehicle", {}).get("type"),
+                    "vehicle_name": line.get("vehicle", {}).get("name", {}).get("text"),
                     "departure_stop": stop_details.get("departureStop", {}).get("name"),
                     "arrival_stop": stop_details.get("arrivalStop", {}).get("name"),
                 })

@@ -1,4 +1,5 @@
 import asyncio
+import asyncio
 import importlib.util
 import sys
 import types
@@ -141,14 +142,14 @@ class Phase0RegressionTests(unittest.TestCase):
         reminder_detail = reminder_transport.removeprefix("📍 通勤方式：")
 
         self.assertEqual(commute_detail, reminder_detail)
-        self.assertIn("請搭乘 淡水信義線", commute_detail)
+        self.assertIn("搭乘 淡水信義線", commute_detail)
         self.assertIn("於『明德』上車", commute_detail)
         self.assertIn("在『芝山』下車", commute_detail)
-        self.assertIn("從『出口 3』走", commute_detail)
-        self.assertNotIn("從『出口 1』走", commute_detail)
+        self.assertIn("走『出口 3』出站", commute_detail)
+        self.assertNotIn("走『出口 1』出站", commute_detail)
         self.assertNotIn("目的地附近捷運站", commute_detail)
 
-    def test_forced_metro_does_not_fall_back_to_bus_step(self):
+    def test_forced_metro_uses_google_vehicle_type_without_local_metro_fallback(self):
         plan = self.metro_plan()
         plan["best_option"]["snapshot"]["google_detailed"] = {
             "steps": [
@@ -164,21 +165,22 @@ class Phase0RegressionTests(unittest.TestCase):
 
         transport_line = self.service._format_transport_line(plan)
 
-        self.assertIn("🚇 建議搭捷運", transport_line)
-        self.assertIn("淡水信義線", transport_line)
-        self.assertIn("芝山", transport_line)
-        self.assertNotIn("307", transport_line)
-        self.assertNotIn("搭公車", transport_line)
+        self.assertIn("🚌 建議搭公車", transport_line)
+        self.assertIn("307號公車", transport_line)
+        self.assertIn("於『A』上車", transport_line)
+        self.assertIn("於『B』下車", transport_line)
+        self.assertNotIn("淡水信義線", transport_line)
+        self.assertNotIn("芝山", transport_line)
 
     def test_bus_transport_line_contains_primary_and_viable_route_numbers(self):
         transport_line = self.service._format_transport_line(self.bus_plan())
 
         self.assertIn("🚌 建議搭公車", transport_line)
-        self.assertIn("請搭乘 307", transport_line)
+        self.assertIn("搭乘 307號公車", transport_line)
         self.assertIn("於『南京敦化路口』上車", transport_line)
-        self.assertIn("在『捷運西門站』下車", transport_line)
+        self.assertIn("於『捷運西門站』下車", transport_line)
         self.assertIn("307號公車將於 8 分鐘後抵達『南京敦化路口』", transport_line)
-        self.assertIn("\n可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", transport_line)
+        self.assertNotIn("可選路線", transport_line)
         self.assertNotIn("12（約 2 分鐘後到站）", transport_line)
 
     def test_bus_primary_route_comes_from_google_step(self):
@@ -189,9 +191,95 @@ class Phase0RegressionTests(unittest.TestCase):
 
         transport_line = self.service._format_transport_line(plan)
 
-        self.assertIn("請搭乘 307", transport_line)
-        self.assertNotIn("請搭乘 652", transport_line)
+        self.assertIn("搭乘 307號公車", transport_line)
+        self.assertNotIn("搭乘 652號公車", transport_line)
         self.assertNotIn("307號公車將於 12 分鐘後抵達", transport_line)
+
+    def test_metro_without_google_exit_uses_station_signage(self):
+        plan = self.metro_plan()
+        plan["best_option"]["snapshot"]["google_detailed"]["steps"] = [
+            {
+                "type": "TRANSIT",
+                "vehicle_type": "SUBWAY",
+                "line_name": "淡水信義線",
+                "departure_stop": "明德",
+                "arrival_stop": "芝山",
+            },
+            {"type": "WALK", "instructions": "步行前往目的地"},
+        ]
+
+        transport_line = self.service._format_transport_line(plan)
+
+        self.assertIn("依站內指標出站", transport_line)
+        self.assertNotIn("出口 1", transport_line)
+
+    def test_bus_transfer_template_lists_every_google_step(self):
+        plan = self.bus_plan()
+        plan["best_option"]["snapshot"]["google_detailed"]["steps"] = [
+            {
+                "type": "TRANSIT",
+                "vehicle_type": "BUS",
+                "line_short_name": "307",
+                "departure_stop": "南京敦化路口",
+                "arrival_stop": "捷運西門站",
+            },
+            {"type": "WALK", "instructions": "步行至西門國小"},
+            {
+                "type": "TRANSIT",
+                "vehicle_type": "BUS",
+                "line_short_name": "235",
+                "departure_stop": "西門國小",
+                "arrival_stop": "植物園",
+            },
+        ]
+
+        transport_line = self.service._format_transport_line(plan)
+
+        self.assertIn("搭乘 307號公車", transport_line)
+        self.assertIn("(轉乘) 步行至『西門國小』改搭乘 235號公車", transport_line)
+        self.assertIn("並於『植物園』下車", transport_line)
+
+    def test_heavy_rail_is_not_labeled_as_metro(self):
+        plan = self.metro_plan()
+        plan["best_option"]["snapshot"]["google_detailed"]["steps"] = [
+            {
+                "type": "TRANSIT",
+                "vehicle_type": "HEAVY_RAIL",
+                "line_name": "區間車",
+                "departure_stop": "新竹",
+                "arrival_stop": "竹北",
+            }
+        ]
+
+        transport_line = self.service._format_transport_line(plan)
+
+        self.assertIn("🚆 建議搭鐵路", transport_line)
+        self.assertNotIn("建議搭捷運", transport_line)
+
+    def test_metro_to_bus_transfer_keeps_google_exit_instruction(self):
+        plan = self.metro_plan()
+        plan["best_option"]["snapshot"]["google_detailed"]["steps"] = [
+            {
+                "type": "TRANSIT",
+                "vehicle_type": "SUBWAY",
+                "line_name": "板南線",
+                "departure_stop": "忠孝敦化",
+                "arrival_stop": "台北車站",
+            },
+            {"type": "WALK", "instructions": "從出口 M4 離開車站"},
+            {
+                "type": "TRANSIT",
+                "vehicle_type": "BUS",
+                "line_short_name": "307",
+                "departure_stop": "台北車站",
+                "arrival_stop": "捷運西門站",
+            },
+        ]
+
+        transport_line = self.service._format_transport_line(plan)
+
+        self.assertIn("走『出口 M4』出站", transport_line)
+        self.assertIn("(轉乘) 步行至『台北車站』改搭乘 307號公車", transport_line)
 
     def test_bus_departure_uses_realtime_eta_walk_and_three_minute_buffer(self):
         self.service._now_taipei_naive = lambda: datetime(2026, 5, 2, 8, 0)
@@ -236,6 +324,58 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:25")
+
+    def test_shortest_bus_result_uses_bus_mode_fastest_google_route(self):
+        calls = []
+
+        async def fake_estimate_transit_minutes_detailed(*args, allowed_travel_modes=None, **kwargs):
+            calls.append(allowed_travel_modes)
+            return {
+                "duration_minutes": 24,
+                "steps": [
+                    {
+                        "type": "TRANSIT",
+                        "vehicle_type": "BUS",
+                        "line_short_name": "307",
+                        "line_name": "307",
+                        "departure_stop": "南京敦化路口",
+                        "arrival_stop": "捷運西門站",
+                    }
+                ],
+            }
+
+        async def fake_bus_snapshot(profile):
+            return {
+                "available": True,
+                "first_stop": {"stop_name": "南京敦化路口"},
+                "walk_minutes": 4,
+                "arrival_at_stop_min": 5,
+                "chosen_bus": {"route_name": "652", "eta_min": 12},
+                "valid_eta_list": [{"route_name": "652", "eta_min": 12}],
+            }
+
+        self.service.estimate_transit_minutes_detailed = fake_estimate_transit_minutes_detailed
+        self.service.get_bus_realtime_snapshot = fake_bus_snapshot
+
+        profile = types.SimpleNamespace(
+            home_lat=25.0,
+            home_lng=121.0,
+            office_lat=25.1,
+            office_lng=121.1,
+        )
+        result = asyncio.run(
+            self.service.choose_commute_option_with_override(
+                profile=profile,
+                effective_arrival_time="09:00",
+                weather_buffer_minutes=0,
+                target_date=date(2026, 5, 2),
+                mode_override="shortest",
+            )
+        )
+
+        self.assertEqual(result["best_option"]["mode"], "bus")
+        self.assertEqual(result["best_option"]["snapshot"]["google_detailed"]["duration_minutes"], 24)
+        self.assertIsNone(calls[0])
 
     def test_metro_departure_uses_transit_duration_without_extra_wait_penalty(self):
         result = asyncio.run(
