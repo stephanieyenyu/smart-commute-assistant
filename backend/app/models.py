@@ -5,6 +5,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -18,6 +19,9 @@ from app.db import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_household_id_id", "household_id", "id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     line_user_id = Column(String, unique=True, index=True, nullable=False)
@@ -103,6 +107,7 @@ class CommuteOverride(Base):
     __tablename__ = "commute_overrides"
     __table_args__ = (
         UniqueConstraint("user_id", "target_date", name="uq_commute_overrides_user_date"),
+        Index("ix_commute_overrides_target_date_frozen_departure", "target_date", "frozen_departure_time"),
     )
 
     id = Column(Integer, primary_key=True, index=True)

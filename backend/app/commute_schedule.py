@@ -86,7 +86,12 @@ def destination_label_for_profile(profile) -> str:
 
 
 def arrival_label(destination_label: str | None) -> str:
-    return f"到{destination_label or '目的地'}時間"
+    label = destination_label or "目的地"
+    if label == "學校":
+        return "到校時間"
+    if label in {"公司", "兼職公司"}:
+        return "到職時間"
+    return f"到{label}時間"
 
 
 def target_label_text(destination_label: str | None) -> str:

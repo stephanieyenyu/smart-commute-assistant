@@ -153,7 +153,10 @@ async def dashboard_status(user_id: int):
 
 @router.get("/view/{user_id}", response_class=HTMLResponse)
 async def dashboard_view(user_id: int):
-    return HTMLResponse(render_dashboard_html(user_id))
+    return HTMLResponse(
+        render_dashboard_html(user_id),
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 async def get_household_dashboard_status_payload(household_id: str = "default") -> dict:
@@ -179,18 +182,29 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
         def member_sort_key(item: dict):
             confirmed = bool(item.get("departure_confirmed_today"))
             seconds = item.get("seconds_until_departure")
+            same_day = item.get("target_date") == today.isoformat()
             return (
                 1 if confirmed else 0,
                 1 if not item.get("ok") else 0,
+                0 if same_day else 1,
                 1 if seconds is None else 0,
                 seconds if seconds is not None else 10**9,
                 item.get("user_id") or 10**9,
             )
 
         members = sorted(members, key=member_sort_key)
+        for index, member in enumerate(members):
+            member["queue_position"] = index + 1
+            destination_label = member.get("destination_label") or "目的地"
+            leave = member.get("departure_time") or "--:--"
+            member_name = member.get("display_name") or f"成員 {member.get('user_id')}"
+            member["queue_summary"] = f"{member_name}｜{destination_label}｜{leave}"
         primary = next((member for member in members if member.get("ok") and not member.get("departure_confirmed_today")), None)
         if primary is None:
             primary = next((member for member in members if member.get("ok")), None)
+        primary_user_id = primary.get("user_id") if primary else None
+        for member in members:
+            member["is_primary"] = bool(primary_user_id and member.get("user_id") == primary_user_id)
         all_sleeping = bool(members) and all(member.get("sleeping") for member in members)
         if primary:
             payload = dict(primary)
@@ -213,6 +227,8 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
             })
         payload["household_id"] = household_id or "default"
         payload["members"] = members
+        payload["queue_members"] = [member for member in members if not member.get("is_primary")]
+        payload["primary_member_name"] = primary.get("display_name") if primary else None
         payload["primary"] = primary
         payload["all_sleeping"] = all_sleeping
         payload["mode"] = "household"
@@ -229,7 +245,10 @@ async def household_dashboard_status(household_id: str):
 
 @router.get("/household/{household_id}/view", response_class=HTMLResponse)
 async def household_dashboard_view(household_id: str):
-    return HTMLResponse(render_household_dashboard_html(household_id))
+    return HTMLResponse(
+        render_household_dashboard_html(household_id),
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.post("/departure-check/{user_id}")
