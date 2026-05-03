@@ -87,7 +87,7 @@ FIELD_PROMPTS = {
         "請傳送目的地位置 🏢\n"
         "點下方按鈕開啟地圖，或直接輸入完整地址"
     ),
-    "identity_type": "請先選擇您的身份，系統會依身份顯示「到學校時間」、「到公司時間」或自訂目的地。",
+    "identity_type": "請先選擇您的身份，系統會依身份顯示「到校時間」、「到職時間」或自訂目的地。",
     "preferred_arrival_time": "請問您幾點需要抵達目的地？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 08:30）",
     "override_today_arrival_time": "請問今天幾點需要抵達目的地？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 15:30）",
     "override_tomorrow_arrival_time": "請問明天幾點需要抵達目的地？\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 09:30）",
@@ -108,7 +108,7 @@ SETUP_QUICK_REPLIES = [
      "data": "action=set_preferred_arrival_time", "mode": "time"},
     {"type": "message", "label": "學生", "text": "身份 學生"},
     {"type": "message", "label": "上班族", "text": "身份 上班族"},
-    {"type": "message", "label": "自訂標籤", "text": "自訂目的地標籤"},
+    {"type": "message", "label": "自訂名稱", "text": "自訂目的地名稱"},
 ]
 
 DONE_QUICK_REPLY = {"type": "message", "label": "完成修改設定", "text": "完成修改設定"}
@@ -185,7 +185,7 @@ RICH_MENU_TOPICS = [
     {"type": "message", "label": "時間設定", "text": "時間設定"},
     {"type": "message", "label": "自動提醒", "text": "自動提醒"},
     {"type": "message", "label": "排程設定", "text": "排程設定"},
-    {"type": "message", "label": "看板家庭", "text": "看板家庭"},
+    {"type": "message", "label": "看板管理", "text": "看板管理"},
     {"type": "message", "label": "指令說明", "text": "指令說明"},
 ]
 
@@ -213,7 +213,7 @@ IDENTITY_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "學生", "text": "身份 學生"},
     {"type": "message", "label": "上班族", "text": "身份 上班族"},
     {"type": "message", "label": "斜槓族", "text": "身份 斜槓族"},
-    {"type": "message", "label": "自訂標籤", "text": "自訂目的地標籤"},
+    {"type": "message", "label": "自訂名稱", "text": "自訂目的地名稱"},
 ])
 
 
@@ -234,15 +234,16 @@ WIZARD_WEEKDAY_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "每天", "text": "排程每天"},
     {"type": "message", "label": "假日", "text": "排程假日"},
     {"type": "message", "label": "自訂", "text": "自訂日曆排程"},
-    {"type": "message", "label": "下一步：時間", "text": "下一步：設定時間"},
+    {"type": "message", "label": "儲存排程", "text": "儲存排程"},
 ])
 
 SWITCH_SETTING_QUICK_REPLIES = [
     {"type": "message", "label": "繼續設定", "text": "繼續設定"},
-    {"type": "message", "label": "取消並切換", "text": "取消並切換"},
+    {"type": "message", "label": "前往新選單", "text": "前往新選單"},
 ]
 
 WIZARD_WEEKDAY_PENDING_FIELDS = {"wizard_active_weekdays", "wizard_custom_active_weekdays"}
+WIZARD_DESTINATION_PENDING_FIELDS = {"wizard_office_location"}
 SETTING_FLOW_PENDING_FIELDS = {
     "identity_type",
     "destination_label",
@@ -256,6 +257,7 @@ SETTING_FLOW_PENDING_FIELDS = {
     "template_days",
     "template_conflict",
     *WIZARD_WEEKDAY_PENDING_FIELDS,
+    *WIZARD_DESTINATION_PENDING_FIELDS,
 }
 
 
@@ -275,10 +277,14 @@ def arrival_time_quick_replies_for_profile(profile) -> list[dict]:
 def field_prompt_for_profile(field_name: str, profile) -> str:
     destination_label = destination_label_for_profile(profile)
     label = arrival_label(destination_label)
-    if field_name == "office_location":
-        return f"請傳送{destination_label}位置 🏢\n點下方按鈕開啟地圖，或直接輸入完整地址"
+    if field_name in {"office_location", "wizard_office_location"}:
+        name_label = "學校名稱" if destination_label == "學校" else ("公司名稱" if destination_label == "公司" else f"{destination_label}名稱")
+        return (
+            f"請傳送{name_label}或位置 📍\n"
+            "可以點下方按鈕開啟地圖，也可以直接輸入名稱或完整地址。"
+        )
     if field_name == "identity_type":
-        return "請先選擇您的身份。選完後，我會接著帶您設定提醒星期與時間。"
+        return "請先選擇您的身份。選完後，我會一步一步帶您完成目的地、日期與時間設定。"
     if field_name == "preferred_arrival_time":
         return f"請設定固定{label}。\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 08:30）"
     if field_name == "override_today_arrival_time":
@@ -286,6 +292,18 @@ def field_prompt_for_profile(field_name: str, profile) -> str:
     if field_name == "override_tomorrow_arrival_time":
         return f"請設定明天臨時{label}。\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 09:30）"
     return FIELD_PROMPTS.get(field_name, "請依照下方選項完成設定。")
+
+
+def onboarding_complete_text() -> str:
+    return (
+        "太棒了！您的第一組通勤排程已設定完成。\n"
+        "💡 溫馨提醒：若您有其他不同時間的行程（例如週末或不同時段），"
+        "隨時可以從 [排程設定] 中新增更多排程喔！"
+    )
+
+
+def is_office_location_step(step: str | None) -> bool:
+    return step in {"office_location", *WIZARD_DESTINATION_PENDING_FIELDS}
 
 
 def setting_step_label(step: str | None) -> str:
@@ -296,9 +314,10 @@ def setting_step_label(step: str | None) -> str:
         return "複製排程"
     return {
         "identity_type": "身份",
-        "destination_label": "目的地標籤",
+        "destination_label": "目的地名稱",
         "home_location": "住家位置",
         "office_location": "目的地位置",
+        "wizard_office_location": "目的地位置",
         "preferred_arrival_time": "固定到達時間",
         "active_weekdays": "提醒星期",
         "custom_active_weekdays": "自訂星期",
@@ -382,12 +401,12 @@ DASHBOARD_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "家庭看板", "text": "取得家庭Dashboard連結"},
     {"type": "message", "label": "家庭管理", "text": "家庭成員管理"},
     {"type": "message", "label": "移除成員", "text": "移除家庭成員"},
-    {"type": "message", "label": "電腦模式", "text": "電腦Dashboard設定"},
+    {"type": "message", "label": "電腦看板", "text": "電腦Dashboard設定"},
 ])
 
 TRANSPORT_MODE_NAME_MAP = {
-    None: "自動判斷",
-    "auto": "自動判斷",
+    None: "自動建議",
+    "auto": "自動建議",
     "shortest": "最短時間優先 (Google)",
     "bus": "公車優先",
     "metro": "捷運優先",
@@ -399,10 +418,10 @@ TRANSPORT_MODE_NAME_MAP = {
 
 COMMAND_ALIASES = {
     "topic_commute": {"通勤選單", "通勤功能"},
-    "topic_time": {"時間設定", "到公司時間設定"},
+    "topic_time": {"時間設定", "到職時間設定"},
     "topic_reminder": {"自動提醒", "提醒設定"},
     "topic_schedule": {"排程設定", "日程排程", "週間設定"},
-    "topic_dashboard": {"看板家庭", "看板與家庭", "Dashboard家庭"},
+    "topic_dashboard": {"看板管理", "看板與家庭", "Dashboard管理"},
     "topic_help": {"指令說明", "提示詞說明", "使用說明", "幫助"},
     "finish_settings": {"完成修改設定", "完成設定", "結束設定"},
     "view_settings": {"查看設定"},
@@ -410,16 +429,17 @@ COMMAND_ALIASES = {
     "dashboard_link": {"取得Dashboard連結", "取得DASHBOARD連結", "取得dashboard連結", "Dashboard連結", "DASHBOARD連結", "dashboard連結", "取得儀表板連結", "看板連結"},
     "household_dashboard_link": {"取得家庭Dashboard連結", "取得家庭DASHBOARD連結", "取得家用Dashboard連結", "家庭Dashboard連結", "家庭DASHBOARD連結", "家用Dashboard連結"},
     "tomorrow_departure": {"明天幾點出門"},
-    "edit_today_arrival": {"修改今天到達時間", "修改今天到公司時間", "今天改到公司時間", "設定到公司時間", "修改出門時間", "修改到公司時間"},
-    "edit_tomorrow_arrival": {"修改明天到達時間", "修改明天到公司時間"},
-    "identity_settings": {"身份設定", "設定身份", "目的地標籤設定"},
+    "edit_today_arrival": {"修改今天到達時間", "修改今天到職時間", "今天改到職時間", "設定到職時間", "修改出門時間", "修改到職時間"},
+    "edit_tomorrow_arrival": {"修改明天到達時間", "修改明天到職時間"},
+    "identity_settings": {"身份設定", "設定身份", "目的地名稱設定"},
     "set_identity_student": {"身份 學生", "身份學生", "我是學生", "學生"},
     "set_identity_worker": {"身份 上班族", "身份上班族", "我是上班族", "上班族"},
     "set_identity_slash": {"身份 斜槓族", "身份斜槓族", "我是斜槓族", "斜槓族"},
-    "custom_destination_label": {"自訂目的地標籤", "設定目的地標籤", "自訂標籤"},
+    "custom_destination_label": {"自訂目的地名稱", "設定目的地名稱", "自訂名稱"},
     "next_wizard_time": {"下一步：設定時間", "下一步設定時間", "設定時間"},
+    "save_weekday_schedule": {"儲存排程", "儲存日期", "儲存提醒日"},
     "continue_setting": {"繼續設定"},
-    "cancel_and_switch": {"取消並切換"},
+    "cancel_and_switch": {"前往新選單"},
     "add_schedule_template": {"新增常用排程", "新增排程", "新增週間排程"},
     "copy_schedule_template": {"複製常用排程", "複製排程"},
     "replace_schedule_conflict": {"以新排程為準"},
@@ -428,7 +448,7 @@ COMMAND_ALIASES = {
     "reset": {"重新設定"},
     "send_home_location": {"傳送住家位置", "設定住家位置", "傳送住家地址", "設定住家地址"},
     "send_office_location": {"傳送目的地位置", "設定目的地位置", "傳送目的地地址", "設定目的地地址", "傳送公司位置", "設定公司位置", "傳送公司地址", "設定公司地址"},
-    "set_mode_auto": {"今天自動判斷", "今天交通自動"},
+    "set_mode_auto": {"今天自動建議", "今天交通自動"},
     "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間"},
     "set_mode_bus": {"今天搭公車", "今天坐公車"},
     "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
@@ -457,7 +477,7 @@ COMMAND_ALIASES = {
     "confirm_remove_household_member": {"確認移除家庭成員", "確認移除成員", "確認移除"},
     "cancel_remove_household_member": {"取消移除成員", "取消移除"},
     "leave_household": {"離開家庭", "退出家庭"},
-    "computer_dashboard_guide": {"實體電腦Dashboard操作模式", "電腦Dashboard設定", "Kiosk說明", "外接螢幕設定說明"},
+    "computer_dashboard_guide": {"實體電腦Dashboard操作方式", "電腦Dashboard設定", "Kiosk說明", "外接螢幕設定說明"},
     "departure_left": {"已經出門了"},
     "departure_need_5": {"我還需要五分鐘", "還需要五分鐘"},
 }
@@ -467,7 +487,7 @@ CANONICAL_PROMPT_GROUPS = {
     "時間": ["身份設定", "新增常用排程", "複製常用排程", "修改今天到達時間", "修改明天到達時間", "明天幾點出門"],
     "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
     "排程": ["查看排程設定", "排程平日", "排程每天", "排程週末", "自訂日曆排程", "今天休息", "明天休息", "今天啟用", "明天啟用"],
-    "看板家庭": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "移除家庭成員", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
+    "看板管理": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "移除家庭成員", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
     "基本設定": ["查看設定", "重新設定", "傳送住家地址", "傳送目的地地址"],
 }
 
@@ -494,7 +514,7 @@ def unsupported_canonical_prompts() -> list[str]:
 
 READY_MENU_TEXT = (
     "您目前設定已完成。\n"
-    "請使用下方 Rich Menu 的 6 個大主題：通勤選單、時間設定、自動提醒、排程設定、看板家庭、指令說明。\n"
+    "請使用下方 Rich Menu 的 6 個大主題：通勤選單、時間設定、自動提醒、排程設定、看板管理、指令說明。\n"
     "需要完整提示詞時，請傳送「指令說明」。"
 )
 
@@ -514,7 +534,7 @@ def format_profile_text(profile, today_override_time: str | None = None, tomorro
     tomorrow_effective_text = f"{tomorrow_override_time or preferred_arrival_time}{'（明天臨時調整）' if tomorrow_override_time else '（固定時間）'}"
     reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
     schedule_status = schedule_label(getattr(profile, "active_weekdays", None))
-    mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
+    mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動建議")
     identity_text = identity_display_name(getattr(profile, "identity_type", None))
     multi_schedule_text = ""
     if db is not None:
@@ -629,14 +649,14 @@ def build_schedule_template_pending(action: str, time_value: str, label: str, da
 def schedule_setup_prompt() -> str:
     return (
         "最後一步：請設定哪些日子要啟用通勤提醒。\n"
-        "可用下方按鈕選「平日、每天、週末」，也可以按「自訂星期」在 LINE 內逐日切換。"
+        "請選擇這組排程適用的日期，選完後請按「儲存排程」。"
     )
 
 
 def custom_schedule_prompt() -> str:
     return (
-        "請選擇要固定啟用的星期。\n"
-        "下方會顯示一張 LINE 原生選擇卡，點星期可開關；也可直接輸入例如：週一週三週五、週二週四、1,3,5。"
+        "請選擇這組排程適用的日期。\n"
+        "下方會顯示一張 LINE 原生選擇卡；選完後請按「儲存排程」。也可直接輸入例如：週一週三週五、週二週四、1,3,5。"
     )
 
 
@@ -694,7 +714,7 @@ def wizard_weekday_prompt(profile) -> str:
     return (
         f"已設定身份：{identity_display_name(getattr(profile, 'identity_type', None))}\n"
         f"後續會顯示「{label}」。\n\n"
-        "下一步：請選擇每週哪些日子要啟用提醒。"
+        "下一步：請選擇這組排程適用的日期，選完後請按「儲存排程」。"
     )
 
 
@@ -817,7 +837,7 @@ def format_household_management_text(db, user) -> str:
 
 def format_computer_dashboard_guide(dashboard_url: str, household_url: str) -> str:
     return (
-        "實體電腦 Dashboard 操作模式：\n"
+        "實體電腦 Dashboard 操作方式：\n"
         "1. 在要接外接螢幕的電腦打開家庭 Dashboard 連結。\n"
         f"{household_url}\n"
         "2. 全螢幕 Kiosk：Windows 可用 F11；若要固定成看板，Chrome 捷徑目標加上 --kiosk \"連結\"。macOS 可用 Chrome 全螢幕，或用指令 open -na \"Google Chrome\" --args --kiosk \"連結\"。\n"
@@ -841,7 +861,6 @@ def build_weekday_picker_flex(profile) -> dict:
                 "type": "postback",
                 "label": label,
                 "data": f"action=toggle_weekday&day={day}",
-                "displayText": f"切換{WEEKDAY_NAMES[day]}",
             },
         }
 
@@ -869,7 +888,6 @@ def build_weekday_picker_flex(profile) -> dict:
                 "type": "postback",
                 "label": label,
                 "data": f"action=schedule_preset&preset={preset}",
-                "displayText": f"排程{label}",
             },
         }
 
@@ -897,6 +915,17 @@ def build_weekday_picker_flex(profile) -> dict:
                 {"type": "separator", "margin": "md"},
                 preset_row(preset_buttons[:2]),
                 preset_row(preset_buttons[2:]),
+                {"type": "separator", "margin": "md"},
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "儲存排程",
+                        "data": "action=weekday_save",
+                    },
+                },
             ],
         },
     }
@@ -1045,7 +1074,7 @@ async def reply_topic_menu(reply_token: str, topic_key: str, db, user, today_dat
         profile = get_profile(db, user.id)
         await reply_with_quick_reply(
             reply_token,
-            f"自動提醒目前：{'開啟' if profile.reminder_enabled else '關閉'}。\n請選擇是否切換。",
+            f"自動提醒目前：{'開啟' if profile.reminder_enabled else '關閉'}。\n請選擇要開啟或關閉。",
             REMINDER_SETTING_QUICK_REPLIES,
         )
         return
@@ -1060,7 +1089,7 @@ async def reply_topic_menu(reply_token: str, topic_key: str, db, user, today_dat
     if topic_key == "topic_dashboard":
         await reply_with_quick_reply(
             reply_token,
-            "看板與家庭：請選擇要取得看板連結、管理家庭成員，或查看電腦外接螢幕模式。",
+            "看板與家庭：請選擇要取得看板連結、管理家庭成員，或查看電腦外接螢幕設定。",
             DASHBOARD_TOPIC_QUICK_REPLIES,
         )
         return
@@ -1080,11 +1109,13 @@ async def reply_current_setting_prompt(reply_token: str, db, user, step: str | N
     if step in WIZARD_WEEKDAY_PENDING_FIELDS:
         await reply_weekday_picker(reply_token, profile, wizard_weekday_prompt(profile), WIZARD_WEEKDAY_QUICK_REPLIES)
         return
-    if step in {"home_location", "office_location", "preferred_arrival_time"}:
+    if step in {"home_location", "office_location", "wizard_office_location", "preferred_arrival_time"}:
         await reply_with_quick_reply(
             reply_token,
             field_prompt_for_profile(step, profile),
-            arrival_time_quick_replies_for_profile(profile) if step == "preferred_arrival_time" else setup_quick_replies_for_step(step),
+            arrival_time_quick_replies_for_profile(profile)
+            if step == "preferred_arrival_time"
+            else (OFFICE_QUICK_REPLY if is_office_location_step(step) else setup_quick_replies_for_step(step)),
         )
         return
     if pending.get("action") in {"template_days", "template_conflict"}:
@@ -1257,25 +1288,20 @@ async def line_webhook(
                     except ValueError:
                         day = -1
                     if not 0 <= day <= 6:
-                        await reply_weekday_picker(reply_token, get_profile(db, user.id), "星期讀取失敗，請再選一次。")
                         continue
 
                     profile = get_profile(db, user.id)
                     was_wizard_weekday = profile.pending_field in WIZARD_WEEKDAY_PENDING_FIELDS
+                    was_schedule_weekday = profile.pending_field in {"active_weekdays", "custom_active_weekdays"}
                     active_days = set(normalize_active_weekdays(getattr(profile, "active_weekdays", None)))
                     if day in active_days:
                         active_days.remove(day)
                     else:
                         active_days.add(day)
                     profile = set_active_weekdays(db, user.id, sorted(active_days))
-                    set_pending_field(db, user.id, "wizard_active_weekdays" if was_wizard_weekday else None)
+                    next_pending = "wizard_active_weekdays" if was_wizard_weekday else ("active_weekdays" if was_schedule_weekday else None)
+                    set_pending_field(db, user.id, next_pending)
                     clear_today_reminder_state_for_user(user.id)
-                    await reply_weekday_picker(
-                        reply_token,
-                        profile,
-                        f"已更新：{schedule_label(profile.active_weekdays)}" + ("。\n選好後請按「下一步：時間」。" if was_wizard_weekday else ""),
-                        WIZARD_WEEKDAY_QUICK_REPLIES if was_wizard_weekday else None,
-                    )
                     continue
 
                 if postback_action == "schedule_preset":
@@ -1283,16 +1309,33 @@ async def line_webhook(
                     was_wizard_weekday = get_profile(db, user.id).pending_field in WIZARD_WEEKDAY_PENDING_FIELDS
                     profile = set_active_weekdays(db, user.id, parse_weekday_preset(preset))
                     clear_today_reminder_state_for_user(user.id)
-                    if was_wizard_weekday:
+                    set_pending_field(db, user.id, "wizard_active_weekdays" if was_wizard_weekday else "active_weekdays")
+                    continue
+
+                if postback_action == "weekday_save":
+                    profile = get_profile(db, user.id)
+                    if profile.pending_field in WIZARD_WEEKDAY_PENDING_FIELDS:
                         set_pending_field(db, user.id, "preferred_arrival_time")
                         await reply_with_quick_reply(
                             reply_token,
-                            f"已設定提醒日：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
+                            f"已儲存提醒日期：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
                             arrival_time_quick_replies_for_profile(profile),
                         )
-                    else:
+                        continue
+                    if profile.pending_field in {"active_weekdays", "custom_active_weekdays"}:
+                        was_setup_schedule = is_schedule_setup_pending(profile)
                         set_pending_field(db, user.id, None)
-                        await reply_weekday_picker(reply_token, profile, f"已更新：{schedule_label(profile.active_weekdays)}")
+                        await reply_with_quick_reply(
+                            reply_token,
+                            schedule_saved_text(profile, was_setup_schedule),
+                            MAIN_MENU_QUICK_REPLIES,
+                        )
+                        continue
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "目前沒有正在設定的提醒日期。若要調整，請從「排程設定」開始。",
+                        SCHEDULE_QUICK_REPLIES,
+                    )
                     continue
 
                 if postback_action in {"template_toggle_weekday", "template_preset", "template_save"}:
@@ -1363,7 +1406,7 @@ async def line_webhook(
                         set_pending_field(db, user.id, build_schedule_template_pending("template_label", time_value, ""))
                         await reply_with_quick_reply(
                             reply_token,
-                            f"這組排程是 {time_value} 要到哪裡？請選擇或輸入目的地標籤。",
+                            f"這組排程是 {time_value} 要到哪裡？請選擇或輸入目的地名稱。",
                             SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES,
                         )
                         continue
@@ -1406,7 +1449,7 @@ async def line_webhook(
                             set_pending_field(db, user.id, None)
                             await reply_with_quick_reply(
                                 reply_token,
-                                f"已設定固定{arrival_label(destination_label_for_profile(updated_profile))}：{time_value}\n\n{setting_overview_text(db, updated_profile, today_override_time, tomorrow_override_time)}",
+                                f"已設定固定{arrival_label(destination_label_for_profile(updated_profile))}：{time_value}\n\n{onboarding_complete_text()}\n\n{setting_overview_text(db, updated_profile, today_override_time, tomorrow_override_time)}",
                                 MAIN_MENU_QUICK_REPLIES,
                             )
                         continue
@@ -1495,10 +1538,19 @@ async def line_webhook(
                     )
                     continue
 
-                if current_step == "office_location":
+                if is_office_location_step(current_step):
                     await save_location_or_address(db, user.id, "office", raw_address, lat=lat, lng=lng)
                     clear_today_reminder_state_for_user(user.id)
                     profile = get_profile(db, user.id)
+                    if current_step in WIZARD_DESTINATION_PENDING_FIELDS:
+                        set_pending_field(db, user.id, "wizard_active_weekdays")
+                        await reply_weekday_picker(
+                            reply_token,
+                            profile,
+                            f"已儲存{destination_label_for_profile(profile)}位置。\n{wizard_weekday_prompt(profile)}",
+                            WIZARD_WEEKDAY_QUICK_REPLIES,
+                        )
+                        continue
                     next_step = get_next_setup_step(profile)
                     if next_step is None:
                         set_pending_field(db, user.id, None)
@@ -1558,6 +1610,7 @@ async def line_webhook(
                     | COMMAND_ALIASES["schedule_none"]
                     | COMMAND_ALIASES["schedule_custom"]
                     | COMMAND_ALIASES["next_wizard_time"]
+                    | COMMAND_ALIASES["save_weekday_schedule"]
                     | COMMAND_ALIASES["reset"]
                     | COMMAND_ALIASES["finish_settings"]
                     | COMMAND_ALIASES["dashboard_link"]
@@ -1567,9 +1620,11 @@ async def line_webhook(
                 # 例外2：正在填寫設定欄位且輸入內容確實像「地址」或「時間」
                 _current_pending = _profile_for_guard.pending_field
                 _is_valid_setup_input = False
-                if _current_pending in {"home_location", "office_location"}:
+                if _current_pending == "home_location":
                     # 只有看起來像地址的文字才放行
                     _is_valid_setup_input = looks_like_address(user_text)
+                elif is_office_location_step(_current_pending):
+                    _is_valid_setup_input = bool(user_text.strip())
                 elif _current_pending == "preferred_arrival_time":
                     # 只有 HH:MM 格式的時間文字才放行
                     _parts = user_text.strip().split(":")
@@ -1607,7 +1662,7 @@ async def line_webhook(
                     continue
                 await reply_with_quick_reply(
                     reply_token,
-                    "請選擇要繼續目前設定，或取消並切換到剛剛點選的選單。",
+                    "請選擇要繼續目前設定，或先前往剛剛點選的選單。",
                     SWITCH_SETTING_QUICK_REPLIES,
                 )
                 continue
@@ -1617,7 +1672,7 @@ async def line_webhook(
                 set_pending_field(db, user.id, f"confirm_switch|{switch_topic_key}|{current_pending_for_switch}")
                 await reply_with_quick_reply(
                     reply_token,
-                    f"您正在設定「{setting_step_label(current_pending_for_switch)}」，是否要取消並切換？",
+                    f"您正在設定「{setting_step_label(current_pending_for_switch)}」，是否先前往新選單？",
                     SWITCH_SETTING_QUICK_REPLIES,
                 )
                 continue
@@ -1658,6 +1713,7 @@ async def line_webhook(
                     | COMMAND_ALIASES["schedule_none"]
                     | COMMAND_ALIASES["schedule_custom"]
                     | COMMAND_ALIASES["next_wizard_time"]
+                    | COMMAND_ALIASES["save_weekday_schedule"]
                     | COMMAND_ALIASES["reset"]
                     | COMMAND_ALIASES["dashboard_link"]
                     | COMMAND_ALIASES["household_dashboard_link"]
@@ -1704,7 +1760,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"自動提醒目前：{'開啟' if profile.reminder_enabled else '關閉'}。\n請選擇是否切換。",
+                    f"自動提醒目前：{'開啟' if profile.reminder_enabled else '關閉'}。\n請選擇要開啟或關閉。",
                     REMINDER_SETTING_QUICK_REPLIES,
                 )
                 continue
@@ -1721,7 +1777,7 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["topic_dashboard"]:
                 await reply_with_quick_reply(
                     reply_token,
-                    "看板與家庭：請選擇要取得看板連結、管理家庭成員，或查看電腦外接螢幕模式。",
+                    "看板與家庭：請選擇要取得看板連結、管理家庭成員，或查看電腦外接螢幕設定。",
                     DASHBOARD_TOPIC_QUICK_REPLIES,
                 )
                 continue
@@ -1779,7 +1835,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"目前身份：{identity_display_name(getattr(profile, 'identity_type', None))}\n目前目的地顯示為：{destination_label_for_profile(profile)}\n請選擇身份，或自訂目的地標籤。",
+                    f"目前身份：{identity_display_name(getattr(profile, 'identity_type', None))}\n目前目的地顯示為：{destination_label_for_profile(profile)}\n請選擇身份，或自訂目的地名稱。",
                     IDENTITY_QUICK_REPLIES,
                 )
                 continue
@@ -1794,12 +1850,11 @@ async def line_webhook(
                 if command_text in COMMAND_ALIASES[alias_key]:
                     profile = set_identity_and_destination_label(db, user.id, identity_type, label)
                     clear_today_reminder_state_for_user(user.id)
-                    set_pending_field(db, user.id, "wizard_active_weekdays")
-                    await reply_weekday_picker(
+                    set_pending_field(db, user.id, "wizard_office_location")
+                    await reply_with_quick_reply(
                         reply_token,
-                        profile,
-                        wizard_weekday_prompt(profile),
-                        WIZARD_WEEKDAY_QUICK_REPLIES,
+                        f"已選擇身份：{identity_display_name(identity_type)}。\n下一步：{field_prompt_for_profile('wizard_office_location', profile)}",
+                        OFFICE_QUICK_REPLY,
                     )
                     handled_identity = True
                     break
@@ -2096,7 +2151,7 @@ async def line_webhook(
                 profile = get_profile(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}\n可用下方按鈕切換。",
+                    f"目前自動提醒：{'開啟' if profile.reminder_enabled else '關閉'}\n可用下方按鈕調整。",
                     REMINDER_SETTING_QUICK_REPLIES,
                 )
                 continue
@@ -2108,6 +2163,28 @@ async def line_webhook(
                     format_schedule_text(db, profile, today_date, today_override, tomorrow_date, tomorrow_override),
                     SCHEDULE_QUICK_REPLIES,
                 )
+                continue
+
+            if command_text in COMMAND_ALIASES["save_weekday_schedule"]:
+                profile = get_profile(db, user.id)
+                if profile.pending_field in WIZARD_WEEKDAY_PENDING_FIELDS:
+                    set_pending_field(db, user.id, "preferred_arrival_time")
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"已儲存提醒日期：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
+                        arrival_time_quick_replies_for_profile(profile),
+                    )
+                    continue
+                if profile.pending_field in {"active_weekdays", "custom_active_weekdays"}:
+                    was_setup_schedule = is_schedule_setup_pending(profile)
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        schedule_saved_text(profile, was_setup_schedule),
+                        MAIN_MENU_QUICK_REPLIES,
+                    )
+                    continue
+                await reply_with_quick_reply(reply_token, "目前沒有正在設定的提醒日期。若要調整，請從「排程設定」開始。", SCHEDULE_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["next_wizard_time"]:
@@ -2130,19 +2207,11 @@ async def line_webhook(
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("workdays"))
                 clear_today_reminder_state_for_user(user.id)
                 if was_wizard_schedule:
-                    set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_with_quick_reply(
-                        reply_token,
-                        f"已設定提醒日：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
-                        arrival_time_quick_replies_for_profile(profile),
-                    )
+                    set_pending_field(db, user.id, "wizard_active_weekdays")
+                    await reply_weekday_picker(reply_token, profile, custom_schedule_prompt(), WIZARD_WEEKDAY_QUICK_REPLIES)
                     continue
-                set_pending_field(db, user.id, None)
-                await reply_with_quick_reply(
-                    reply_token,
-                    schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES,
-                )
+                set_pending_field(db, user.id, "active_weekdays")
+                await reply_weekday_picker(reply_token, profile, custom_schedule_prompt())
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_everyday"]:
@@ -2152,19 +2221,11 @@ async def line_webhook(
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("everyday"))
                 clear_today_reminder_state_for_user(user.id)
                 if was_wizard_schedule:
-                    set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_with_quick_reply(
-                        reply_token,
-                        f"已設定提醒日：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
-                        arrival_time_quick_replies_for_profile(profile),
-                    )
+                    set_pending_field(db, user.id, "wizard_active_weekdays")
+                    await reply_weekday_picker(reply_token, profile, custom_schedule_prompt(), WIZARD_WEEKDAY_QUICK_REPLIES)
                     continue
-                set_pending_field(db, user.id, None)
-                await reply_with_quick_reply(
-                    reply_token,
-                    schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES,
-                )
+                set_pending_field(db, user.id, "active_weekdays")
+                await reply_weekday_picker(reply_token, profile, custom_schedule_prompt())
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_weekend"]:
@@ -2174,19 +2235,11 @@ async def line_webhook(
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("weekend"))
                 clear_today_reminder_state_for_user(user.id)
                 if was_wizard_schedule:
-                    set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_with_quick_reply(
-                        reply_token,
-                        f"已設定提醒日：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
-                        arrival_time_quick_replies_for_profile(profile),
-                    )
+                    set_pending_field(db, user.id, "wizard_active_weekdays")
+                    await reply_weekday_picker(reply_token, profile, custom_schedule_prompt(), WIZARD_WEEKDAY_QUICK_REPLIES)
                     continue
-                set_pending_field(db, user.id, None)
-                await reply_with_quick_reply(
-                    reply_token,
-                    schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES,
-                )
+                set_pending_field(db, user.id, "active_weekdays")
+                await reply_weekday_picker(reply_token, profile, custom_schedule_prompt())
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_none"]:
@@ -2196,19 +2249,11 @@ async def line_webhook(
                 profile = set_active_weekdays(db, user.id, parse_weekday_preset("none"))
                 clear_today_reminder_state_for_user(user.id)
                 if was_wizard_schedule:
-                    set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_with_quick_reply(
-                        reply_token,
-                        f"已設定提醒日：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
-                        arrival_time_quick_replies_for_profile(profile),
-                    )
+                    set_pending_field(db, user.id, "wizard_active_weekdays")
+                    await reply_weekday_picker(reply_token, profile, custom_schedule_prompt(), WIZARD_WEEKDAY_QUICK_REPLIES)
                     continue
-                set_pending_field(db, user.id, None)
-                await reply_with_quick_reply(
-                    reply_token,
-                    schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES,
-                )
+                set_pending_field(db, user.id, "active_weekdays")
+                await reply_weekday_picker(reply_token, profile, custom_schedule_prompt())
                 continue
 
             if command_text in COMMAND_ALIASES["schedule_custom"]:
@@ -2290,7 +2335,7 @@ async def line_webhook(
                 upsert_transport_mode_override(db, user.id, today_date, "auto")
                 clear_today_reminder_state_for_user(user.id)
 
-                advice = await build_today_commute_payload(db, user.id, today_date, "auto", "好的，今天交通方式切換為：自動判斷。")
+                advice = await build_today_commute_payload(db, user.id, today_date, "auto", "好的，今天交通方式改為：自動建議。")
                 try:
                     await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
@@ -2322,7 +2367,7 @@ async def line_webhook(
                 upsert_transport_mode_override(db, user.id, today_date, "bus")
                 clear_today_reminder_state_for_user(user.id)
 
-                advice = await build_today_commute_payload(db, user.id, today_date, "bus", "好的，今天切換為：公車優先。")
+                advice = await build_today_commute_payload(db, user.id, today_date, "bus", "好的，今天交通方式改為：公車優先。")
                 try:
                     await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
@@ -2338,7 +2383,7 @@ async def line_webhook(
                 upsert_transport_mode_override(db, user.id, today_date, "metro")
                 clear_today_reminder_state_for_user(user.id)
 
-                advice = await build_today_commute_payload(db, user.id, today_date, "metro", "好的，今天切換為：捷運優先。")
+                advice = await build_today_commute_payload(db, user.id, today_date, "metro", "好的，今天交通方式改為：捷運優先。")
                 try:
                     await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
@@ -2362,7 +2407,7 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["view_mode_today"]:
                 current_mode = get_transport_mode_override(db, user.id, today_date) or "auto"
-                await reply_with_quick_reply(reply_token, f"今天交通方式設定：{TRANSPORT_MODE_NAME_MAP.get(current_mode, '自動判斷')}", MAIN_MENU_QUICK_REPLIES)
+                await reply_with_quick_reply(reply_token, f"今天交通方式設定：{TRANSPORT_MODE_NAME_MAP.get(current_mode, '自動建議')}", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["today_commute"]:
@@ -2535,12 +2580,11 @@ async def line_webhook(
                 identity_type = getattr(profile, "identity_type", None) or "slash"
                 profile = set_identity_and_destination_label(db, user.id, identity_type, label)
                 clear_today_reminder_state_for_user(user.id)
-                set_pending_field(db, user.id, "wizard_active_weekdays")
-                await reply_weekday_picker(
+                set_pending_field(db, user.id, "wizard_office_location")
+                await reply_with_quick_reply(
                     reply_token,
-                    profile,
-                    wizard_weekday_prompt(profile),
-                    WIZARD_WEEKDAY_QUICK_REPLIES,
+                    f"已設定目的地名稱：{destination_label_for_profile(profile)}。\n下一步：{field_prompt_for_profile('wizard_office_location', profile)}",
+                    OFFICE_QUICK_REPLY,
                 )
                 continue
 
@@ -2552,7 +2596,7 @@ async def line_webhook(
                 set_pending_field(db, user.id, build_schedule_template_pending("template_label", value, ""))
                 await reply_with_quick_reply(
                     reply_token,
-                    f"這組排程是 {value} 要到哪裡？請選擇或輸入目的地標籤。",
+                    f"這組排程是 {value} 要到哪裡？請選擇或輸入目的地名稱。",
                     SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES,
                 )
                 continue
@@ -2581,7 +2625,7 @@ async def line_webhook(
             if pending_template.get("action") == "template_label":
                 label = user_text.strip()
                 if not label or label == "自訂目的地":
-                    await reply_with_quick_reply(reply_token, "請直接輸入目的地標籤，例如：學校、公司、兼職公司。", SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES)
+                    await reply_with_quick_reply(reply_token, "請直接輸入目的地名稱，例如：學校、公司、兼職公司。", SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES)
                     continue
                 set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], label, []))
                 await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], label, [], "請批次勾選這組時間適用的星期。")
@@ -2628,31 +2672,32 @@ async def line_webhook(
                 profile = set_active_weekdays(db, user.id, weekdays)
                 clear_today_reminder_state_for_user(user.id)
                 if was_wizard_schedule:
-                    set_pending_field(db, user.id, "preferred_arrival_time")
-                    await reply_with_quick_reply(
+                    set_pending_field(db, user.id, "wizard_active_weekdays")
+                    await reply_weekday_picker(
                         reply_token,
-                        f"已設定提醒日：{schedule_label(profile.active_weekdays)}。\n\n下一步：{wizard_time_prompt(profile)}",
-                        arrival_time_quick_replies_for_profile(profile),
+                        profile,
+                        f"已暫存提醒日期：{schedule_label(profile.active_weekdays)}。\n選好後請按「儲存排程」。",
+                        WIZARD_WEEKDAY_QUICK_REPLIES,
                     )
                     continue
-                set_pending_field(db, user.id, None)
-                await reply_with_quick_reply(
+                set_pending_field(db, user.id, "active_weekdays")
+                await reply_weekday_picker(
                     reply_token,
-                    schedule_saved_text(profile, was_setup_schedule),
-                    MAIN_MENU_QUICK_REPLIES,
+                    profile,
+                    f"已暫存提醒日期：{schedule_label(profile.active_weekdays)}。\n選好後請按「儲存排程」。",
                 )
                 continue
 
-            if current_step in {"home_location", "office_location"}:
+            if current_step in {"home_location", "office_location", *WIZARD_DESTINATION_PENDING_FIELDS}:
                 typed_address = user_text.strip()
                 if not typed_address:
                     await reply_with_quick_reply(reply_token, field_prompt_for_profile(current_step, profile),
                                                  HOME_QUICK_REPLY if current_step == "home_location" else OFFICE_QUICK_REPLY)
                     continue
 
-                if not looks_like_address(typed_address):
+                if current_step == "home_location" and not looks_like_address(typed_address):
                     await reply_with_quick_reply(reply_token, field_prompt_for_profile(current_step, profile),
-                                                 HOME_QUICK_REPLY if current_step == "home_location" else OFFICE_QUICK_REPLY)
+                                                 HOME_QUICK_REPLY)
                     continue
 
                 try:
@@ -2673,10 +2718,27 @@ async def line_webhook(
                         )
                         continue
 
-                    if current_step == "office_location":
+                    if is_office_location_step(current_step):
                         await save_location_or_address(db, user.id, "office", typed_address)
                         clear_today_reminder_state_for_user(user.id)
                         profile = get_profile(db, user.id)
+                        if current_step in WIZARD_DESTINATION_PENDING_FIELDS:
+                            if profile.office_lat is None or profile.office_lng is None:
+                                set_pending_field(db, user.id, "wizard_office_location")
+                                await reply_with_quick_reply(
+                                    reply_token,
+                                    f"我還找不到這個{destination_label_for_profile(profile)}位置，請輸入更完整的名稱或地址，也可以直接傳送地圖位置。",
+                                    OFFICE_QUICK_REPLY,
+                                )
+                                continue
+                            set_pending_field(db, user.id, "wizard_active_weekdays")
+                            await reply_weekday_picker(
+                                reply_token,
+                                profile,
+                                f"已儲存{destination_label_for_profile(profile)}位置。\n{wizard_weekday_prompt(profile)}",
+                                WIZARD_WEEKDAY_QUICK_REPLIES,
+                            )
+                            continue
                         next_step = get_next_setup_step(profile)
                         if next_step is None:
                             set_pending_field(db, user.id, None)
@@ -2769,7 +2831,7 @@ async def line_webhook(
                         set_pending_field(db, user.id, None)
                         await reply_with_quick_reply(
                             reply_token,
-                            f"已設定固定{arrival_label(destination_label_for_profile(updated_profile))}：{value}\n\n{setting_overview_text(db, updated_profile, today_override_time, tomorrow_override_time)}",
+                            f"已設定固定{arrival_label(destination_label_for_profile(updated_profile))}：{value}\n\n{onboarding_complete_text()}\n\n{setting_overview_text(db, updated_profile, today_override_time, tomorrow_override_time)}",
                             MAIN_MENU_QUICK_REPLIES,
                         )
                     continue
