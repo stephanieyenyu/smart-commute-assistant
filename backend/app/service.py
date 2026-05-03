@@ -3,6 +3,7 @@ import hashlib
 import math
 import re
 import time
+import traceback
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -397,7 +398,25 @@ async def choose_commute_option_with_override(
     target_date: date,
     mode_override: str | None = None,
 ):
-    arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
+    home_lat = getattr(profile, "home_lat", None)
+    home_lng = getattr(profile, "home_lng", None)
+    office_lat = getattr(profile, "office_lat", None)
+    office_lng = getattr(profile, "office_lng", None)
+
+    if not home_lat or not home_lng or not office_lat or not office_lng:
+        print(f"[choose-commute] INVALID COORDS: home=({home_lat},{home_lng}) office=({office_lat},{office_lng})")
+        return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
+
+    if not effective_arrival_time:
+        print(f"[choose-commute] INVALID ARRIVAL TIME: {effective_arrival_time}")
+        return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
+
+    try:
+        arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
+    except Exception as e:
+        print(f"[choose-commute] time parse error: {e}")
+        return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
+
     requested_mode = mode_override or "auto"
     allowed_travel_modes = None
     if requested_mode == "bus":
@@ -405,10 +424,12 @@ async def choose_commute_option_with_override(
     elif requested_mode == "metro":
         allowed_travel_modes = ["SUBWAY", "TRAIN", "RAIL", "LIGHT_RAIL"]
 
+    print(f"[choose-commute] calling APIs: origin=({home_lat},{home_lng}) dest=({office_lat},{office_lng}) arrival={arrival_dt}")
+
     google_task = asyncio.create_task(
         safe_call(estimate_transit_minutes_detailed(
-            profile.home_lat, profile.home_lng,
-            profile.office_lat, profile.office_lng,
+            home_lat, home_lng,
+            office_lat, office_lng,
             arrival_dt,
             allowed_travel_modes=allowed_travel_modes,
         ), timeout_seconds=3.0)
@@ -645,122 +666,155 @@ async def _compute_today_plan(
     target_date: date | None = None,
     force_mode_override: str | None = None,
 ):
-    if target_date is None:
-        target_date = datetime.now(TAIPEI_TZ).date()
+    try:
+        if target_date is None:
+            target_date = datetime.now(TAIPEI_TZ).date()
 
-    profile = get_profile(db, user_id)
-    next_step = get_next_setup_step(profile)
-    if next_step is not None:
-        return {"ok": False, "reason": "setup_incomplete", "next_step": next_step}
+        profile = get_profile(db, user_id)
+        print(f"[compute-plan] user_id={user_id} target_date={target_date} profile_id={profile.id if profile else None}")
 
-    override = get_override_for_date(db, user_id, target_date)
-    effective_setting = effective_commute_setting_for_date(db, profile, target_date, override)
-    if effective_setting is None:
-        return {"ok": False, "reason": "schedule_inactive", "target_date": target_date}
+        next_step = get_next_setup_step(profile)
+        if next_step is not None:
+            print(f"[compute-plan] setup incomplete: next_step={next_step}")
+            return {"ok": False, "reason": "setup_incomplete", "next_step": next_step}
 
-    effective_arrival_time = effective_setting["arrival_time"]
-    destination_label = effective_setting["destination_label"]
-    destination = effective_setting.get("destination")
-    effective_schedule_source = effective_setting["source"]
-    if destination is not None and getattr(destination, "lat", None) is not None and getattr(destination, "lng", None) is not None:
-        profile = SimpleNamespace(**profile.__dict__)
-        profile.office_address = getattr(destination, "address", None) or profile.office_address
-        profile.office_lat = getattr(destination, "lat", None)
-        profile.office_lng = getattr(destination, "lng", None)
-        profile.office_city = getattr(destination, "city", None) or profile.office_city
+        override = get_override_for_date(db, user_id, target_date)
+        effective_setting = effective_commute_setting_for_date(db, profile, target_date, override)
+        print(f"[compute-plan] effective_setting={'ok' if effective_setting else 'none'} arrival_time={effective_setting['arrival_time'] if effective_setting else 'N/A'}")
+        if effective_setting is None:
+            return {"ok": False, "reason": "schedule_inactive", "target_date": target_date}
 
-    home_lat = getattr(profile, "home_lat", None)
-    home_lng = getattr(profile, "home_lng", None)
-    office_lat = getattr(profile, "office_lat", None)
-    office_lng = getattr(profile, "office_lng", None)
+        effective_arrival_time = effective_setting["arrival_time"]
+        destination_label = effective_setting["destination_label"]
+        destination = effective_setting.get("destination")
+        effective_schedule_source = effective_setting["source"]
+        if destination is not None and getattr(destination, "lat", None) is not None and getattr(destination, "lng", None) is not None:
+            profile = SimpleNamespace(**profile.__dict__)
+            profile.office_address = getattr(destination, "address", None) or profile.office_address
+            profile.office_lat = getattr(destination, "lat", None)
+            profile.office_lng = getattr(destination, "lng", None)
+            profile.office_city = getattr(destination, "city", None) or profile.office_city
+            print(f"[compute-plan] using schedule destination: lat={profile.office_lat} lng={profile.office_lng} city={profile.office_city}")
 
-    if home_lat is None or home_lng is None:
+        home_lat = getattr(profile, "home_lat", None)
+        home_lng = getattr(profile, "home_lng", None)
+        office_lat = getattr(profile, "office_lat", None)
+        office_lng = getattr(profile, "office_lng", None)
+
+        print(f"[compute-plan] coords home=({home_lat},{home_lng}) office=({office_lat},{office_lng}) arrival={effective_arrival_time}")
+
+        if home_lat is None or home_lng is None:
+            print(f"[compute-plan] missing home coordinates")
+            return {
+                "ok": False,
+                "reason": "missing_home_address",
+                "message": "您的住家地址尚未設定完整經緯度，請重新傳送住家位置 📍",
+            }
+
+        if office_lat is None or office_lng is None:
+            print(f"[compute-plan] missing destination coordinates for label={destination_label}")
+            return {
+                "ok": False,
+                "reason": "missing_destination_address",
+                "message": f"您的排程「{destination_label}」缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！",
+            }
+
+        schedule_template_id = effective_setting.get("schedule_template_id")
+        used_override = False
+        if override and override.target_arrival_time:
+            effective_arrival_time = override.target_arrival_time
+            used_override = True
+
+        stored_mode_override = get_transport_mode_override(db, user_id, target_date)
+        mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
+
+        print(f"[compute-plan] calling Google Maps API: mode_override={mode_override}")
+
+        weather_info, option_choice = await asyncio.gather(
+            safe_call(get_commute_weather(profile), timeout_seconds=1.5),
+            safe_call(choose_commute_option_with_override(
+                profile=profile,
+                effective_arrival_time=effective_arrival_time,
+                weather_buffer_minutes=0,
+                target_date=target_date,
+                mode_override=mode_override,
+            ), timeout_seconds=3.5),
+        )
+
+        print(f"[compute-plan] weather={weather_info is not None} option_choice={option_choice is not None}")
+        weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
+        weather_buffer = weather_info.get("extra_buffer_minutes", 0)
+        option_choice = option_choice or {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
+        best_option = option_choice.get("best_option", {}) or {}
+        selection_source = option_choice.get("selection_source", "auto")
+        baseline_minutes = _google_duration_from_option(best_option) or DEFAULT_COMMUTE_MINUTES
+        print(f"[compute-plan] baseline_minutes={baseline_minutes} best_mode={best_option.get('mode')}")
+
+        try:
+            departure_calc = await calculate_departure_time_by_mode_fast(
+                target_date=target_date,
+                effective_arrival_time=effective_arrival_time,
+                baseline_minutes=baseline_minutes,
+                weather_buffer_minutes=weather_buffer,
+                best_option=best_option,
+            )
+        except Exception as e:
+            print(f"[compute-plan] departure_calc error: {e}")
+            traceback.print_exc()
+            return {
+                "ok": False,
+                "reason": "departure_calc_error",
+                "message": f"計算出門時間時發生錯誤：{str(e)}",
+            }
+
+        final_departure_time = departure_calc["departure_time"]
+        recommended_mode = best_option.get("mode", "google_transit")
+
+        today = datetime.now(TAIPEI_TZ).date()
+        if target_date == today:
+            target_label = "今天"
+        elif target_date == today + timedelta(days=1):
+            target_label = "明天"
+        else:
+            target_label = target_date.isoformat()
+        note = (
+            f"{target_label}使用臨時{arrival_label(destination_label)}：{effective_arrival_time}"
+            if used_override
+            else f"{target_label}使用固定{arrival_label(destination_label)}：{effective_arrival_time}"
+        )
+
+        print(f"[compute-plan] success: departure={final_departure_time} mode={recommended_mode}")
+
         return {
-            "ok": False,
-            "reason": "missing_home_address",
-            "message": "您的住家地址尚未設定完整經緯度，請重新傳送住家位置 📍",
+            "ok": True,
+            "profile": profile,
+            "target_date": target_date,
+            "effective_arrival_time": effective_arrival_time,
+            "destination_label": destination_label,
+            "arrival_label": arrival_label(destination_label),
+            "target_label_text": target_label_text(destination_label),
+            "effective_schedule_source": effective_schedule_source,
+            "schedule_template_id": schedule_template_id,
+            "weather_info": weather_info,
+            "weather_buffer": weather_buffer,
+            "baseline_minutes": baseline_minutes,
+            "best_option": best_option,
+            "selection_source": selection_source,
+            "recommended_mode": recommended_mode,
+            "final_departure_time": final_departure_time,
+            "departure_calc": departure_calc,
+            "note": note,
+            "mode_override": mode_override,
         }
 
-    if office_lat is None or office_lng is None:
+    except Exception as e:
+        print(f"[compute-plan] UNEXPECTED CRASH: {e}")
+        traceback.print_exc()
         return {
             "ok": False,
-            "reason": "missing_destination_address",
-            "message": f"您的排程「{destination_label}」缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！",
+            "reason": "unexpected_error",
+            "message": f"系統內部錯誤：{str(e)}",
         }
-
-    schedule_template_id = effective_setting.get("schedule_template_id")
-    used_override = False
-    if override and override.target_arrival_time:
-        effective_arrival_time = override.target_arrival_time
-        used_override = True
-
-    stored_mode_override = get_transport_mode_override(db, user_id, target_date)
-    mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
-
-    # Keep user-facing advice fast: route details already include the duration, so
-    # do not make a second Google Routes call just to calculate baseline minutes.
-    weather_info, option_choice = await asyncio.gather(
-        safe_call(get_commute_weather(profile), timeout_seconds=1.5),
-        safe_call(choose_commute_option_with_override(
-            profile=profile,
-            effective_arrival_time=effective_arrival_time,
-            weather_buffer_minutes=0,
-            target_date=target_date,
-            mode_override=mode_override,
-        ), timeout_seconds=3.5),
-    )
-    weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
-    weather_buffer = weather_info.get("extra_buffer_minutes", 0)
-    option_choice = option_choice or {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
-    best_option = option_choice.get("best_option", {}) or {}
-    selection_source = option_choice.get("selection_source", "auto")
-    baseline_minutes = _google_duration_from_option(best_option) or DEFAULT_COMMUTE_MINUTES
-
-    departure_calc = await calculate_departure_time_by_mode_fast(
-        target_date=target_date,
-        effective_arrival_time=effective_arrival_time,
-        baseline_minutes=baseline_minutes,
-        weather_buffer_minutes=weather_buffer,
-        best_option=best_option,
-    )
-
-    final_departure_time = departure_calc["departure_time"]
-    recommended_mode = best_option.get("mode", "google_transit")
-
-    today = datetime.now(TAIPEI_TZ).date()
-    if target_date == today:
-        target_label = "今天"
-    elif target_date == today + timedelta(days=1):
-        target_label = "明天"
-    else:
-        target_label = target_date.isoformat()
-    note = (
-        f"{target_label}使用臨時{arrival_label(destination_label)}：{effective_arrival_time}"
-        if used_override
-        else f"{target_label}使用固定{arrival_label(destination_label)}：{effective_arrival_time}"
-    )
-
-    return {
-        "ok": True,
-        "profile": profile,
-        "target_date": target_date,
-        "effective_arrival_time": effective_arrival_time,
-        "destination_label": destination_label,
-        "arrival_label": arrival_label(destination_label),
-        "target_label_text": target_label_text(destination_label),
-        "effective_schedule_source": effective_schedule_source,
-        "schedule_template_id": schedule_template_id,
-        "weather_info": weather_info,
-        "weather_buffer": weather_buffer,
-        "baseline_minutes": baseline_minutes,
-        "best_option": best_option,
-        "selection_source": selection_source,
-        "recommended_mode": recommended_mode,
-        "final_departure_time": final_departure_time,
-        "departure_calc": departure_calc,
-        "note": note,
-        "mode_override": mode_override,
-    }
 
 
 def _walk_metres(walk_minutes) -> str | None:
@@ -1079,23 +1133,50 @@ async def build_today_commute_payload(
     header: str = "今日通勤建議：",
     log_plan: bool = True,
 ):
-    plan = await _compute_today_plan(
-        db=db,
-        user_id=user_id,
-        target_date=target_date,
-        force_mode_override=force_mode_override,
-    )
-    if not plan.get("ok"):
-        return plan
+    try:
+        plan = await _compute_today_plan(
+            db=db,
+            user_id=user_id,
+            target_date=target_date,
+            force_mode_override=force_mode_override,
+        )
+        if not plan.get("ok"):
+            print(f"[build-payload] plan not ok: reason={plan.get('reason')}")
+            return plan
 
-    plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
-    plan["plan_key"] = route_formatter.build_reminder_payload_from_plan(plan).get("plan_key")
-    if log_plan:
         try:
-            record_commute_plan_log(db, user_id, plan)
+            plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
         except Exception as e:
-            print(f"[commute-log] skipped user_id={user_id} error={e}")
-    return plan
+            print(f"[build-payload] format error: {e}")
+            traceback.print_exc()
+            return {
+                "ok": False,
+                "reason": "format_error",
+                "message": f"格式化通勤建議時發生錯誤：{str(e)}",
+            }
+
+        try:
+            plan["plan_key"] = route_formatter.build_reminder_payload_from_plan(plan).get("plan_key")
+        except Exception as e:
+            print(f"[build-payload] plan_key error: {e}")
+            traceback.print_exc()
+            plan["plan_key"] = None
+
+        if log_plan:
+            try:
+                record_commute_plan_log(db, user_id, plan)
+            except Exception as e:
+                print(f"[build-payload] log error: {e}")
+                traceback.print_exc()
+        return plan
+    except Exception as e:
+        print(f"[build-payload] UNEXPECTED CRASH: {e}")
+        traceback.print_exc()
+        return {
+            "ok": False,
+            "reason": "unexpected_error",
+            "message": f"系統內部錯誤：{str(e)}",
+        }
 
 
 async def build_today_reminder_payload(
