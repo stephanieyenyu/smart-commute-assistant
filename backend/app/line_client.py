@@ -19,6 +19,16 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 LINE_QUICK_REPLY_LIMIT = 13
 
 PERSISTENT_QUICK_REPLIES = []
+LEGACY_COMMUTE_SUGGESTION_TEXT = "通勤建議"
+SETTING_OVERVIEW_MARKER = "目前設定"
+SETTING_OVERVIEW_HIDDEN_PREFIXES = (
+    "目的地位置",
+    "固定到目的地時間",
+    "固定到達時間",
+    "固定抵達時間",
+    "固定到校時間",
+    "固定到公司時間",
+)
 
 
 def _quick_reply_identity(item: dict) -> tuple:
@@ -30,8 +40,41 @@ def _quick_reply_identity(item: dict) -> tuple:
     )
 
 
+def _commute_suggestion_quick_reply(day_label: str) -> dict:
+    text = f"{day_label}{LEGACY_COMMUTE_SUGGESTION_TEXT}"
+    return {"type": "message", "label": text, "text": text}
+
+
+def _is_legacy_commute_suggestion_reply(item: dict) -> bool:
+    return (
+        item.get("type") == "message"
+        and (
+            item.get("label") == LEGACY_COMMUTE_SUGGESTION_TEXT
+            or item.get("text") == LEGACY_COMMUTE_SUGGESTION_TEXT
+        )
+    )
+
+
+def _normalise_commute_suggestion_quick_replies(items: list | None) -> list:
+    normalised = []
+    seen = set()
+    for item in list(items or []):
+        replacement_items = (
+            [_commute_suggestion_quick_reply("今日"), _commute_suggestion_quick_reply("明日")]
+            if _is_legacy_commute_suggestion_reply(item)
+            else [item]
+        )
+        for replacement in replacement_items:
+            identity = _quick_reply_identity(replacement)
+            if identity in seen:
+                continue
+            normalised.append(replacement)
+            seen.add(identity)
+    return normalised
+
+
 def with_persistent_quick_replies(items: list | None) -> list:
-    merged = list(items or [])
+    merged = _normalise_commute_suggestion_quick_replies(items)
     seen = {_quick_reply_identity(item) for item in merged}
     for item in PERSISTENT_QUICK_REPLIES:
         identity = _quick_reply_identity(item)
@@ -70,7 +113,11 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
 
 
 def _quick_reply_model(items: list | None) -> QuickReply | None:
-    quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
+    try:
+        quick_reply_items = _build_quick_reply_items(with_persistent_quick_replies(items))
+    except Exception as e:
+        print(f"[line] quick reply model error: {e}")
+        return None
     if not quick_reply_items:
         return None
     return QuickReply(items=quick_reply_items)
@@ -91,16 +138,51 @@ def _quick_reply_action_payload(item: dict) -> dict:
 
 
 def _quick_reply_payload(items: list | None) -> dict | None:
-    quick_reply_items = [
-        {"type": "action", "action": _quick_reply_action_payload(item)}
-        for item in with_persistent_quick_replies(items)
-    ]
+    try:
+        quick_reply_items = [
+            {"type": "action", "action": _quick_reply_action_payload(item)}
+            for item in with_persistent_quick_replies(items)
+        ]
+    except Exception as e:
+        print(f"[line] quick reply payload error: {e}")
+        return None
     if not quick_reply_items:
         return None
     return {"items": quick_reply_items}
 
 
+def _clean_settings_line_start(line: str) -> str:
+    return line.strip().lstrip("-•・▪️ ").strip()
+
+
+def _is_hidden_settings_overview_line(line: str) -> bool:
+    clean_line = _clean_settings_line_start(line)
+    return any(clean_line.startswith(prefix) for prefix in SETTING_OVERVIEW_HIDDEN_PREFIXES)
+
+
+def _looks_like_settings_overview(text: str) -> bool:
+    return (
+        SETTING_OVERVIEW_MARKER in text
+        and (
+            "住家" in text
+            or "提醒" in text
+            or "排程" in text
+            or "交通" in text
+        )
+    )
+
+
+def sanitise_outbound_text(text: str) -> str:
+    if not isinstance(text, str) or not _looks_like_settings_overview(text):
+        return text
+    return "\n".join(
+        line for line in text.splitlines()
+        if not _is_hidden_settings_overview_line(line)
+    ).strip()
+
+
 async def reply_flex_with_quick_reply(reply_token: str, alt_text: str, contents: dict, items: list | None = None) -> None:
+    alt_text = sanitise_outbound_text(alt_text)
     message = {
         "type": "flex",
         "altText": alt_text,
@@ -132,14 +214,18 @@ async def reply_flex_with_quick_reply(reply_token: str, alt_text: str, contents:
 
 
 async def reply_text(reply_token: str, text: str) -> None:
-    async with AsyncApiClient(configuration) as api_client:
-        line_bot_api = AsyncMessagingApi(api_client)
-        await line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
+    text = sanitise_outbound_text(text)
+    try:
+        async with AsyncApiClient(configuration) as api_client:
+            line_bot_api = AsyncMessagingApi(api_client)
+            await line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
+                )
             )
-        )
+    except Exception as e:
+        print(f"[line] reply_text error: {e}")
 
 
 async def reply_with_quick_reply(reply_token: str, text: str, items: list) -> None:
@@ -152,8 +238,8 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
     for i, t in enumerate(texts):
         # Only the last message can have quick replies attached
         qr = quick_reply if i == len(texts) - 1 else None
-        messages.append(TextMessage(text=t, quick_reply=qr))
-    
+        messages.append(TextMessage(text=sanitise_outbound_text(t), quick_reply=qr))
+
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
@@ -166,18 +252,25 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
     except Exception as e:
         print(f"[line] reply_multi_messages_with_quick_reply error: {e}")
         if texts:
-            await reply_text(reply_token, texts[0])
+            try:
+                await reply_text(reply_token, texts[0])
+            except Exception as fallback_error:
+                print(f"[line] reply_multi fallback error: {fallback_error}")
 
 
 async def push_text(user_id: str, text: str) -> None:
-    async with AsyncApiClient(configuration) as api_client:
-        line_bot_api = AsyncMessagingApi(api_client)
-        await line_bot_api.push_message(
-            PushMessageRequest(
-                to=user_id,
-                messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
+    text = sanitise_outbound_text(text)
+    try:
+        async with AsyncApiClient(configuration) as api_client:
+            line_bot_api = AsyncMessagingApi(api_client)
+            await line_bot_api.push_message(
+                PushMessageRequest(
+                    to=user_id,
+                    messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
+                )
             )
-        )
+    except Exception as e:
+        print(f"[line] push_text error: {e}")
 
 
 async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
@@ -190,7 +283,7 @@ async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
                     to=user_id,
                     messages=[
                         TextMessage(
-                            text=text,
+                            text=sanitise_outbound_text(text),
                             quick_reply=quick_reply
                         )
                     ]
