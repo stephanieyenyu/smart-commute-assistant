@@ -212,7 +212,7 @@ def parse_custom_weekdays(text: str | None) -> list[int] | None:
 
 def combine_target_datetime(target_date: date, hhmm: str, tzinfo) -> datetime | None:
     try:
-        parsed_time = datetime.strptime(hhmm, "%H:%M").time()
+        parsed_time = datetime.strptime(hhmm.replace("：", ":"), "%H:%M").time()
     except (TypeError, ValueError):
         return None
     return datetime.combine(target_date, parsed_time, tzinfo=tzinfo)
