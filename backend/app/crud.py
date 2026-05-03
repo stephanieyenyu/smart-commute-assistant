@@ -228,13 +228,8 @@ def update_address_and_coords(
 
 def get_next_setup_step(profile: CommuteProfile) -> str | None:
     home_ready = bool(profile.home_address) and profile.home_lat is not None and profile.home_lng is not None
-    office_ready = bool(profile.office_address) and profile.office_lat is not None and profile.office_lng is not None
-    arrival_ready = bool(profile.preferred_arrival_time)
-
     if not home_ready:
         return "home_location"
-    if not arrival_ready:
-        return "preferred_arrival_time"
     return None
 
 
