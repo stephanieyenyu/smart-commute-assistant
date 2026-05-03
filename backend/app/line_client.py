@@ -215,15 +215,22 @@ async def reply_flex_with_quick_reply(reply_token: str, alt_text: str, contents:
 
 async def reply_text(reply_token: str, text: str) -> None:
     text = sanitise_outbound_text(text)
+    payload = {
+        "replyToken": reply_token,
+        "messages": [{"type": "text", "text": text}],
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     try:
-        async with AsyncApiClient(configuration) as api_client:
-            line_bot_api = AsyncMessagingApi(api_client)
-            await line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=reply_token,
-                    messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
-                )
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/reply",
+                json=payload,
+                headers=headers,
             )
+            response.raise_for_status()
     except Exception as e:
         print(f"[line] reply_text error: {e}")
 
@@ -236,59 +243,91 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
     quick_reply = _quick_reply_model(items)
     messages = []
     for i, t in enumerate(texts):
-        # Only the last message can have quick replies attached
         qr = quick_reply if i == len(texts) - 1 else None
-        messages.append(TextMessage(text=sanitise_outbound_text(t), quick_reply=qr))
+        msg = {"type": "text", "text": sanitise_outbound_text(t)}
+        if qr:
+            msg["quickReply"] = qr
+        messages.append(msg)
 
+    payload = {
+        "replyToken": reply_token,
+        "messages": messages,
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     try:
-        async with AsyncApiClient(configuration) as api_client:
-            line_bot_api = AsyncMessagingApi(api_client)
-            await line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=reply_token,
-                    messages=messages
-                )
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/reply",
+                json=payload,
+                headers=headers,
             )
+            response.raise_for_status()
     except Exception as e:
         print(f"[line] reply_multi_messages_with_quick_reply error: {e}")
+        # Fallback: try sending just the first text without quick replies
         if texts:
+            fallback_payload = {
+                "replyToken": reply_token,
+                "messages": [{"type": "text", "text": sanitise_outbound_text(texts[0])}],
+            }
             try:
-                await reply_text(reply_token, texts[0])
+                async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=1.0)) as client:
+                    await client.post(
+                        "https://api.line.me/v2/bot/message/reply",
+                        json=fallback_payload,
+                        headers=headers,
+                    )
             except Exception as fallback_error:
                 print(f"[line] reply_multi fallback error: {fallback_error}")
 
 
 async def push_text(user_id: str, text: str) -> None:
     text = sanitise_outbound_text(text)
+    payload = {
+        "to": user_id,
+        "messages": [{"type": "text", "text": text}],
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     try:
-        async with AsyncApiClient(configuration) as api_client:
-            line_bot_api = AsyncMessagingApi(api_client)
-            await line_bot_api.push_message(
-                PushMessageRequest(
-                    to=user_id,
-                    messages=[TextMessage(text=text, quick_reply=_quick_reply_model([]))]
-                )
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/push",
+                json=payload,
+                headers=headers,
             )
+            response.raise_for_status()
     except Exception as e:
         print(f"[line] push_text error: {e}")
 
 
 async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
-    quick_reply = _quick_reply_model(items)
+    quick_reply = _quick_reply_payload(items)
+    msg = {"type": "text", "text": sanitise_outbound_text(text)}
+    if quick_reply:
+        msg["quickReply"] = quick_reply
+
+    payload = {
+        "to": user_id,
+        "messages": [msg],
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     try:
-        async with AsyncApiClient(configuration) as api_client:
-            line_bot_api = AsyncMessagingApi(api_client)
-            await line_bot_api.push_message(
-                PushMessageRequest(
-                    to=user_id,
-                    messages=[
-                        TextMessage(
-                            text=sanitise_outbound_text(text),
-                            quick_reply=quick_reply
-                        )
-                    ]
-                )
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/push",
+                json=payload,
+                headers=headers,
             )
+            response.raise_for_status()
     except Exception as e:
         print(f"[line] push_with_quick_reply error: {e}")
         await push_text(user_id, text)

@@ -411,15 +411,15 @@ async def choose_commute_option_with_override(
             profile.office_lat, profile.office_lng,
             arrival_dt,
             allowed_travel_modes=allowed_travel_modes,
-        ), timeout_seconds=4.2)
+        ), timeout_seconds=3.0)
     )
     bus_task = (
-        asyncio.create_task(safe_call(get_bus_realtime_snapshot(profile), timeout_seconds=2.5))
+        asyncio.create_task(safe_call(get_bus_realtime_snapshot(profile), timeout_seconds=2.0))
         if requested_mode in {"auto", "shortest", "bus"}
         else None
     )
     metro_task = (
-        asyncio.create_task(safe_call(get_metro_snapshot(profile), timeout_seconds=3.5))
+        asyncio.create_task(safe_call(get_metro_snapshot(profile), timeout_seconds=2.5))
         if requested_mode in {"auto", "metro"}
         else None
     )
@@ -681,14 +681,14 @@ async def _compute_today_plan(
     # Keep user-facing advice fast: route details already include the duration, so
     # do not make a second Google Routes call just to calculate baseline minutes.
     weather_info, option_choice = await asyncio.gather(
-        safe_call(get_commute_weather(profile), timeout_seconds=2.2),
+        safe_call(get_commute_weather(profile), timeout_seconds=1.5),
         safe_call(choose_commute_option_with_override(
             profile=profile,
             effective_arrival_time=effective_arrival_time,
             weather_buffer_minutes=0,
             target_date=target_date,
             mode_override=mode_override,
-        ), timeout_seconds=4.8),
+        ), timeout_seconds=3.5),
     )
     weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
     weather_buffer = weather_info.get("extra_buffer_minutes", 0)
