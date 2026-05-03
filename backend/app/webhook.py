@@ -104,9 +104,17 @@ BASIC_SETTINGS_QUICK_REPLIES = [
 
 
 def with_done_button(items: list[dict]) -> list[dict]:
-    if any(item.get("text") == DONE_QUICK_REPLY["text"] for item in items):
-        return items
-    return [*items, DONE_QUICK_REPLY]
+    deduped = []
+    seen = set()
+    for item in items:
+        key = item.get("text") or item.get("data") or item.get("label")
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    if DONE_QUICK_REPLY["text"] in seen:
+        return deduped
+    return [*deduped, DONE_QUICK_REPLY]
 
 
 # Shown when waiting for home address
@@ -180,13 +188,8 @@ TIME_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "明天出門", "text": "明天幾點出門"},
 ])
 
-# Shown after commute advice reply
-COMMUTE_RESULT_QUICK_REPLIES = with_done_button([
-    {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
-    {"type": "message", "label": "🚌 今天搭公車",       "text": "今天搭公車"},
-    {"type": "message", "label": "🚇 今天搭捷運",       "text": "今天搭捷運"},
-    {"type": "message", "label": "📊 查看設定",         "text": "查看設定"},
-])
+# Shown after commute advice reply: return to the clean default state.
+COMMUTE_RESULT_QUICK_REPLIES = MAIN_MENU_QUICK_REPLIES
 
 REMINDER_SETTING_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "✅ 開啟自動提醒", "text": "開啟自動提醒"},
@@ -201,10 +204,6 @@ SCHEDULE_QUICK_REPLIES = with_done_button([
     {"type": "datetimepicker", "label": "休息日", "data": "action=pause_date", "mode": "date"},
     {"type": "datetimepicker", "label": "啟用日", "data": "action=enable_date", "mode": "date"},
     {"type": "message", "label": "暫停", "text": "暫停固定排程"},
-    {"type": "message", "label": "今天休息", "text": "今天休息"},
-    {"type": "message", "label": "明天休息", "text": "明天休息"},
-    {"type": "message", "label": "今天啟用", "text": "今天啟用"},
-    {"type": "message", "label": "明天啟用", "text": "明天啟用"},
 ])
 
 SCHEDULE_SETUP_QUICK_REPLIES = with_done_button([
@@ -242,6 +241,9 @@ TRANSPORT_MODE_NAME_MAP = {
     "bus": "公車優先",
     "metro": "捷運優先",
     "bus_to_metro": "公車轉捷運",
+    "mixed_transit": "大眾運輸轉乘",
+    "rail": "鐵路",
+    "light_rail": "輕軌",
 }
 
 COMMAND_ALIASES = {

@@ -41,6 +41,9 @@ MODE_LABELS = {
     "bus": "今天搭公車",
     "metro": "建議改搭捷運",
     "bus_to_metro": "今天搭公車轉捷運",
+    "mixed_transit": "今天搭大眾運輸轉乘",
+    "rail": "今天搭鐵路",
+    "light_rail": "今天搭輕軌",
 }
 
 
@@ -426,11 +429,12 @@ async def choose_commute_option_with_override(
     if bus_snapshot and bus_snapshot.get("available"):
         chosen_bus = bus_snapshot.get("chosen_bus")
 
-    metro_available = bool(metro_snapshot and metro_snapshot.get("available"))
     google_detailed = google_detailed or {}
     google_steps = google_detailed.get("steps", []) or []
     google_bus_step = route_formatter.select_transit_step(google_steps, "bus")
     google_metro_step = route_formatter.select_transit_step(google_steps, "metro")
+    google_mode = route_formatter.route_mode_from_steps(google_steps)
+
     bus_snapshot_with_details = dict(bus_snapshot or {})
     metro_snapshot_with_details = dict(metro_snapshot or {})
     if bus_snapshot_with_details:
@@ -439,7 +443,7 @@ async def choose_commute_option_with_override(
         metro_snapshot_with_details["google_detailed"] = google_detailed
 
     google_option = {
-        "mode": "google_transit",
+        "mode": google_mode,
         "reason": "google_transit",
         "summary": "目前以 Google 大眾運輸建議為主",
         "snapshot": {
@@ -450,35 +454,33 @@ async def choose_commute_option_with_override(
     }
 
     bus_option = None
-    if (bus_snapshot and bus_snapshot.get("available") and chosen_bus) or google_bus_step:
+    if google_bus_step:
         bus_snapshot_dict = bus_snapshot or {}
-        first_stop = bus_snapshot_dict.get("first_stop", {}) or {}
-        walk_minutes = bus_snapshot_dict.get("walk_minutes")
-        eta_min = chosen_bus.get("eta_min") if chosen_bus else None
-        bus_label = route_formatter.bus_route_label(bus_snapshot_with_details)
-        if not bus_label and google_bus_step:
-            bus_label = google_bus_step.get("line_short_name") or google_bus_step.get("line_name")
-        bus_label = bus_label or "公車"
+        bus_label = route_formatter.line_label_from_step(google_bus_step)
+        google_bus_route = google_bus_step.get("line_short_name") or google_bus_step.get("line_name")
+        chosen_route = (chosen_bus or {}).get("route_name") or (chosen_bus or {}).get("subroute_name")
+        chosen_bus_matches_google = route_formatter.route_names_match(chosen_route, google_bus_route)
+        eta_min = (chosen_bus or {}).get("eta_min") if chosen_bus_matches_google else None
 
         wait_minutes = max(0, (eta_min or 0) - (bus_snapshot_dict.get("arrival_at_stop_min") or 0))
+        bus_snapshot_for_option = dict(bus_snapshot_with_details or {"google_detailed": google_detailed})
+        if not chosen_bus_matches_google:
+            bus_snapshot_for_option["chosen_bus"] = {}
         bus_option = {
             "mode": "bus",
-            "reason": "bus_available" if chosen_bus else "google_bus_route",
-            "summary": f"可搭公車 {bus_label}，於『{first_stop.get('stop_name', '最近站牌')}』上車。",
+            "reason": "google_bus_route",
+            "summary": f"可搭公車 {bus_label}，於『{google_bus_step.get('departure_stop') or 'Google Maps 未提供上車站名'}』上車。",
             "wait_minutes": wait_minutes,
             "reliability_penalty_minutes": 3,
-            "snapshot": bus_snapshot_with_details or {"google_detailed": google_detailed},
+            "snapshot": bus_snapshot_for_option,
         }
 
     metro_option = None
-    if metro_available or google_metro_step:
-        metro_snapshot_dict = metro_snapshot or {}
-        station = metro_snapshot_dict.get("station", {}) or {}
-        walk_minutes = metro_snapshot_dict.get("walk_minutes")
+    if google_metro_step:
         metro_option = {
             "mode": "metro",
-            "reason": "metro_available" if metro_available else "google_metro_route",
-            "summary": f"搭乘捷運，最近站牌『{station.get('name', '無法識別捷運站')}』，步行約 {walk_minutes or '無法估算'} 分鐘。",
+            "reason": "google_metro_route",
+            "summary": f"搭乘 {route_formatter.line_label_from_step(google_metro_step)}，於『{google_metro_step.get('departure_stop') or 'Google Maps 未提供上車站名'}』上車。",
             "wait_minutes": 3,
             "transfer_minutes": 2,
             "reliability_penalty_minutes": 1,
@@ -486,6 +488,10 @@ async def choose_commute_option_with_override(
         }
 
     if requested_mode == "shortest":
+        if google_mode == "bus" and bus_option:
+            return {"best_option": bus_option, "selection_source": "manual"}
+        if google_mode == "metro" and metro_option:
+            return {"best_option": metro_option, "selection_source": "manual"}
         return {"best_option": google_option, "selection_source": "manual"}
 
     if requested_mode == "bus":
@@ -493,11 +499,11 @@ async def choose_commute_option_with_override(
             return {"best_option": bus_option, "selection_source": "manual"}
         return {
             "best_option": {
-                "mode": "bus",
-                "reason": "bus_forced_without_details",
-                "summary": "已切換為公車優先",
+                "mode": "google_transit",
+                "reason": "google_bus_route_unavailable",
+                "summary": "Google Maps 目前未提供公車路線，系統不會自行猜測公車站名或路線。",
                 "wait_minutes": 0,
-                "reliability_penalty_minutes": 3,
+                "reliability_penalty_minutes": 0,
                 "snapshot": {"google_detailed": google_detailed},
             },
             "selection_source": "manual",
@@ -508,25 +514,34 @@ async def choose_commute_option_with_override(
             return {"best_option": metro_option, "selection_source": "manual"}
         return {
             "best_option": {
-                "mode": "metro",
-                "reason": "metro_forced_without_details",
-                "summary": "已切換為捷運優先",
-                "wait_minutes": 3,
-                "transfer_minutes": 2,
-                "reliability_penalty_minutes": 1,
+                "mode": google_mode,
+                "reason": "google_metro_route_unavailable",
+                "summary": "Google Maps 目前未提供捷運路線，系統不會自行猜測捷運站名或出口。",
+                "wait_minutes": 0,
+                "transfer_minutes": 0,
+                "reliability_penalty_minutes": 0,
                 "snapshot": {"google_detailed": google_detailed},
             },
             "selection_source": "manual",
         }
 
     if requested_mode == "bus_to_metro":
-        # Simplified for now, can be expanded if we have specific bus_to_metro logic
-        return {"best_option": google_option, "selection_source": "manual"}
+        if google_mode == "mixed_transit":
+            return {"best_option": google_option, "selection_source": "manual"}
+        return {
+            "best_option": {
+                "mode": google_mode,
+                "reason": "google_mixed_route_unavailable",
+                "summary": "Google Maps 目前未提供公車轉乘捷運的路線，系統不會自行拼湊轉乘。",
+                "wait_minutes": 0,
+                "transfer_minutes": 0,
+                "reliability_penalty_minutes": 0,
+                "snapshot": {"google_detailed": google_detailed},
+            },
+            "selection_source": "manual",
+        }
 
-    # auto priority: Metro > Bus > Google
-    if metro_option:
-        return {"best_option": metro_option, "selection_source": "auto"}
-    if bus_option:
+    if google_mode == "bus" and bus_option:
         return {"best_option": bus_option, "selection_source": "auto"}
     return {"best_option": google_option, "selection_source": "auto"}
 

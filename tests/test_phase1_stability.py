@@ -37,6 +37,33 @@ class Phase1StabilityTests(unittest.TestCase):
                 self.assertIn("log_api_health", content)
                 self.assertIn("api_timer_start", content)
 
+    def test_google_routes_client_selects_shortest_alternative(self):
+        sys.modules["httpx"] = types.ModuleType("httpx")
+        sys.modules["app"] = types.ModuleType("app")
+        sys.modules["app.config"] = types.ModuleType("app.config")
+        sys.modules["app.config"].GOOGLE_MAPS_API_KEY = "fake-key"
+        sys.modules["app.integrations"] = types.ModuleType("app.integrations")
+        sys.modules["app.integrations.api_health"] = types.ModuleType("app.integrations.api_health")
+        sys.modules["app.integrations.api_health"].api_timer_start = lambda: time.perf_counter()
+        sys.modules["app.integrations.api_health"].log_api_health = lambda *args, **kwargs: None
+        sys.modules["app.integrations.redis_cache"] = types.ModuleType("app.integrations.redis_cache")
+        sys.modules["app.integrations.redis_cache"].get_cache = lambda *args, **kwargs: None
+        sys.modules["app.integrations.redis_cache"].set_cache = lambda *args, **kwargs: None
+
+        module_path = REPO_ROOT / "backend/app/integrations/Maps_client.py"
+        spec = importlib.util.spec_from_file_location("maps_client_under_test", module_path)
+        maps_client = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(maps_client)
+
+        routes = [
+            {"duration": "1800s", "name": "slow"},
+            {"duration": "840s", "name": "fast"},
+            {"duration": "bad", "name": "invalid"},
+        ]
+
+        self.assertEqual(maps_client._route_duration_seconds(routes[1]), 840)
+        self.assertEqual(maps_client._select_shortest_route(routes)["name"], "fast")
+
     def test_api_health_log_format_is_parseable(self):
         module_path = REPO_ROOT / "backend/app/integrations/api_health.py"
         spec = importlib.util.spec_from_file_location("api_health_under_test", module_path)
