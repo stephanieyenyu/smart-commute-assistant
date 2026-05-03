@@ -590,7 +590,7 @@ def hhmm_is_valid(value: str | None) -> bool:
     if not value:
         return False
     try:
-        datetime.strptime(value.strip(), "%H:%M")
+        datetime.strptime(value.strip().replace("：", ":"), "%H:%M")
         return True
     except ValueError:
         return False
@@ -1168,7 +1168,7 @@ async def reply_current_setting_prompt(reply_token: str, db, user, step: str | N
 
 def validate_pending_input(field_name: str, user_text: str):
     if field_name in {"preferred_arrival_time", "override_today_arrival_time", "override_tomorrow_arrival_time"}:
-        value = user_text.strip()
+        value = user_text.strip().replace("：", ":")
         try:
             datetime.strptime(value, "%H:%M")
             return value, None

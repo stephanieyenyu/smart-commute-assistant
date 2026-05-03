@@ -52,7 +52,8 @@ MODE_LABELS = {
 
 
 def combine_date_hhmm(target_date: date, hhmm: str) -> datetime:
-    t = datetime.strptime(hhmm, "%H:%M").time()
+    hhmm_normalized = hhmm.replace("：", ":")
+    t = datetime.strptime(hhmm_normalized, "%H:%M").time()
     return datetime.combine(target_date, t)
 
 

@@ -81,7 +81,7 @@ def current_seconds_of_day() -> int:
 
 def _parse_hhmm_for_date(target_date, hhmm: str) -> datetime | None:
     try:
-        parsed = datetime.strptime(hhmm, "%H:%M").time()
+        parsed = datetime.strptime(hhmm.replace("：", ":"), "%H:%M").time()
     except (TypeError, ValueError):
         return None
     return datetime.combine(target_date, parsed, tzinfo=TAIPEI_TZ)
