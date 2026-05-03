@@ -1,0 +1,156 @@
+name: Codex commute patch
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/codex-commute-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply requested commute assistant changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+
+          def replace_once(text: str, old: str, new: str, path: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match in {path}, got {count}: {old[:80]!r}")
+              return text.replace(old, new, 1)
+
+          webhook_path = Path("backend/app/webhook.py")
+          webhook = webhook_path.read_text(encoding="utf-8")
+
+          old_quick_reply = '''BASIC_SETTINGS_QUICK_REPLIES = [
+              {"type": "message", "label": "查看設定", "text": "查看設定"},
+              {"type": "message", "label": "通勤建議", "text": "通勤建議"},
+              {"type": "message", "label": "重新設定", "text": "重新設定"},
+          ]'''
+          new_quick_reply = '''BASIC_SETTINGS_QUICK_REPLIES = [
+              {"type": "message", "label": "查看設定", "text": "查看設定"},
+              {"type": "message", "label": "今日通勤建議", "text": "今日通勤建議"},
+              {"type": "message", "label": "明日通勤建議", "text": "明日通勤建議"},
+              {"type": "message", "label": "重新設定", "text": "重新設定"},
+          ]'''
+          webhook = replace_once(webhook, old_quick_reply, new_quick_reply, str(webhook_path))
+
+          lines = webhook.splitlines()
+          view_markers = (
+              'COMMAND_ALIASES["view_settings"]',
+              "COMMAND_ALIASES['view_settings']",
+              'command_key == "view_settings"',
+              "command_key == 'view_settings'",
+          )
+          block_start = None
+          for idx, line in enumerate(lines):
+              stripped = line.strip()
+              if any(marker in line for marker in view_markers) and stripped.endswith(":"):
+                  block_start = idx
+                  break
+          if block_start is None:
+              raise SystemExit("Could not find the 查看設定 handler block")
+
+          base_indent = len(lines[block_start]) - len(lines[block_start].lstrip())
+          block_end = len(lines)
+          for idx in range(block_start + 1, len(lines)):
+              stripped = lines[idx].lstrip()
+              if not stripped or stripped.startswith("#"):
+                  continue
+              indent = len(lines[idx]) - len(stripped)
+              if indent <= base_indent and stripped.startswith(("if ", "elif ", "else:", "async def ", "def ")):
+                  block_end = idx
+                  break
+
+          obsolete_line_count = 0
+          filtered = []
+          for idx, line in enumerate(lines):
+              if block_start < idx < block_end:
+                  display_like = ('"' in line or "'" in line) and ("：" in line or "\\n" in line)
+                  remove = (
+                      "目的地位置" in line
+                      or "固定到目的地時間" in line
+                      or "固定到達時間" in line
+                      or (display_like and "office_address" in line)
+                      or (display_like and "preferred_arrival_time" in line)
+                  )
+                  if remove:
+                      obsolete_line_count += 1
+                      continue
+              filtered.append(line)
+          webhook = "\n".join(filtered) + "\n"
+          if obsolete_line_count == 0:
+              print("[warning] No obsolete 查看設定 display lines were removed. The quick reply patch still applies.")
+
+          if '{"type": "message", "label": "通勤建議", "text": "通勤建議"}' in webhook.partition("def with_done_button")[0]:
+              raise SystemExit("Default quick replies still contain the old single 通勤建議 button")
+          webhook_path.write_text(webhook, encoding="utf-8")
+
+          service_path = Path("backend/app/service.py")
+          service = service_path.read_text(encoding="utf-8")
+          timeout_replacements = [
+              ("timeout_seconds=4.2", "timeout_seconds=3.2"),
+              ("timeout_seconds=2.5", "timeout_seconds=1.6"),
+              ("timeout_seconds=3.5", "timeout_seconds=2.4"),
+              ("timeout_seconds=2.2", "timeout_seconds=1.8"),
+              ("timeout_seconds=4.8", "timeout_seconds=3.8"),
+          ]
+          for old, new in timeout_replacements:
+              if old not in service:
+                  raise SystemExit(f"Missing expected timeout target in service.py: {old}")
+              service = service.replace(old, new)
+          service = replace_once(
+              service,
+              'exits = await get_station_exits_async((destination_station or {}).get("id"))',
+              'exits = await safe_call(get_station_exits_async((destination_station or {}).get("id")), timeout_seconds=1.0) or []',
+              str(service_path),
+          )
+          service_path.write_text(service, encoding="utf-8")
+
+          dashboard_status_path = Path("backend/app/dashboard_status.py")
+          dashboard_status = dashboard_status_path.read_text(encoding="utf-8")
+          old_dashboard_sync = '''    line_transport = extract_line_field(line_commute_text, "通勤方式：")
+              line_arrival = extract_line_field(line_commute_text, "目標抵達：") or extract_arrival_time_from_line_text(line_commute_text)'''
+          if old_dashboard_sync not in dashboard_status:
+              old_dashboard_sync = '''    line_transport = extract_line_field(line_commute_text, "通勤方式：")
+    line_arrival = extract_line_field(line_commute_text, "目標抵達：") or extract_arrival_time_from_line_text(line_commute_text)'''
+          new_dashboard_sync = '''    line_transport = (
+        extract_line_field(line_commute_text, "通勤方式：")
+        or extract_line_field(line_commute_text, "建議方式：")
+    )
+    dynamic_arrival_prefix = f"{plan.get('target_label_text') or '到目的地時間'}："
+    line_arrival = (
+        extract_line_field(line_commute_text, "目標抵達：")
+        or extract_arrival_time_from_line_text(line_commute_text)
+        or extract_line_field(line_commute_text, "到公司時間：")
+        or extract_line_field(line_commute_text, "到學校時間：")
+        or extract_line_field(line_commute_text, "到目的地時間：")
+        or extract_line_field(line_commute_text, dynamic_arrival_prefix)
+    )'''
+          dashboard_status = replace_once(dashboard_status, old_dashboard_sync, new_dashboard_sync, str(dashboard_status_path))
+          dashboard_status_path.write_text(dashboard_status, encoding="utf-8")
+
+          changed = [str(webhook_path), str(service_path), str(dashboard_status_path)]
+          print("Changed files:", ", ".join(changed))
+          PY
+          python -m compileall backend/app
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/codex-commute-patch.yml
+          git config user.name "codex-commute-patch"
+          git config user.email "codex-commute-patch@users.noreply.github.com"
+          git add backend/app/webhook.py backend/app/service.py backend/app/dashboard_status.py .github/workflows/codex-commute-patch.yml
+          git commit -m "Update commute menu and dashboard sync"
+          git push origin HEAD:master
