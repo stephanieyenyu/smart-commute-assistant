@@ -669,6 +669,25 @@ async def _compute_today_plan(
         profile.office_lng = getattr(destination, "lng", None)
         profile.office_city = getattr(destination, "city", None) or profile.office_city
 
+    home_lat = getattr(profile, "home_lat", None)
+    home_lng = getattr(profile, "home_lng", None)
+    office_lat = getattr(profile, "office_lat", None)
+    office_lng = getattr(profile, "office_lng", None)
+
+    if home_lat is None or home_lng is None:
+        return {
+            "ok": False,
+            "reason": "missing_home_address",
+            "message": "您的住家地址尚未設定完整經緯度，請重新傳送住家位置 📍",
+        }
+
+    if office_lat is None or office_lng is None:
+        return {
+            "ok": False,
+            "reason": "missing_destination_address",
+            "message": f"您的排程「{destination_label}」缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！",
+        }
+
     schedule_template_id = effective_setting.get("schedule_template_id")
     used_override = False
     if override and override.target_arrival_time:
