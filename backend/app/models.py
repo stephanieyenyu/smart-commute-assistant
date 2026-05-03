@@ -31,6 +31,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    destinations = relationship("CommuteDestination", back_populates="user", cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
     schedule_templates = relationship("CommuteScheduleTemplate", back_populates="user", cascade="all, delete-orphan")
     logs = relationship("CommuteLog", back_populates="user", cascade="all, delete-orphan")
@@ -91,16 +92,41 @@ class CommuteScheduleTemplate(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    destination_id = Column(Integer, ForeignKey("commute_destinations.id"), index=True, nullable=True)
     name = Column(String, nullable=True)
     target_arrival_time = Column(String, nullable=False)
     destination_label = Column(String, nullable=False, default="目的地")
     active_weekdays = Column(JSON, nullable=False)
+    is_fixed = Column(Boolean, nullable=False, default=True)
     is_active = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="schedule_templates")
+    destination = relationship("CommuteDestination", back_populates="schedule_templates")
+
+
+class CommuteDestination(Base):
+    __tablename__ = "commute_destinations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "label", name="uq_commute_destinations_user_label"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    label = Column(String, nullable=False)
+    address = Column(String, nullable=True)
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
+    city = Column(String, nullable=True)
+    township = Column(String, nullable=True)
+    place_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="destinations")
+    schedule_templates = relationship("CommuteScheduleTemplate", back_populates="destination")
 
 
 class CommuteOverride(Base):

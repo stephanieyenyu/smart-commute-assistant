@@ -4,6 +4,7 @@ import math
 import re
 import time
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from app.address_utils import extract_city_from_text
@@ -659,7 +660,15 @@ async def _compute_today_plan(
 
     effective_arrival_time = effective_setting["arrival_time"]
     destination_label = effective_setting["destination_label"]
+    destination = effective_setting.get("destination")
     effective_schedule_source = effective_setting["source"]
+    if destination is not None and getattr(destination, "lat", None) is not None and getattr(destination, "lng", None) is not None:
+        profile = SimpleNamespace(**profile.__dict__)
+        profile.office_address = getattr(destination, "address", None) or profile.office_address
+        profile.office_lat = getattr(destination, "lat", None)
+        profile.office_lng = getattr(destination, "lng", None)
+        profile.office_city = getattr(destination, "city", None) or profile.office_city
+
     schedule_template_id = effective_setting.get("schedule_template_id")
     used_override = False
     if override and override.target_arrival_time:
