@@ -343,8 +343,8 @@ SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES = with_done_button([
 
 SCHEDULE_CONFLICT_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "以新排程為準", "text": "以新排程為準"},
-    {"type": "message", "label": "保留原排程", "text": "保留原排程"},
-    {"type": "message", "label": "取消", "text": "取消新增排程"},
+    {"type": "message", "label": "保留原本排程", "text": "保留原本排程"},
+    {"type": "message", "label": "兩者皆保留", "text": "兩者皆保留"},
 ])
 
 # Shown after commute advice reply: return to the clean default state.
@@ -419,6 +419,9 @@ COMMAND_ALIASES = {
     "edit_today_arrival": {"修改今天到達時間", "修改今天到職時間", "今天改到職時間", "設定到職時間", "修改出門時間", "修改到職時間"},
     "edit_tomorrow_arrival": {"修改明天到達時間", "修改明天到職時間"},
     "fixed_adjust": {"固定調整"},
+    "fixed_adjust_target": {"調整排程"},
+    "fixed_adjust_time": {"固定調整時間"},
+    "fixed_adjust_weekdays": {"固定調整星期"},
     "temporary_adjust": {"臨時調整"},
     "identity_settings": {"目的地名稱設定"},
     "set_identity_student": set(),
@@ -437,15 +440,16 @@ COMMAND_ALIASES = {
     "fixed_schedule_no": {"固定排程 否", "不是固定排程"},
     "copy_schedule_template": {"複製常用排程", "複製排程"},
     "replace_schedule_conflict": {"以新排程為準"},
-    "keep_schedule_conflict": {"保留原排程"},
+    "keep_schedule_conflict": {"保留原本排程"},
+    "keep_both_schedule_conflict": {"兩者皆保留"},
     "cancel_schedule_template": {"取消新增排程", "取消排程設定"},
     "reset": {"重新設定"},
     "send_home_location": {"傳送住家位置", "設定住家位置", "傳送住家地址", "設定住家地址"},
     "send_office_location": {"傳送目的地位置", "設定目的地位置", "傳送目的地地址", "設定目的地地址", "傳送公司位置", "設定公司位置", "傳送公司地址", "設定公司地址"},
     "set_mode_auto": {"今天自動建議", "今天交通自動"},
-    "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間"},
-    "set_mode_bus": {"今天搭公車", "今天坐公車"},
-    "set_mode_metro": {"今天搭捷運", "今天坐捷運"},
+    "set_mode_shortest": {"優先選擇通勤時間短", "今天最短時間", "最短時間"},
+    "set_mode_bus": {"今天搭公車", "今天坐公車", "公車"},
+    "set_mode_metro": {"今天搭捷運", "今天坐捷運", "捷運"},
     "set_mode_bus_to_metro": {"今天搭公車轉捷運", "今天公車轉捷運"},
     "view_mode_today": {"查看今天交通方式"},
     "enable_reminder": {"開啟自動提醒"},
@@ -665,10 +669,39 @@ def schedule_management_text(db, user_id: int) -> str:
     if not templates:
         return "目前沒有排程，請先新增常用排程。"
     lines = [
-        f"{template.id}. {template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）"
-        for template in templates
+        f"{idx}. {template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）"
+        for idx, template in enumerate(templates, start=1)
     ]
     return "可單獨管理以下排程：\n" + "\n".join(lines) + "\n\n可輸入：\n- 刪除排程 2\n- 編輯排程 2"
+
+
+def resolve_template_from_display_index(db, user_id: int, display_index_text: str):
+    try:
+        display_index = int((display_index_text or "").strip())
+    except ValueError:
+        return None
+    if display_index <= 0:
+        return None
+    templates = get_schedule_templates(db, user_id, active_only=True)
+    if display_index > len(templates):
+        return None
+    return templates[display_index - 1]
+
+
+def fixed_adjust_template_quick_replies(db, user_id: int) -> list[dict]:
+    templates = get_schedule_templates(db, user_id, active_only=True)
+    items = [
+        {"type": "message", "label": f"調整 {idx}", "text": f"調整排程 {idx}"}
+        for idx, _ in enumerate(templates[:10], start=1)
+    ]
+    return with_done_button(items)
+
+
+def fixed_adjust_action_quick_replies() -> list[dict]:
+    return with_done_button([
+        {"type": "message", "label": "調整時間", "text": "固定調整時間"},
+        {"type": "message", "label": "調整星期", "text": "固定調整星期"},
+    ])
 
 
 def format_schedule_conflict_text(db, user_id: int, weekdays: list[int]) -> str:
@@ -1380,13 +1413,7 @@ async def line_webhook(
                             user.id,
                             build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
                         )
-                        await reply_schedule_template_weekday_picker(
-                            reply_token,
-                            pending["time"],
-                            pending["label"],
-                            pending["days"],
-                            "請確認這組排程適用的星期，選完後請按「儲存排程」。",
-                        )
+                        # 無縫複選：點擊當下只暫存，不額外推播新訊息避免洗版
                         continue
 
                     if postback_action == "template_toggle_weekday":
@@ -1408,13 +1435,7 @@ async def line_webhook(
                             user.id,
                             build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
                         )
-                        await reply_schedule_template_weekday_picker(
-                            reply_token,
-                            pending["time"],
-                            pending["label"],
-                            pending["days"],
-                            "請確認這組排程適用的星期，選完後請按「儲存排程」。",
-                        )
+                        # 無縫複選：點擊當下只暫存，不額外推播新訊息避免洗版
                         continue
 
                     conflicts = get_schedule_conflicts(db, user.id, pending["days"]) if pending["days"] else []
@@ -1603,7 +1624,11 @@ async def line_webhook(
                     next_step = get_next_setup_step(profile)
                     if next_step is None:
                         set_pending_field(db, user.id, None)
-                        await reply_with_quick_reply(reply_token, "已儲存住家位置，設定已更新。", MAIN_MENU_QUICK_REPLIES)
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "已完成初始設定：住家地址已儲存。\n下一步請前往「排程設定」>「新增常用排程」，依序設定目的地、時間與星期。",
+                            MAIN_MENU_QUICK_REPLIES,
+                        )
                         continue
                     set_pending_field(db, user.id, next_step)
                     await reply_with_quick_reply(
@@ -1961,11 +1986,8 @@ async def line_webhook(
 
             delete_template_value = extract_command_value(user_text, COMMAND_ALIASES["delete_schedule_template"])
             if delete_template_value:
-                try:
-                    template_id = int(delete_template_value.strip())
-                except ValueError:
-                    template_id = None
-                if template_id is None or not delete_schedule_template(db, user.id, template_id):
+                template = resolve_template_from_display_index(db, user.id, delete_template_value)
+                if template is None or not delete_schedule_template(db, user.id, template.id):
                     await reply_with_quick_reply(reply_token, "找不到這筆排程，請確認排程編號。", SCHEDULE_QUICK_REPLIES)
                     continue
                 clear_today_reminder_state_for_user(user.id)
@@ -1974,30 +1996,22 @@ async def line_webhook(
 
             edit_template_value = extract_command_value(user_text, COMMAND_ALIASES["edit_schedule_template"])
             if edit_template_value:
-                try:
-                    template_id = int(edit_template_value.strip())
-                except ValueError:
-                    template_id = None
-                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                template = resolve_template_from_display_index(db, user.id, edit_template_value)
                 if template is None:
                     await reply_with_quick_reply(reply_token, "找不到這筆排程，請確認排程編號。", SCHEDULE_QUICK_REPLIES)
                     continue
                 set_pending_field(db, user.id, f"copy_template_time:{template.id}")
                 await reply_with_quick_reply(
                     reply_token,
-                    f"請輸入排程 {template.id} 的新到達時間（目前 {template.target_arrival_time}）。",
+                    f"請輸入排程的新到達時間（目前 {template.target_arrival_time}）。",
                     ARRIVAL_TIME_QUICK_REPLIES,
                 )
                 continue
 
             copy_schedule_value = extract_command_value(user_text, COMMAND_ALIASES["copy_schedule_template"])
             if copy_schedule_value:
-                template_id_text = copy_schedule_value.replace("排程", "").strip()
-                try:
-                    template_id = int(template_id_text)
-                except ValueError:
-                    template_id = None
-                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                template_index_text = copy_schedule_value.replace("排程", "").strip()
+                template = resolve_template_from_display_index(db, user.id, template_index_text)
                 if template is None:
                     await reply_with_quick_reply(reply_token, "找不到這組排程，請重新選擇。", TIME_TOPIC_QUICK_REPLIES)
                     continue
@@ -2017,16 +2031,16 @@ async def line_webhook(
                 items = [
                     {
                         "type": "message",
-                        "label": f"複製 {template.id}",
-                        "text": f"複製常用排程 {template.id}",
+                        "label": f"複製 {idx}",
+                        "text": f"複製常用排程 {idx}",
                     }
-                    for template in templates[:10]
+                    for idx, template in enumerate(templates[:10], start=1)
                 ]
                 await reply_with_quick_reply(
                     reply_token,
                     "請選擇要複製的排程：\n" + "\n".join(
-                        f"{template.id}. {template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）"
-                        for template in templates
+                        f"{idx}. {template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）"
+                        for idx, template in enumerate(templates, start=1)
                     ),
                     with_done_button(items),
                 )
@@ -2037,28 +2051,31 @@ async def line_webhook(
                 await reply_with_quick_reply(reply_token, "已取消新增常用排程。", TIME_TOPIC_QUICK_REPLIES)
                 continue
 
-            if command_text in COMMAND_ALIASES["replace_schedule_conflict"] or command_text in COMMAND_ALIASES["keep_schedule_conflict"]:
+            if (
+                command_text in COMMAND_ALIASES["replace_schedule_conflict"]
+                or command_text in COMMAND_ALIASES["keep_schedule_conflict"]
+                or command_text in COMMAND_ALIASES["keep_both_schedule_conflict"]
+            ):
                 profile = get_profile(db, user.id)
                 pending = parse_schedule_template_pending(profile.pending_field)
                 if pending.get("action") != "template_conflict":
                     await reply_with_quick_reply(reply_token, "目前沒有待處理的排程衝突。", TIME_TOPIC_QUICK_REPLIES)
                     continue
+                if command_text in COMMAND_ALIASES["keep_schedule_conflict"]:
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "已保留原本排程，已放棄此次新增。", SCHEDULE_QUICK_REPLIES)
+                    continue
                 replace_conflicts = command_text in COMMAND_ALIASES["replace_schedule_conflict"]
-                if not replace_conflicts:
-                    conflict_days = set()
-                    for template in get_schedule_conflicts(db, user.id, pending["days"]):
-                        conflict_days.update(set(pending["days"]).intersection(template_weekdays(template)))
-                    pending["days"] = [day for day in pending["days"] if day not in conflict_days]
-                    if not pending["days"]:
-                        set_pending_field(db, user.id, None)
-                        await reply_with_quick_reply(reply_token, "已保留原排程，這次沒有新增任何星期。", TIME_TOPIC_QUICK_REPLIES)
-                        continue
                 created_template = save_schedule_template_from_pending(db, user.id, pending, replace_conflicts=replace_conflicts)
                 set_pending_field(db, user.id, f"template_fixed_confirm:{created_template.id}")
                 clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"已新增常用排程：{schedule_template_summary(pending['time'], pending['label'], pending['days'])}\n請問這筆是否為固定排程？",
+                    (
+                        f"已新增常用排程：{schedule_template_summary(pending['time'], pending['label'], pending['days'])}\n"
+                        + ("衝突日已由新排程覆蓋舊排程。\n" if replace_conflicts else "已保留舊排程，並新增此排程（兩者皆保留）。\n")
+                        + "請問這筆是否為固定排程？"
+                    ),
                     with_done_button([
                         {"type": "message", "label": "固定：是", "text": "固定排程 是"},
                         {"type": "message", "label": "固定：否", "text": "固定排程 否"},
@@ -2590,10 +2607,29 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["fixed_adjust"]:
+                templates = get_schedule_templates(db, user.id, active_only=True)
+                if not templates:
+                    await reply_with_quick_reply(reply_token, "目前沒有可調整的固定排程，請先新增常用排程。", SCHEDULE_QUICK_REPLIES)
+                    continue
+                set_pending_field(db, user.id, "fixed_adjust_select")
                 await reply_with_quick_reply(
                     reply_token,
-                    "固定調整：請使用「編輯排程 <編號>」調整固定排程的時間或星期。",
-                    SCHEDULE_QUICK_REPLIES,
+                    "固定調整：請先選擇要調整的單筆排程。\n" + schedule_management_text(db, user.id),
+                    fixed_adjust_template_quick_replies(db, user.id),
+                )
+                continue
+
+            fixed_adjust_target_value = extract_command_value(user_text, COMMAND_ALIASES["fixed_adjust_target"])
+            if fixed_adjust_target_value:
+                template = resolve_template_from_display_index(db, user.id, fixed_adjust_target_value)
+                if template is None:
+                    await reply_with_quick_reply(reply_token, "排程編號無效，請輸入清單中的編號，例如：調整排程 1。", fixed_adjust_template_quick_replies(db, user.id))
+                    continue
+                set_pending_field(db, user.id, f"fixed_adjust_template:{template.id}")
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已選擇：{template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）。\n請選擇要調整時間或星期。",
+                    fixed_adjust_action_quick_replies(),
                 )
                 continue
 
@@ -2642,6 +2678,97 @@ async def line_webhook(
 
             profile = get_profile(db, user.id)
             current_step = profile.pending_field or get_next_setup_step(profile)
+
+            if current_step == "fixed_adjust_select":
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請先選擇要調整的單筆排程，格式例如：調整排程 1。",
+                    fixed_adjust_template_quick_replies(db, user.id),
+                )
+                continue
+
+            if current_step and current_step.startswith("fixed_adjust_template:"):
+                template_id_text = current_step.split(":", 1)[1]
+                try:
+                    template_id = int(template_id_text)
+                except ValueError:
+                    template_id = None
+                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                if template is None:
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "找不到該排程，請重新進入固定調整。", SCHEDULE_QUICK_REPLIES)
+                    continue
+                if command_text in COMMAND_ALIASES["fixed_adjust_time"]:
+                    set_pending_field(db, user.id, f"fixed_adjust_time:{template.id}")
+                    await reply_with_quick_reply(reply_token, "請輸入新的固定到達時間（HH:MM，例如 08:30）。", ARRIVAL_TIME_QUICK_REPLIES)
+                    continue
+                if command_text in COMMAND_ALIASES["fixed_adjust_weekdays"]:
+                    set_pending_field(db, user.id, f"fixed_adjust_weekdays:{template.id}")
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "請輸入新的固定星期，例如：週一週三週五 或 1,3,5。\n支援：平日、每天、假日。",
+                        with_done_button([
+                            {"type": "message", "label": "平日", "text": "平日"},
+                            {"type": "message", "label": "每天", "text": "每天"},
+                            {"type": "message", "label": "假日", "text": "假日"},
+                        ]),
+                    )
+                    continue
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請點選有效按鈕：固定調整時間 或 固定調整星期。",
+                    fixed_adjust_action_quick_replies(),
+                )
+                continue
+
+            if current_step and current_step.startswith("fixed_adjust_time:"):
+                template_id_text = current_step.split(":", 1)[1]
+                try:
+                    template_id = int(template_id_text)
+                except ValueError:
+                    template_id = None
+                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                if template is None:
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "找不到該排程，請重新進入固定調整。", SCHEDULE_QUICK_REPLIES)
+                    continue
+                if not hhmm_is_valid(user_text.strip()):
+                    await reply_with_quick_reply(reply_token, "時間格式錯誤，請輸入 HH:MM，例如 08:30。", ARRIVAL_TIME_QUICK_REPLIES)
+                    continue
+                update_schedule_template(db, user.id, template.id, target_arrival_time=user_text.strip())
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(reply_token, "固定排程時間已更新。", MAIN_MENU_QUICK_REPLIES)
+                continue
+
+            if current_step and current_step.startswith("fixed_adjust_weekdays:"):
+                template_id_text = current_step.split(":", 1)[1]
+                try:
+                    template_id = int(template_id_text)
+                except ValueError:
+                    template_id = None
+                template = get_schedule_template(db, user.id, template_id) if template_id else None
+                if template is None:
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "找不到該排程，請重新進入固定調整。", SCHEDULE_QUICK_REPLIES)
+                    continue
+                weekdays = parse_custom_weekdays(user_text)
+                if weekdays is None:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "星期格式錯誤，請輸入例如：週一週三週五、1,3,5、平日、每天、假日。",
+                        with_done_button([
+                            {"type": "message", "label": "平日", "text": "平日"},
+                            {"type": "message", "label": "每天", "text": "每天"},
+                            {"type": "message", "label": "假日", "text": "假日"},
+                        ]),
+                    )
+                    continue
+                update_schedule_template(db, user.id, template.id, active_weekdays=weekdays)
+                set_pending_field(db, user.id, None)
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(reply_token, "固定排程星期已更新。", MAIN_MENU_QUICK_REPLIES)
+                continue
 
             if current_step == "household_join_code":
                 household_code = normalize_household_id(user_text)
@@ -2915,7 +3042,11 @@ async def line_webhook(
                         next_step = get_next_setup_step(profile)
                         if next_step is None:
                             set_pending_field(db, user.id, None)
-                            await reply_with_quick_reply(reply_token, "已儲存住家位置，設定已更新。", MAIN_MENU_QUICK_REPLIES)
+                            await reply_with_quick_reply(
+                                reply_token,
+                                "已完成初始設定：住家地址已儲存。\n下一步請前往「排程設定」>「新增常用排程」，依序設定目的地、時間與星期。",
+                                MAIN_MENU_QUICK_REPLIES,
+                            )
                             continue
                         set_pending_field(db, user.id, next_step)
                         await reply_with_quick_reply(
