@@ -552,10 +552,6 @@ def render_dashboard_html_for_paths(
           <div class="label">出門天氣</div>
           <div id="weather" class="value">--</div>
         </section>
-        <section class="band">
-          <div class="label">本週排程總覽</div>
-          <div id="weeklySchedule" class="value transport">尚未設定</div>
-        </section>
         <section id="membersBand" class="band" style="display: none;">
           <div class="label">家人通勤狀態</div>
           <div id="members" class="value transport">--</div>
@@ -585,7 +581,6 @@ def render_dashboard_html_for_paths(
     const arrival = document.getElementById("arrival");
     const transport = document.getElementById("transport");
     const weather = document.getElementById("weather");
-    const weeklySchedule = document.getElementById("weeklySchedule");
     const membersBand = document.getElementById("membersBand");
     const members = document.getElementById("members");
     const connection = document.getElementById("connection");
@@ -875,9 +870,7 @@ def render_dashboard_html_for_paths(
         const date = member.target_date ? `${{member.target_date}} ` : "";
         const leave = member.departure_time || "--:--";
         const destination = member.destination_label || "目的地";
-        const stateText = member.departure_confirmed_today
-          ? "已出門，改看明天"
-          : (stateLabels[member.state] || member.state || "更新中");
+        const stateText = stateLabels[member.state] || member.state || "更新中";
         const rank = member.queue_position || "-";
         return `
           <div class="member-row">
@@ -906,7 +899,6 @@ def render_dashboard_html_for_paths(
         arrival.textContent = "--:--";
         transport.textContent = payload.reason || "還沒有可顯示的資料";
         weather.textContent = "--";
-        weeklySchedule.textContent = payload.weekly_schedule || "尚未設定";
         updatedAt.textContent = "這次更新沒有成功";
         renderMembers(payload);
         return;
@@ -921,7 +913,6 @@ def render_dashboard_html_for_paths(
       arrival.textContent = payload.target_arrival_time || "--:--";
       transport.textContent = payload.transport_line || "還沒有通勤建議";
       weather.textContent = formatWeather(payload.weather);
-      weeklySchedule.textContent = payload.weekly_schedule || "尚未設定";
       updatedAt.textContent = payload.updated_at ? `更新 ${{new Date(payload.updated_at).toLocaleTimeString("zh-TW", {{ hour12: false }})}}` : "尚未更新";
       renderMembers(payload);
       handleVoiceReminder(payload);

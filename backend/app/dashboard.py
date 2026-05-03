@@ -6,12 +6,11 @@ from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from app import route_formatter
-from app.commute_schedule import dashboard_should_sleep, week_schedule_overview
+from app.commute_schedule import dashboard_should_sleep
 from app.crud import (
     get_household_id_for_user,
     get_override_for_date,
     get_profile,
-    get_schedule_templates,
     get_users_for_household,
     next_effective_commute_date,
 )
@@ -100,7 +99,6 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
         if target_date is None:
             payload = build_no_active_day_payload(user_id=user_id, now=now)
             payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-            payload["weekly_schedule"] = week_schedule_overview(get_schedule_templates(db, user_id, active_only=True), profile)
             return _apply_timeout_voice(payload, today_override)
 
         plan = await build_dashboard_plan(
@@ -120,7 +118,6 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
             if target_date is None:
                 payload = build_no_active_day_payload(user_id=user_id, now=now)
                 payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-                payload["weekly_schedule"] = week_schedule_overview(get_schedule_templates(db, user_id, active_only=True), profile)
                 return _apply_timeout_voice(payload, today_override)
             plan = await build_dashboard_plan(
                 db,
@@ -140,7 +137,6 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
             else build_dashboard_payload(user_id=user_id, plan=plan, now=now)
         )
         payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-        payload["weekly_schedule"] = week_schedule_overview(get_schedule_templates(db, user_id, active_only=True), profile)
         return _apply_timeout_voice(payload, today_override)
     finally:
         db.close()
@@ -180,11 +176,9 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
                 print(f"[household-dashboard] user_id={user.id} error={e}")
 
         def member_sort_key(item: dict):
-            confirmed = bool(item.get("departure_confirmed_today"))
             seconds = item.get("seconds_until_departure")
             same_day = item.get("target_date") == today.isoformat()
             return (
-                1 if confirmed else 0,
                 1 if not item.get("ok") else 0,
                 0 if same_day else 1,
                 1 if seconds is None else 0,
@@ -199,9 +193,7 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
             leave = member.get("departure_time") or "--:--"
             member_name = member.get("display_name") or f"成員 {member.get('user_id')}"
             member["queue_summary"] = f"{member_name}｜{destination_label}｜{leave}"
-        primary = next((member for member in members if member.get("ok") and not member.get("departure_confirmed_today")), None)
-        if primary is None:
-            primary = next((member for member in members if member.get("ok")), None)
+        primary = next((member for member in members if member.get("ok")), None)
         primary_user_id = primary.get("user_id") if primary else None
         for member in members:
             member["is_primary"] = bool(primary_user_id and member.get("user_id") == primary_user_id)

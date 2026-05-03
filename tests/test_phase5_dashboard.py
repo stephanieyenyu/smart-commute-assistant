@@ -336,6 +336,13 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("parse_custom_weekdays", webhook_py)
         self.assertIn("action=pause_date", webhook_py)
         self.assertIn("action=enable_date", webhook_py)
+        self.assertIn("template_preset", webhook_py)
+        self.assertIn("action=template_preset", webhook_py)
+        self.assertIn("template_toggle_weekday", webhook_py)
+        self.assertIn("template_save", webhook_py)
+        self.assertIn("儲存排程", webhook_py)
+        self.assertIn("暫停排程", webhook_py)
+        self.assertNotIn("已更新星期，選好後請按", webhook_py)
         self.assertIn('set_pending_field(db, user.id, "wizard_active_weekdays")', webhook_py)
         self.assertIn('set_pending_field(db, user.id, "custom_active_weekdays")', webhook_py)
         self.assertIn("set_active_weekdays", webhook_py)
@@ -386,12 +393,12 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("user_is_household_owner", crud_py)
         self.assertIn("departure_confirmed_today", dashboard_py)
         self.assertIn("members = sorted(members, key=member_sort_key)", dashboard_py)
+        self.assertIn('primary = next((member for member in members if member.get("ok")), None)', dashboard_py)
         self.assertIn("queue_members", dashboard_py)
         self.assertIn("primary_member_name", dashboard_py)
         self.assertIn('headers={"Cache-Control": "no-store, max-age=0"}', dashboard_py)
         self.assertIn("member-list", dashboard_page_py)
         self.assertIn("queue_members", dashboard_page_py)
-        self.assertIn("已出門，改看明天", dashboard_page_py)
 
         self.assertIn('"computer_dashboard_guide"', webhook_py)
         self.assertIn("format_computer_dashboard_guide", webhook_py)
@@ -457,6 +464,8 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("effective_commute_setting_for_date", crud_py)
         self.assertIn("get_active_schedule_template_for_date", crud_py)
         self.assertIn("next_effective_commute_date", crud_py)
+        self.assertIn("CommuteScheduleTemplate.user_id == user_id).delete", crud_py)
+        self.assertIn("CommuteOverride.user_id == user_id).delete", crud_py)
 
         self.assertIn("IDENTITY_QUICK_REPLIES", webhook_py)
         self.assertIn('"label": "設定嚮導"', webhook_py)
@@ -472,9 +481,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("template_save", webhook_py)
         self.assertIn("以新排程為準", webhook_py)
         self.assertIn("get_schedule_conflicts", webhook_py)
-        self.assertIn("week_schedule_overview", dashboard_py)
-        self.assertIn("weekly_schedule", dashboard_py)
-        self.assertIn("weeklySchedule", dashboard_page_py)
+        self.assertNotIn("week_schedule_overview", dashboard_py)
+        self.assertNotIn("weekly_schedule", dashboard_py)
+        self.assertNotIn("weeklySchedule", dashboard_page_py)
 
         schedule = load_module("commute_schedule_identity_under_test", "backend/app/commute_schedule.py")
         student = types.SimpleNamespace(identity_type="student", destination_label=None, preferred_arrival_time="09:00", active_weekdays=[0, 2, 4])
@@ -483,6 +492,16 @@ class Phase5DashboardTests(unittest.TestCase):
         overview = schedule.week_schedule_overview([], student)
         self.assertIn("週一", overview)
         self.assertIn("09:00 到學校", overview)
+        template = types.SimpleNamespace(
+            id=1,
+            is_active=True,
+            target_arrival_time="08:00",
+            destination_label="公司",
+            active_weekdays=[1, 3],
+        )
+        mixed_overview = schedule.week_schedule_overview([template], student)
+        self.assertIn("週一：09:00 到學校（固定）", mixed_overview)
+        self.assertIn("週二：08:00 到公司", mixed_overview)
 
     def test_departure_confirmation_flow_is_wired(self):
         line_client_py = self.read_repo_file("backend/app/line_client.py")

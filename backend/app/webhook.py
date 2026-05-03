@@ -913,7 +913,7 @@ async def reply_weekday_picker(reply_token: str, profile, message: str | None = 
 
 
 def schedule_template_summary(time_value: str, label: str, days: list[int]) -> str:
-    day_text = "、".join(WEEKDAY_NAMES[day] for day in sorted(days)) if days else "尚未選擇"
+    day_text = "、".join(WEEKDAY_NAMES[day] for day in sorted(days)) if days else "暫停排程"
     return f"{time_value} 到{label}｜{day_text}"
 
 
@@ -930,7 +930,6 @@ def build_schedule_template_weekday_picker_flex(time_value: str, label: str, sel
                 "type": "postback",
                 "label": WEEKDAY_NAMES[day],
                 "data": f"action=template_toggle_weekday&day={day}",
-                "displayText": f"切換{WEEKDAY_NAMES[day]}",
             },
         }
 
@@ -940,6 +939,33 @@ def build_schedule_template_weekday_picker_flex(time_value: str, label: str, sel
             "layout": "horizontal",
             "spacing": "sm",
             "contents": [day_button(day) for day in days],
+        }
+
+    preset_buttons = [
+        ("平日", "workdays"),
+        ("每天", "everyday"),
+        ("假日", "weekend"),
+        ("暫停", "none"),
+    ]
+
+    def preset_button(label: str, preset: str) -> dict:
+        return {
+            "type": "button",
+            "style": "secondary",
+            "height": "sm",
+            "action": {
+                "type": "postback",
+                "label": label,
+                "data": f"action=template_preset&preset={preset}",
+            },
+        }
+
+    def preset_row(items: list[tuple[str, str]]) -> dict:
+        return {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [preset_button(label, preset) for label, preset in items],
         }
 
     return {
@@ -952,9 +978,13 @@ def build_schedule_template_weekday_picker_flex(time_value: str, label: str, sel
             "contents": [
                 {"type": "text", "text": "這組排程適用星期", "weight": "bold", "size": "xl"},
                 {"type": "text", "text": schedule_template_summary(time_value, label, sorted(active_days)), "size": "sm", "color": "#666666", "wrap": True},
+                {"type": "text", "text": "點選星期不會逐一回覆；選好後按「儲存排程」一次完成。", "size": "xs", "color": "#888888", "wrap": True},
                 row([0, 1, 2]),
                 row([3, 4, 5]),
                 row([6]),
+                {"type": "separator", "margin": "md"},
+                preset_row(preset_buttons[:2]),
+                preset_row(preset_buttons[2:]),
                 {"type": "separator", "margin": "md"},
                 {
                     "type": "button",
@@ -1265,11 +1295,21 @@ async def line_webhook(
                         await reply_weekday_picker(reply_token, profile, f"已更新：{schedule_label(profile.active_weekdays)}")
                     continue
 
-                if postback_action in {"template_toggle_weekday", "template_save"}:
+                if postback_action in {"template_toggle_weekday", "template_preset", "template_save"}:
                     profile = get_profile(db, user.id)
                     pending = parse_schedule_template_pending(profile.pending_field)
                     if pending.get("action") not in {"template_days", "template_conflict"}:
                         await reply_with_quick_reply(reply_token, "目前沒有正在新增的常用排程，請先傳送「新增常用排程」。", TIME_TOPIC_QUICK_REPLIES)
+                        continue
+
+                    if postback_action == "template_preset":
+                        preset = (postback_parts.get("preset") or ["everyday"])[0]
+                        pending["days"] = parse_weekday_preset(preset)
+                        set_pending_field(
+                            db,
+                            user.id,
+                            build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
+                        )
                         continue
 
                     if postback_action == "template_toggle_weekday":
@@ -1291,13 +1331,9 @@ async def line_webhook(
                             user.id,
                             build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
                         )
-                        await reply_schedule_template_weekday_picker(reply_token, pending["time"], pending["label"], pending["days"], "已更新星期，選好後請按「儲存排程」。")
                         continue
 
-                    if not pending["days"]:
-                        await reply_schedule_template_weekday_picker(reply_token, pending["time"], pending["label"], pending["days"], "請至少選擇一天。")
-                        continue
-                    conflicts = get_schedule_conflicts(db, user.id, pending["days"])
+                    conflicts = get_schedule_conflicts(db, user.id, pending["days"]) if pending["days"] else []
                     if conflicts:
                         set_pending_field(
                             db,

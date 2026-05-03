@@ -108,17 +108,23 @@ def template_is_active_on_date(template, target_date: date) -> bool:
 
 def week_schedule_overview(templates: list, profile=None) -> str:
     active_templates = [template for template in templates if getattr(template, "is_active", True)]
-    if not active_templates:
-        if profile is None:
-            return "尚未設定多組常用排程。"
-        label = destination_label_for_profile(profile)
-        time_value = getattr(profile, "preferred_arrival_time", None) or "--:--"
-        return f"目前使用單一固定排程：{schedule_label(getattr(profile, 'active_weekdays', None))}，{time_value} 到{label}。"
+    default_days = normalize_active_weekdays(getattr(profile, "active_weekdays", None)) if profile is not None else []
+    default_time = getattr(profile, "preferred_arrival_time", None) if profile is not None else None
+    default_label = destination_label_for_profile(profile) if profile is not None else None
+
+    if not active_templates and profile is None:
+        return "尚未設定多組常用排程。"
+    if not active_templates and profile is not None:
+        time_value = default_time or "--:--"
+        return f"目前使用單一固定排程：{schedule_label(default_days)}，{time_value} 到{default_label}。"
 
     lines = []
     for day in ALL_WEEKDAYS:
         day_templates = [template for template in active_templates if day in template_weekdays(template)]
         if not day_templates:
+            if default_time and day in default_days:
+                lines.append(f"{WEEKDAY_NAMES[day]}：{default_time} 到{default_label}（固定）")
+                continue
             lines.append(f"{WEEKDAY_NAMES[day]}：休息")
             continue
         summary = "；".join(
