@@ -23,6 +23,8 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
         self.assertIn("nightly_brief_plan_key", models_py)
         self.assertIn("watchdog_alert_key", models_py)
         self.assertIn("departure_confirmed_at", models_py)
+        self.assertIn("departure_timeout_at", models_py)
+        self.assertIn("departure_timeout_silent", models_py)
         self.assertIn("departure_snoozed_until", models_py)
         self.assertIn("class ApiHealthLog", models_py)
 

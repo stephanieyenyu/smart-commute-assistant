@@ -7,6 +7,16 @@ WORKDAYS = [0, 1, 2, 3, 4]
 WEEKEND = [5, 6]
 SLEEP_BEFORE_DEPARTURE_HOURS = 8
 WEEKDAY_NAMES = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+IDENTITY_DESTINATION_LABELS = {
+    "student": "學校",
+    "worker": "公司",
+    "slash": "目的地",
+}
+IDENTITY_DISPLAY_NAMES = {
+    "student": "學生",
+    "worker": "上班族",
+    "slash": "斜槓族",
+}
 WEEKDAY_TOKEN_MAP = {
     "一": 0,
     "1": 0,
@@ -54,6 +64,64 @@ def schedule_label(active_weekdays) -> str:
     if not weekdays:
         return "暫停所有固定排程"
     return "自訂：" + "、".join(WEEKDAY_NAMES[day] for day in weekdays)
+
+
+def destination_label_for_identity(identity_type: str | None) -> str:
+    if not identity_type:
+        return "目的地"
+    return IDENTITY_DESTINATION_LABELS.get(identity_type, "目的地")
+
+
+def identity_display_name(identity_type: str | None) -> str:
+    if not identity_type:
+        return "尚未設定"
+    return IDENTITY_DISPLAY_NAMES.get(identity_type, "自訂")
+
+
+def destination_label_for_profile(profile) -> str:
+    label = getattr(profile, "destination_label", None)
+    if label:
+        return str(label)
+    return destination_label_for_identity(getattr(profile, "identity_type", None))
+
+
+def arrival_label(destination_label: str | None) -> str:
+    return f"到{destination_label or '目的地'}時間"
+
+
+def target_label_text(destination_label: str | None) -> str:
+    return f"抵達{destination_label or '目的地'}"
+
+
+def template_weekdays(template) -> list[int]:
+    return normalize_active_weekdays(getattr(template, "active_weekdays", None))
+
+
+def template_is_active_on_date(template, target_date: date) -> bool:
+    return bool(getattr(template, "is_active", True)) and target_date.weekday() in template_weekdays(template)
+
+
+def week_schedule_overview(templates: list, profile=None) -> str:
+    active_templates = [template for template in templates if getattr(template, "is_active", True)]
+    if not active_templates:
+        if profile is None:
+            return "尚未設定多組常用排程。"
+        label = destination_label_for_profile(profile)
+        time_value = getattr(profile, "preferred_arrival_time", None) or "--:--"
+        return f"目前使用單一固定排程：{schedule_label(getattr(profile, 'active_weekdays', None))}，{time_value} 到{label}。"
+
+    lines = []
+    for day in ALL_WEEKDAYS:
+        day_templates = [template for template in active_templates if day in template_weekdays(template)]
+        if not day_templates:
+            lines.append(f"{WEEKDAY_NAMES[day]}：休息")
+            continue
+        summary = "；".join(
+            f"{template.target_arrival_time} 到{template.destination_label}"
+            for template in sorted(day_templates, key=lambda item: (item.target_arrival_time, item.id or 0))
+        )
+        lines.append(f"{WEEKDAY_NAMES[day]}：{summary}")
+    return "\n".join(lines)
 
 
 def commute_date_is_active(profile, target_date: date, override=None) -> bool:

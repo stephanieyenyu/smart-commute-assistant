@@ -16,7 +16,9 @@ from app.tdx_bus import (
 )
 from app.weather import get_commute_weather
 from app import route_formatter
+from app.commute_schedule import arrival_label, target_label_text
 from app.crud import (
+    effective_commute_setting_for_date,
     get_profile,
     get_next_setup_step,
     get_override_for_date,
@@ -650,8 +652,15 @@ async def _compute_today_plan(
     if next_step is not None:
         return {"ok": False, "reason": "setup_incomplete", "next_step": next_step}
 
-    effective_arrival_time = profile.preferred_arrival_time
     override = get_override_for_date(db, user_id, target_date)
+    effective_setting = effective_commute_setting_for_date(db, profile, target_date, override)
+    if effective_setting is None:
+        return {"ok": False, "reason": "schedule_inactive", "target_date": target_date}
+
+    effective_arrival_time = effective_setting["arrival_time"]
+    destination_label = effective_setting["destination_label"]
+    effective_schedule_source = effective_setting["source"]
+    schedule_template_id = effective_setting.get("schedule_template_id")
     used_override = False
     if override and override.target_arrival_time:
         effective_arrival_time = override.target_arrival_time
@@ -698,9 +707,9 @@ async def _compute_today_plan(
     else:
         target_label = target_date.isoformat()
     note = (
-        f"{target_label}使用臨時到公司時間：{effective_arrival_time}"
+        f"{target_label}使用臨時{arrival_label(destination_label)}：{effective_arrival_time}"
         if used_override
-        else f"{target_label}使用固定到公司時間：{effective_arrival_time}"
+        else f"{target_label}使用固定{arrival_label(destination_label)}：{effective_arrival_time}"
     )
 
     return {
@@ -708,6 +717,11 @@ async def _compute_today_plan(
         "profile": profile,
         "target_date": target_date,
         "effective_arrival_time": effective_arrival_time,
+        "destination_label": destination_label,
+        "arrival_label": arrival_label(destination_label),
+        "target_label_text": target_label_text(destination_label),
+        "effective_schedule_source": effective_schedule_source,
+        "schedule_template_id": schedule_template_id,
         "weather_info": weather_info,
         "weather_buffer": weather_buffer,
         "baseline_minutes": baseline_minutes,
@@ -995,7 +1009,7 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     lines = [
         f"🔔 出門提醒：您預計在 {plan['final_departure_time']} 出門{departure_note}",
         f"📍 通勤方式：{_get_transport_line(plan)}",
-        f"📅 目標 {plan['effective_arrival_time']} 抵達公司 (通勤約 {baseline_minutes} 分鐘)",
+        f"📅 目標 {plan['effective_arrival_time']} {plan.get('target_label_text', '抵達目的地')} (通勤約 {baseline_minutes} 分鐘)",
         f"🌤 天氣：{wx_text}{temp_str}{pop_str}",
     ]
 

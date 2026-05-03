@@ -39,6 +39,7 @@ def load_service_module():
         },
         "app.weather": {"get_commute_weather": None},
         "app.crud": {
+            "effective_commute_setting_for_date": None,
             "get_profile": None,
             "get_next_setup_step": None,
             "get_override_for_date": None,

@@ -193,6 +193,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('payload["reminder_enabled"]', dashboard_py)
         self.assertIn("departure_confirmed_at", dashboard_py)
         self.assertIn("send_departure_check_for_user", dashboard_py)
+        self.assertIn("_apply_timeout_voice", dashboard_py)
+        self.assertIn("DEPARTURE_TIMEOUT_VOICE_PROMPT", dashboard_py)
+        self.assertIn("timeout_voice_silent", dashboard_py)
         self.assertIn("app.include_router(dashboard_router)", main_py)
 
     def test_dashboard_view_contains_websocket_and_kiosk_layout(self):
@@ -239,6 +242,9 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("speechSynthesis.resume()", html)
         self.assertIn("payload.reminder_enabled === false", html)
         self.assertIn("payload.sleeping", html)
+        self.assertIn("timeoutVoiceStorageKey", html)
+        self.assertIn("dashboardTimeoutVoice", html)
+        self.assertIn("timeout_voice_prompt", html)
 
     def test_dashboard_link_builder_prefers_public_url(self):
         links = load_module("dashboard_links_under_test", "backend/app/dashboard_links.py")
@@ -406,7 +412,7 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn('"label": "查看設定"', webhook_py)
         self.assertIn('"label": "重新設定"', webhook_py)
         self.assertIn('"label": "傳送住家地址"', webhook_py)
-        self.assertIn('"label": "傳送公司地址"', webhook_py)
+        self.assertIn('"label": "傳送目的地地址"', webhook_py)
         self.assertNotIn('"label": "修改到公司時間"', webhook_py)
         self.assertIn("DONE_QUICK_REPLY", webhook_py)
         self.assertIn("with_done_button", webhook_py)
@@ -430,6 +436,42 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("設定我的名稱 ", webhook_py)
         self.assertIn("移除家庭成員", webhook_py)
 
+    def test_identity_labels_and_multi_schedule_are_wired(self):
+        models_py = self.read_repo_file("backend/app/models.py")
+        crud_py = self.read_repo_file("backend/app/crud.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        dashboard_py = self.read_repo_file("backend/app/dashboard.py")
+        dashboard_page_py = self.read_repo_file("backend/app/dashboard_page.py")
+
+        self.assertIn("identity_type", models_py)
+        self.assertIn("destination_label", models_py)
+        self.assertIn("class CommuteScheduleTemplate", models_py)
+        self.assertIn("return \"identity_type\"", crud_py)
+        self.assertIn("set_identity_and_destination_label", crud_py)
+        self.assertIn("effective_commute_setting_for_date", crud_py)
+        self.assertIn("get_active_schedule_template_for_date", crud_py)
+        self.assertIn("next_effective_commute_date", crud_py)
+
+        self.assertIn("IDENTITY_QUICK_REPLIES", webhook_py)
+        self.assertIn('"label": "身份設定"', webhook_py)
+        self.assertIn('"label": "新增排程"', webhook_py)
+        self.assertIn('"label": "複製排程"', webhook_py)
+        self.assertIn("template_toggle_weekday", webhook_py)
+        self.assertIn("template_save", webhook_py)
+        self.assertIn("以新排程為準", webhook_py)
+        self.assertIn("get_schedule_conflicts", webhook_py)
+        self.assertIn("week_schedule_overview", dashboard_py)
+        self.assertIn("weekly_schedule", dashboard_py)
+        self.assertIn("weeklySchedule", dashboard_page_py)
+
+        schedule = load_module("commute_schedule_identity_under_test", "backend/app/commute_schedule.py")
+        student = types.SimpleNamespace(identity_type="student", destination_label=None, preferred_arrival_time="09:00", active_weekdays=[0, 2, 4])
+        self.assertEqual(schedule.destination_label_for_profile(student), "學校")
+        self.assertEqual(schedule.arrival_label("學校"), "到學校時間")
+        overview = schedule.week_schedule_overview([], student)
+        self.assertIn("週一", overview)
+        self.assertIn("09:00 到學校", overview)
+
     def test_departure_confirmation_flow_is_wired(self):
         line_client_py = self.read_repo_file("backend/app/line_client.py")
         webhook_py = self.read_repo_file("backend/app/webhook.py")
@@ -449,14 +491,24 @@ class Phase5DashboardTests(unittest.TestCase):
         self.assertIn("format_taipei_hhmm", webhook_py)
 
         self.assertIn("check_and_send_snoozed_departure_reminders", scheduler_py)
+        self.assertIn("check_and_close_departure_timeouts", scheduler_py)
+        self.assertIn("DEPARTURE_TIMEOUT_SECONDS", scheduler_py)
+        self.assertIn("household_has_upcoming_departure_window", scheduler_py)
+        self.assertIn("mark_departure_timeout", scheduler_py)
+        self.assertIn("DEPARTURE_TIMEOUT_LINE_MESSAGE", scheduler_py)
         self.assertIn("距離出門剩下一分鐘", scheduler_py)
         self.assertIn("已到出門時間", scheduler_py)
 
         self.assertIn("mark_departure_confirmed", crud_py)
+        self.assertIn("mark_departure_timeout", crud_py)
+        self.assertIn("departure_timeout_at", crud_py)
+        self.assertIn("departure_timeout_silent", crud_py)
         self.assertIn("override.target_arrival_time = None", crud_py)
         self.assertIn("snooze_departure_confirmation", crud_py)
         departure_confirmation_py = self.read_repo_file("backend/app/departure_confirmation.py")
         self.assertIn("format_taipei_hhmm", departure_confirmation_py)
+        self.assertIn("提醒您，距離預估出門時間已超過半小時，請注意行程安排喔！", departure_confirmation_py)
+        self.assertIn("您似乎還在忙碌", departure_confirmation_py)
 
     def test_short_test_reminder_command_is_removed_from_production(self):
         webhook_py = self.read_repo_file("backend/app/webhook.py")

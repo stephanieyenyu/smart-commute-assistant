@@ -502,7 +502,7 @@ def render_dashboard_html_for_paths(
           <div id="departure" class="value">--:--</div>
         </section>
         <section class="band">
-          <div class="label">想抵達的時間</div>
+          <div id="arrivalLabel" class="label">想抵達的時間</div>
           <div id="arrival" class="value">--:--</div>
         </section>
         <section class="band">
@@ -512,6 +512,10 @@ def render_dashboard_html_for_paths(
         <section class="band">
           <div class="label">出門天氣</div>
           <div id="weather" class="value">--</div>
+        </section>
+        <section class="band">
+          <div class="label">本週排程總覽</div>
+          <div id="weeklySchedule" class="value transport">尚未設定</div>
         </section>
         <section id="membersBand" class="band" style="display: none;">
           <div class="label">家人通勤狀態</div>
@@ -538,9 +542,11 @@ def render_dashboard_html_for_paths(
     const countdown = document.getElementById("countdown");
     const countdownCaption = document.getElementById("countdownCaption");
     const departure = document.getElementById("departure");
+    const arrivalLabel = document.getElementById("arrivalLabel");
     const arrival = document.getElementById("arrival");
     const transport = document.getElementById("transport");
     const weather = document.getElementById("weather");
+    const weeklySchedule = document.getElementById("weeklySchedule");
     const membersBand = document.getElementById("membersBand");
     const members = document.getElementById("members");
     const connection = document.getElementById("connection");
@@ -611,6 +617,16 @@ def render_dashboard_html_for_paths(
         planVersion,
         departureMoment,
         moment
+      ].join(":");
+    }}
+
+    function timeoutVoiceStorageKey(payload) {{
+      const voiceUserId = payload.user_id || userId;
+      return [
+        "dashboardTimeoutVoice",
+        voiceUserId,
+        payload.target_date || "unknown-date",
+        payload.timeout_event_key || payload.departure_timeout_at || "unknown-timeout"
       ].join(":");
     }}
 
@@ -713,6 +729,12 @@ def render_dashboard_html_for_paths(
     }}
 
     function handleVoiceReminder(payload) {{
+      const timeoutTargets = [payload].concat(payload.members || []);
+      timeoutTargets.forEach((item) => {{
+        if (!item || item.timeout_voice_silent || !item.timeout_voice_prompt) return;
+        speakReminder(item.timeout_voice_prompt, timeoutVoiceStorageKey(item));
+      }});
+
       if (!payload.ok || payload.sleeping) return;
       const seconds = payload.seconds_until_departure;
       if (seconds === null || seconds === undefined) return;
@@ -818,6 +840,7 @@ def render_dashboard_html_for_paths(
         arrival.textContent = "--:--";
         transport.textContent = payload.reason || "還沒有可顯示的資料";
         weather.textContent = "--";
+        weeklySchedule.textContent = payload.weekly_schedule || "尚未設定";
         updatedAt.textContent = "這次更新沒有成功";
         renderMembers(payload);
         return;
@@ -828,9 +851,11 @@ def render_dashboard_html_for_paths(
         ? (payload.sleep_until ? `休息到 ${{new Date(payload.sleep_until).toLocaleString("zh-TW", {{ hour12: false }})}}` : "排程休息中")
         : (payload.seconds_until_departure <= 0 ? "已經到出門時間" : "距離該出門還有");
       departure.textContent = payload.departure_time || "--:--";
+      arrivalLabel.textContent = payload.arrival_label || "想抵達的時間";
       arrival.textContent = payload.target_arrival_time || "--:--";
       transport.textContent = payload.transport_line || "還沒有通勤建議";
       weather.textContent = formatWeather(payload.weather);
+      weeklySchedule.textContent = payload.weekly_schedule || "尚未設定";
       updatedAt.textContent = payload.updated_at ? `更新 ${{new Date(payload.updated_at).toLocaleTimeString("zh-TW", {{ hour12: false }})}}` : "尚未更新";
       renderMembers(payload);
       handleVoiceReminder(payload);

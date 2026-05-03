@@ -1,9 +1,15 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models import ApiHealthLog, CommuteLog, User, CommuteProfile, CommuteOverride
-from app.commute_schedule import schedule_label
+from app.models import ApiHealthLog, CommuteLog, User, CommuteProfile, CommuteOverride, CommuteScheduleTemplate
+from app.commute_schedule import (
+    commute_date_is_active,
+    destination_label_for_profile,
+    schedule_label,
+    template_is_active_on_date,
+    template_weekdays,
+)
 
 
 def _clear_override_reminder_fields(override: CommuteOverride):
@@ -16,6 +22,8 @@ def _clear_override_reminder_fields(override: CommuteOverride):
     override.departure_snoozed_until = None
     override.snooze_one_min_sent_at = None
     override.snooze_departure_sent_at = None
+    override.departure_timeout_at = None
+    override.departure_timeout_silent = False
 
 
 def get_or_create_user(db: Session, line_user_id: str) -> User:
@@ -167,6 +175,20 @@ def update_profile_field(db: Session, user_id: int, field_name: str, value):
     return profile
 
 
+def set_identity_and_destination_label(
+    db: Session,
+    user_id: int,
+    identity_type: str | None,
+    destination_label: str | None,
+):
+    profile = get_profile(db, user_id)
+    profile.identity_type = identity_type
+    profile.destination_label = (destination_label or "").strip()[:20] or None
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
 def update_address_and_coords(
     db: Session,
     user_id: int,
@@ -212,10 +234,13 @@ def update_address_and_coords(
 def get_next_setup_step(profile: CommuteProfile) -> str | None:
     home_ready = bool(profile.home_address) and profile.home_lat is not None and profile.home_lng is not None
     office_ready = bool(profile.office_address) and profile.office_lat is not None and profile.office_lng is not None
+    identity_ready = bool(profile.identity_type or profile.destination_label)
     arrival_ready = bool(profile.preferred_arrival_time)
 
     if not home_ready:
         return "home_location"
+    if not identity_ready:
+        return "identity_type"
     if not office_ready:
         return "office_location"
     if not arrival_ready:
@@ -256,6 +281,8 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
 
     profile.preferred_mode = None
     profile.preferred_arrival_time = None
+    profile.identity_type = None
+    profile.destination_label = None
     profile.pending_field = "home_location"
     profile.reminder_enabled = True
     profile.active_weekdays = None
@@ -332,6 +359,142 @@ def set_active_weekdays(db: Session, user_id: int, weekdays: list[int] | None):
     return profile
 
 
+def get_schedule_templates(db: Session, user_id: int, active_only: bool = False) -> list[CommuteScheduleTemplate]:
+    query = db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id)
+    if active_only:
+        query = query.filter(CommuteScheduleTemplate.is_active.is_(True))
+    return query.order_by(CommuteScheduleTemplate.id.asc()).all()
+
+
+def get_schedule_template(db: Session, user_id: int, template_id: int) -> CommuteScheduleTemplate | None:
+    return db.query(CommuteScheduleTemplate).filter(
+        CommuteScheduleTemplate.user_id == user_id,
+        CommuteScheduleTemplate.id == template_id,
+    ).first()
+
+
+def get_active_schedule_template_for_date(db: Session, user_id: int, target_date) -> CommuteScheduleTemplate | None:
+    templates = [
+        template
+        for template in get_schedule_templates(db, user_id, active_only=True)
+        if template_is_active_on_date(template, target_date)
+    ]
+    if not templates:
+        return None
+    return sorted(templates, key=lambda item: (item.target_arrival_time, item.id or 0))[0]
+
+
+def get_schedule_conflicts(
+    db: Session,
+    user_id: int,
+    weekdays: list[int],
+    exclude_template_id: int | None = None,
+) -> list[CommuteScheduleTemplate]:
+    target_days = set(int(day) for day in weekdays)
+    conflicts = []
+    for template in get_schedule_templates(db, user_id, active_only=True):
+        if exclude_template_id is not None and template.id == exclude_template_id:
+            continue
+        if target_days.intersection(template_weekdays(template)):
+            conflicts.append(template)
+    return conflicts
+
+
+def remove_weekdays_from_conflicting_templates(
+    db: Session,
+    user_id: int,
+    weekdays: list[int],
+    exclude_template_id: int | None = None,
+):
+    target_days = set(int(day) for day in weekdays)
+    for template in get_schedule_conflicts(db, user_id, weekdays, exclude_template_id=exclude_template_id):
+        remaining = [day for day in template_weekdays(template) if day not in target_days]
+        template.active_weekdays = remaining
+        if not remaining:
+            template.is_active = False
+    db.commit()
+
+
+def create_schedule_template(
+    db: Session,
+    user_id: int,
+    target_arrival_time: str,
+    destination_label: str,
+    active_weekdays: list[int],
+    name: str | None = None,
+    *,
+    replace_conflicts: bool = False,
+) -> CommuteScheduleTemplate:
+    weekdays = sorted({int(day) for day in active_weekdays if 0 <= int(day) <= 6})
+    if replace_conflicts:
+        remove_weekdays_from_conflicting_templates(db, user_id, weekdays)
+
+    template = CommuteScheduleTemplate(
+        user_id=user_id,
+        name=(name or "").strip()[:40] or None,
+        target_arrival_time=target_arrival_time,
+        destination_label=(destination_label or "目的地").strip()[:20],
+        active_weekdays=weekdays,
+        is_active=True,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def effective_commute_setting_for_date(db: Session, profile: CommuteProfile, target_date, override=None) -> dict | None:
+    user_id = profile.user_id
+    templates = get_schedule_templates(db, user_id, active_only=True)
+    schedule_template = get_active_schedule_template_for_date(db, user_id, target_date) if templates else None
+
+    if override and getattr(override, "commute_disabled", False):
+        return None
+    if templates and schedule_template is None and not (override and getattr(override, "commute_enabled", False)):
+        return None
+
+    destination_label = destination_label_for_profile(profile)
+    arrival_time = profile.preferred_arrival_time
+    source = "default"
+    template_id = None
+
+    if schedule_template is not None:
+        destination_label = schedule_template.destination_label
+        arrival_time = schedule_template.target_arrival_time
+        source = "schedule_template"
+        template_id = schedule_template.id
+    elif not templates and not commute_date_is_active(profile, target_date, override):
+        return None
+
+    if override and override.target_arrival_time:
+        arrival_time = override.target_arrival_time
+        source = "override"
+
+    if not arrival_time:
+        return None
+
+    return {
+        "arrival_time": arrival_time,
+        "destination_label": destination_label,
+        "source": source,
+        "schedule_template_id": template_id,
+        "schedule_template": schedule_template,
+    }
+
+
+def effective_commute_date_is_active(db: Session, profile: CommuteProfile, target_date, override=None) -> bool:
+    return effective_commute_setting_for_date(db, profile, target_date, override) is not None
+
+
+def next_effective_commute_date(db: Session, profile: CommuteProfile, start_date, max_days: int = 14):
+    for day_offset in range(max_days + 1):
+        candidate = start_date + timedelta(days=day_offset)
+        override = get_override_for_date(db, profile.user_id, candidate)
+        if effective_commute_date_is_active(db, profile, candidate, override):
+            return candidate
+    return None
+
+
 def set_commute_disabled_for_date(db: Session, user_id: int, target_date, disabled: bool = True):
     override = get_or_create_override(db, user_id, target_date)
     override.commute_disabled = disabled
@@ -393,6 +556,8 @@ def mark_departure_confirmed(
     override.departure_snoozed_until = None
     override.snooze_one_min_sent_at = None
     override.snooze_departure_sent_at = None
+    override.departure_timeout_at = None
+    override.departure_timeout_silent = False
     db.commit()
     db.refresh(override)
     return override
@@ -423,6 +588,31 @@ def snooze_departure_confirmation(
     override.departure_confirmed_at = None
     override.departure_check_sent_at = None
     override.departure_snoozed_until = snoozed_until
+    override.snooze_one_min_sent_at = None
+    override.snooze_departure_sent_at = None
+    override.departure_timeout_at = None
+    override.departure_timeout_silent = False
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_departure_timeout(
+    db: Session,
+    user_id: int,
+    target_date,
+    timed_out_at: datetime,
+    *,
+    silent: bool = False,
+):
+    override = get_or_create_override(db, user_id, target_date)
+    if override.departure_timeout_at:
+        return override
+    override.departure_timeout_at = timed_out_at
+    override.departure_timeout_silent = bool(silent)
+    override.departure_confirmed_at = timed_out_at
+    override.target_arrival_time = None
+    override.departure_snoozed_until = None
     override.snooze_one_min_sent_at = None
     override.snooze_departure_sent_at = None
     db.commit()

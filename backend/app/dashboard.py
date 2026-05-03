@@ -6,8 +6,15 @@ from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from app import route_formatter
-from app.commute_schedule import dashboard_should_sleep, next_active_commute_date
-from app.crud import get_household_id_for_user, get_override_for_date, get_profile, get_users_for_household
+from app.commute_schedule import dashboard_should_sleep, week_schedule_overview
+from app.crud import (
+    get_household_id_for_user,
+    get_override_for_date,
+    get_profile,
+    get_schedule_templates,
+    get_users_for_household,
+    next_effective_commute_date,
+)
 from app.dashboard_page import render_dashboard_html, render_household_dashboard_html
 from app.dashboard_status import (
     build_dashboard_payload,
@@ -17,6 +24,7 @@ from app.dashboard_status import (
 )
 from app.db import SessionLocal
 from app.departure_confirmation import parse_target_date, send_departure_check_for_user
+from app.departure_confirmation import DEPARTURE_TIMEOUT_VOICE_PROMPT
 from app.service import build_today_commute_payload
 
 
@@ -62,6 +70,21 @@ def _apply_snoozed_departure(plan: dict, snoozed_until: datetime | None, now: da
     plan["departure_snoozed_until"] = snoozed_until.isoformat()
 
 
+def _apply_timeout_voice(payload: dict, override) -> dict:
+    if not override or not getattr(override, "departure_timeout_at", None):
+        return payload
+
+    timed_out_at = _coerce_datetime(override.departure_timeout_at)
+    payload["departure_timeout_at"] = timed_out_at.isoformat() if timed_out_at else None
+    payload["timeout_voice_silent"] = bool(getattr(override, "departure_timeout_silent", False))
+    payload["timeout_event_key"] = (
+        f"departure-timeout:{override.user_id}:{override.target_date}:{payload['departure_timeout_at']}"
+    )
+    if not payload["timeout_voice_silent"]:
+        payload["timeout_voice_prompt"] = DEPARTURE_TIMEOUT_VOICE_PROMPT
+    return payload
+
+
 async def get_dashboard_status_payload(user_id: int) -> dict:
     db = SessionLocal()
     try:
@@ -69,15 +92,16 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
         today = now.date()
         profile = get_profile(db, user_id)
         today_override = get_override_for_date(db, user_id, today)
-        target_date = next_active_commute_date(db, profile, today, get_override_for_date)
+        target_date = next_effective_commute_date(db, profile, today)
 
         if today_override and today_override.departure_confirmed_at:
-            target_date = next_active_commute_date(db, profile, today + timedelta(days=1), get_override_for_date)
+            target_date = next_effective_commute_date(db, profile, today + timedelta(days=1))
 
         if target_date is None:
             payload = build_no_active_day_payload(user_id=user_id, now=now)
             payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-            return payload
+            payload["weekly_schedule"] = week_schedule_overview(get_schedule_templates(db, user_id, active_only=True), profile)
+            return _apply_timeout_voice(payload, today_override)
 
         plan = await build_dashboard_plan(
             db,
@@ -92,11 +116,12 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
                 now,
             )
         if dashboard_plan_is_expired(now, plan):
-            target_date = next_active_commute_date(db, profile, today + timedelta(days=1), get_override_for_date)
+            target_date = next_effective_commute_date(db, profile, today + timedelta(days=1))
             if target_date is None:
                 payload = build_no_active_day_payload(user_id=user_id, now=now)
                 payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-                return payload
+                payload["weekly_schedule"] = week_schedule_overview(get_schedule_templates(db, user_id, active_only=True), profile)
+                return _apply_timeout_voice(payload, today_override)
             plan = await build_dashboard_plan(
                 db,
                 user_id,
@@ -115,7 +140,8 @@ async def get_dashboard_status_payload(user_id: int) -> dict:
             else build_dashboard_payload(user_id=user_id, plan=plan, now=now)
         )
         payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-        return payload
+        payload["weekly_schedule"] = week_schedule_overview(get_schedule_templates(db, user_id, active_only=True), profile)
+        return _apply_timeout_voice(payload, today_override)
     finally:
         db.close()
 
@@ -170,6 +196,21 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
             payload = dict(primary)
         else:
             payload = build_no_active_day_payload(user_id=0, now=now, reason="household_empty")
+        timeout_member = next(
+            (
+                member
+                for member in members
+                if member.get("timeout_voice_prompt") and not member.get("timeout_voice_silent")
+            ),
+            None,
+        )
+        if timeout_member and not payload.get("timeout_voice_prompt"):
+            payload.update({
+                "departure_timeout_at": timeout_member.get("departure_timeout_at"),
+                "timeout_voice_silent": False,
+                "timeout_event_key": timeout_member.get("timeout_event_key"),
+                "timeout_voice_prompt": timeout_member.get("timeout_voice_prompt"),
+            })
         payload["household_id"] = household_id or "default"
         payload["members"] = members
         payload["primary"] = primary

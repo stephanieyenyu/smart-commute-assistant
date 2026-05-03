@@ -15,6 +15,10 @@ from app.line_client import push_departure_check_message
 
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 SNOOZE_MINUTES = 5
+DEPARTURE_TIMEOUT_MINUTES = 30
+DEPARTURE_TIMEOUT_LOOKAHEAD_HOURS = 8
+DEPARTURE_TIMEOUT_VOICE_PROMPT = "提醒您，距離預估出門時間已超過半小時，請注意行程安排喔！"
+DEPARTURE_TIMEOUT_LINE_MESSAGE = "💡 您似乎還在忙碌？\n距離建議出門時間已經超過半小時，為避免打擾，系統已自動暫停今日的通勤追蹤囉！祝您今天順心！"
 
 
 def now_taipei() -> datetime:
