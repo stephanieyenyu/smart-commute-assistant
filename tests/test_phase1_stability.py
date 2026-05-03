@@ -23,6 +23,16 @@ class Phase1StabilityTests(unittest.TestCase):
         self.assertNotIn("async_check_all_commutes", main_py)
         self.assertNotIn("AsyncIOScheduler", main_py)
 
+    def test_render_web_service_binds_to_render_port(self):
+        dockerfile = self.read_repo_file("backend/Dockerfile")
+        render_yaml = self.read_repo_file("render.yaml")
+
+        self.assertIn("${PORT:-8000}", dockerfile)
+        self.assertIn("--host 0.0.0.0", dockerfile)
+        self.assertIn("rootDir: backend", render_yaml)
+        self.assertIn("startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT", render_yaml)
+        self.assertIn("healthCheckPath: /", render_yaml)
+
     def test_external_api_clients_emit_health_logs(self):
         client_paths = [
             "backend/app/integrations/Maps_client.py",
