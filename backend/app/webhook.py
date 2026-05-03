@@ -2556,6 +2556,7 @@ async def line_webhook(
                     continue
 
                 try:
+                    print(f"[webhook-today] user_id={user.id} today={today_date} setting={today_setting}")
                     payload = await build_today_commute_payload(
                         db=db,
                         user_id=user.id,
@@ -2563,6 +2564,7 @@ async def line_webhook(
                         force_mode_override=None,
                         header="今日通勤建議：",
                     )
+                    print(f"[webhook-today] payload_ok={payload.get('ok')} reason={payload.get('reason')}")
                     if not payload.get("ok"):
                         reason = payload.get("reason", "")
                         user_message = payload.get("message")
@@ -2571,8 +2573,13 @@ async def line_webhook(
                         elif reason == "missing_destination_address":
                             error_text = user_message or "您的排程缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！"
                         else:
-                            error_text = "今日通勤建議：\n目前無法計算通勤建議，請稍後再試。"
+                            error_text = payload.get("message") or "今日通勤建議：\n目前無法計算通勤建議，請稍後再試。"
                         await reply_with_quick_reply(reply_token, error_text, COMMUTE_RESULT_QUICK_REPLIES)
+                        continue
+
+                    if not payload.get("text"):
+                        print(f"[webhook-today] payload text is empty!")
+                        await reply_with_quick_reply(reply_token, "今日通勤建議：\n無法產生通勤建議，請檢查排程設定。", COMMUTE_RESULT_QUICK_REPLIES)
                         continue
 
                     try:
@@ -2585,16 +2592,14 @@ async def line_webhook(
                     except Exception as e:
                         print(f"[freeze-today-commute] error={e}")
 
-                    await reply_multi_messages_with_quick_reply(
-                        reply_token,
-                        [payload["text"]],
-                        COMMUTE_RESULT_QUICK_REPLIES,
-                    )
+                    await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
                 except Exception as e:
-                    print(f"[today-commute] unexpected error: {e}")
+                    import traceback
+                    print(f"[today-commute] UNEXPECTED CRASH: {e}")
+                    traceback.print_exc()
                     await reply_with_quick_reply(
                         reply_token,
-                        "今日通勤建議：\n系統處理時發生錯誤，請稍後再試。",
+                        "今日通勤建議：\n系統處理時發生錯誤，請查看伺服器日誌以獲得更多資訊。",
                         COMMUTE_RESULT_QUICK_REPLIES,
                     )
                 continue
@@ -2615,6 +2620,7 @@ async def line_webhook(
                     )
                     continue
                 try:
+                    print(f"[webhook-tomorrow] user_id={user.id} tomorrow={tomorrow_date} setting={tomorrow_setting}")
                     payload = await build_today_commute_payload(
                         db=db,
                         user_id=user.id,
@@ -2622,6 +2628,7 @@ async def line_webhook(
                         force_mode_override=None,
                         header="明日通勤建議：",
                     )
+                    print(f"[webhook-tomorrow] payload_ok={payload.get('ok')} reason={payload.get('reason')}")
                     if not payload.get("ok"):
                         reason = payload.get("reason", "")
                         user_message = payload.get("message")
@@ -2630,19 +2637,23 @@ async def line_webhook(
                         elif reason == "missing_destination_address":
                             error_text = user_message or "您的排程缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！"
                         else:
-                            error_text = "明日通勤建議：\n目前無法計算通勤建議，請稍後再試。"
+                            error_text = payload.get("message") or "明日通勤建議：\n目前無法計算通勤建議，請稍後再試。"
                         await reply_with_quick_reply(reply_token, error_text, COMMUTE_RESULT_QUICK_REPLIES)
                         continue
-                    await reply_multi_messages_with_quick_reply(
-                        reply_token,
-                        [payload["text"]],
-                        COMMUTE_RESULT_QUICK_REPLIES,
-                    )
+
+                    if not payload.get("text"):
+                        print(f"[webhook-tomorrow] payload text is empty!")
+                        await reply_with_quick_reply(reply_token, "明日通勤建議：\n無法產生通勤建議，請檢查排程設定。", COMMUTE_RESULT_QUICK_REPLIES)
+                        continue
+
+                    await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
                 except Exception as e:
-                    print(f"[tomorrow-commute] unexpected error: {e}")
+                    import traceback
+                    print(f"[tomorrow-commute] UNEXPECTED CRASH: {e}")
+                    traceback.print_exc()
                     await reply_with_quick_reply(
                         reply_token,
-                        "明日通勤建議：\n系統處理時發生錯誤，請稍後再試。",
+                        "明日通勤建議：\n系統處理時發生錯誤，請查看伺服器日誌以獲得更多資訊。",
                         COMMUTE_RESULT_QUICK_REPLIES,
                     )
                 continue
