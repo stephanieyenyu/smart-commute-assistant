@@ -188,6 +188,7 @@ MAIN_MENU_QUICK_REPLIES = BASIC_SETTINGS_QUICK_REPLIES
 
 COMMUTE_TOPIC_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "今日建議", "text": "今日通勤建議"},
+    {"type": "message", "label": "明日建議", "text": "明日通勤建議"},
     {"type": "message", "label": "最短時間", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "公車優先", "text": "今天搭公車"},
     {"type": "message", "label": "捷運優先", "text": "今天搭捷運"},
@@ -413,6 +414,7 @@ COMMAND_ALIASES = {
     "finish_settings": {"完成修改設定", "完成設定", "結束設定"},
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
+    "tomorrow_commute": {"明日通勤建議", "明天通勤建議"},
     "dashboard_link": {"取得Dashboard連結", "取得DASHBOARD連結", "取得dashboard連結", "Dashboard連結", "DASHBOARD連結", "dashboard連結", "取得儀表板連結", "看板連結"},
     "household_dashboard_link": {"取得家庭Dashboard連結", "取得家庭DASHBOARD連結", "取得家用Dashboard連結", "家庭Dashboard連結", "家庭DASHBOARD連結", "家用Dashboard連結"},
     "tomorrow_departure": {"明天幾點出門"},
@@ -436,8 +438,8 @@ COMMAND_ALIASES = {
     "manage_schedule_template": {"管理單一排程", "管理排程", "排程管理"},
     "delete_schedule_template": {"刪除排程", "移除排程"},
     "edit_schedule_template": {"編輯排程", "重新設定排程"},
-    "fixed_schedule_yes": {"固定排程 是", "是固定排程"},
-    "fixed_schedule_no": {"固定排程 否", "不是固定排程"},
+    "fixed_schedule_yes": {"固定排程 是", "固定排程是", "是固定排程"},
+    "fixed_schedule_no": {"固定排程 否", "固定排程否", "不是固定排程"},
     "copy_schedule_template": {"複製常用排程", "複製排程"},
     "replace_schedule_conflict": {"以新排程為準"},
     "keep_schedule_conflict": {"保留原本排程"},
@@ -481,7 +483,7 @@ COMMAND_ALIASES = {
 }
 
 CANONICAL_PROMPT_GROUPS = {
-    "通勤": ["今日通勤建議", "優先選擇通勤時間短", "今天搭公車", "今天搭捷運", "今天搭公車轉捷運", "查看今天交通方式"],
+    "通勤": ["今日通勤建議", "明日通勤建議", "優先選擇通勤時間短", "今天搭公車", "今天搭捷運", "今天搭公車轉捷運", "查看今天交通方式"],
     "時間": ["固定調整", "臨時調整", "修改今天到達時間", "修改明天到達時間", "明天幾點出門"],
     "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
     "排程": ["查看排程設定", "新增常用排程", "管理單一排程", "刪除排程 1", "編輯排程 1"],
@@ -991,6 +993,7 @@ def build_schedule_template_weekday_picker_flex(time_value: str, label: str, sel
 
     def day_button(day: int) -> dict:
         active = day in active_days
+        toggle_text = f"{'取消' if active else '勾選'}{WEEKDAY_NAMES[day]}"
         return {
             "type": "button",
             "style": "primary" if active else "secondary",
@@ -1000,6 +1003,7 @@ def build_schedule_template_weekday_picker_flex(time_value: str, label: str, sel
                 "type": "postback",
                 "label": WEEKDAY_NAMES[day],
                 "data": f"action=template_toggle_weekday&day={day}",
+                "displayText": toggle_text,
             },
         }
 
@@ -1027,6 +1031,7 @@ def build_schedule_template_weekday_picker_flex(time_value: str, label: str, sel
                 "type": "postback",
                 "label": label,
                 "data": f"action=template_preset&preset={preset}",
+                "displayText": f"套用{label}",
             },
         }
 
@@ -2575,6 +2580,34 @@ async def line_webhook(
                 except Exception as e:
                     print(f"[freeze-today-commute] error={e}")
 
+                await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
+                continue
+
+            if command_text in COMMAND_ALIASES["tomorrow_commute"]:
+                profile = get_profile(db, user.id)
+                next_step = get_next_setup_step(profile)
+                if next_step is not None:
+                    set_pending_field(db, user.id, next_step)
+                    await reply_with_quick_reply(reply_token, field_prompt_for_profile(next_step, profile), setup_quick_replies_for_step(next_step))
+                    continue
+                tomorrow_setting = effective_commute_setting_for_date(db, profile, tomorrow_date, tomorrow_override)
+                if tomorrow_setting is None:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "明天排程是休息日，不會推送通勤提醒。\n若明天臨時要通勤，請按「明天啟用」。",
+                        SCHEDULE_QUICK_REPLIES,
+                    )
+                    continue
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=tomorrow_date,
+                    force_mode_override=None,
+                    header="明日通勤建議：",
+                )
+                if not payload.get("ok"):
+                    await reply_text(reply_token, "明日通勤建議：\n無法建立通勤建議")
+                    continue
                 await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QUICK_REPLIES)
                 continue
 

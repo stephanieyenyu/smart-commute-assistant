@@ -237,7 +237,9 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile = get_profile(db, user_id)
 
     db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).delete(synchronize_session=False)
+    db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).delete(synchronize_session=False)
     db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
+    db.query(CommuteLog).filter(CommuteLog.user_id == user_id).delete(synchronize_session=False)
 
     profile.home_address = None
     profile.home_lat = None
@@ -269,6 +271,8 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
 
     profile.preferred_mode = None
     profile.preferred_arrival_time = None
+    profile.transport_preference = None
+    profile.max_walk_mins = None
     profile.identity_type = None
     profile.destination_label = None
     profile.pending_field = "home_location"

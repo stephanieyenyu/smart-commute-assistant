@@ -84,60 +84,64 @@ def _apply_timeout_voice(payload: dict, override) -> dict:
     return payload
 
 
-async def get_dashboard_status_payload(user_id: int) -> dict:
-    db = SessionLocal()
-    try:
-        now = now_taipei()
-        today = now.date()
-        profile = get_profile(db, user_id)
-        today_override = get_override_for_date(db, user_id, today)
-        target_date = next_effective_commute_date(db, profile, today)
+async def _get_dashboard_status_payload_with_db(db, user_id: int, now: datetime) -> dict:
+    today = now.date()
+    profile = get_profile(db, user_id)
+    today_override = get_override_for_date(db, user_id, today)
+    target_date = next_effective_commute_date(db, profile, today)
 
-        if today_override and today_override.departure_confirmed_at:
-            target_date = next_effective_commute_date(db, profile, today + timedelta(days=1))
+    if today_override and today_override.departure_confirmed_at:
+        target_date = next_effective_commute_date(db, profile, today + timedelta(days=1))
 
+    if target_date is None:
+        payload = build_no_active_day_payload(user_id=user_id, now=now)
+        payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
+        return _apply_timeout_voice(payload, today_override)
+
+    plan = await build_dashboard_plan(
+        db,
+        user_id,
+        target_date,
+        "明日通勤建議：" if target_date != today else "今日通勤建議：",
+    )
+    if target_date == today:
+        _apply_snoozed_departure(
+            plan,
+            getattr(today_override, "departure_snoozed_until", None),
+            now,
+        )
+    if dashboard_plan_is_expired(now, plan):
+        target_date = next_effective_commute_date(db, profile, today + timedelta(days=1))
         if target_date is None:
             payload = build_no_active_day_payload(user_id=user_id, now=now)
             payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
             return _apply_timeout_voice(payload, today_override)
-
         plan = await build_dashboard_plan(
             db,
             user_id,
             target_date,
-            "明日通勤建議：" if target_date != today else "今日通勤建議：",
+            "明日通勤建議：",
         )
-        if target_date == today:
-            _apply_snoozed_departure(
-                plan,
-                getattr(today_override, "departure_snoozed_until", None),
-                now,
-            )
-        if dashboard_plan_is_expired(now, plan):
-            target_date = next_effective_commute_date(db, profile, today + timedelta(days=1))
-            if target_date is None:
-                payload = build_no_active_day_payload(user_id=user_id, now=now)
-                payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-                return _apply_timeout_voice(payload, today_override)
-            plan = await build_dashboard_plan(
-                db,
-                user_id,
-                target_date,
-                "明日通勤建議：",
-            )
-        should_sleep, sleep_until = dashboard_should_sleep(
-            now,
-            target_date,
-            plan.get("final_departure_time"),
-            TAIPEI_TZ,
-        )
-        payload = (
-            build_sleeping_payload(user_id=user_id, plan=plan, now=now, sleep_until=sleep_until)
-            if should_sleep
-            else build_dashboard_payload(user_id=user_id, plan=plan, now=now)
-        )
-        payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
-        return _apply_timeout_voice(payload, today_override)
+    should_sleep, sleep_until = dashboard_should_sleep(
+        now,
+        target_date,
+        plan.get("final_departure_time"),
+        TAIPEI_TZ,
+    )
+    payload = (
+        build_sleeping_payload(user_id=user_id, plan=plan, now=now, sleep_until=sleep_until)
+        if should_sleep
+        else build_dashboard_payload(user_id=user_id, plan=plan, now=now)
+    )
+    payload["reminder_enabled"] = bool(getattr(profile, "reminder_enabled", True))
+    return _apply_timeout_voice(payload, today_override)
+
+
+async def get_dashboard_status_payload(user_id: int) -> dict:
+    db = SessionLocal()
+    try:
+        now = now_taipei()
+        return await _get_dashboard_status_payload_with_db(db, user_id, now)
     finally:
         db.close()
 
@@ -165,7 +169,7 @@ async def get_household_dashboard_status_payload(household_id: str = "default") 
         for user in users:
             try:
                 today_override = get_override_for_date(db, user.id, today)
-                payload = await get_dashboard_status_payload(user.id)
+                payload = await _get_dashboard_status_payload_with_db(db, user.id, now)
                 payload["display_name"] = user.display_name or f"成員 {user.id}"
                 payload["household_id"] = get_household_id_for_user(user)
                 payload["departure_confirmed_today"] = bool(
