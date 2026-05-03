@@ -36,6 +36,7 @@ def render_dashboard_html_for_paths(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, max-age=0">
   <title>通勤提醒看板</title>
   <style>
     :root {{
@@ -318,6 +319,44 @@ def render_dashboard_html_for_paths(
       white-space: pre-line;
       font-size: var(--transport-size);
       line-height: 1.3;
+    }}
+
+    .member-list {{
+      display: grid;
+      gap: 10px;
+      white-space: normal;
+      font-size: max(14px, calc(var(--transport-size) * 0.72));
+      line-height: 1.25;
+    }}
+
+    .member-row {{
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: baseline;
+      padding: 8px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }}
+
+    .member-row:first-child {{
+      border-top: 0;
+    }}
+
+    .member-rank {{
+      color: var(--accent);
+      font-weight: 850;
+    }}
+
+    .member-name {{
+      color: var(--text);
+      font-weight: 760;
+      overflow-wrap: anywhere;
+    }}
+
+    .member-meta {{
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
     }}
 
     .footer {{
@@ -806,24 +845,48 @@ def render_dashboard_html_for_paths(
       return [text, temp, pop].filter(Boolean).join("，");
     }}
 
+    function escapeHtml(value) {{
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }}
+
     function renderMembers(payload) {{
-      const list = payload.members || [];
-      if (!isHouseholdDashboard || !list.length) {{
+      const list = payload.queue_members || (payload.members || []).filter((member) => !member.is_primary);
+      if (!isHouseholdDashboard) {{
         membersBand.style.display = "none";
-        members.textContent = "--";
+        members.innerHTML = "";
         return;
       }}
 
       membersBand.style.display = "";
-      members.textContent = list.map((member) => {{
+      if (!list.length) {{
+        members.className = "value transport";
+        members.textContent = "目前沒有下一位成員等待出門。";
+        return;
+      }}
+
+      members.className = "value transport member-list";
+      members.innerHTML = list.map((member) => {{
         const name = member.display_name || `成員 ${{member.user_id}}`;
         const date = member.target_date ? `${{member.target_date}} ` : "";
         const leave = member.departure_time || "--:--";
+        const destination = member.destination_label || "目的地";
         const stateText = member.departure_confirmed_today
           ? "已出門，改看明天"
           : (stateLabels[member.state] || member.state || "更新中");
-        return `${{name}}：${{stateText}}｜${{date}}${{leave}} 出門`;
-      }}).join("\\n");
+        const rank = member.queue_position || "-";
+        return `
+          <div class="member-row">
+            <span class="member-rank">#${{escapeHtml(rank)}}</span>
+            <span class="member-name">${{escapeHtml(name)}}｜${{escapeHtml(destination)}}｜${{escapeHtml(stateText)}}</span>
+            <span class="member-meta">${{escapeHtml(date)}}${{escapeHtml(leave)}} 出門</span>
+          </div>
+        `;
+      }}).join("");
     }}
 
     function render(payload) {{
@@ -831,7 +894,10 @@ def render_dashboard_html_for_paths(
       const state = payload.state || "error";
       currentState = state;
       applyScreenClass();
-      stateLabel.textContent = stateLabels[state] || stateLabels.error;
+      const stateText = stateLabels[state] || stateLabels.error;
+      stateLabel.textContent = isHouseholdDashboard && payload.primary_member_name
+        ? `${{payload.primary_member_name}}｜${{stateText}}`
+        : stateText;
 
       if (!payload.ok) {{
         countdown.textContent = "--";
