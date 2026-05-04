@@ -260,21 +260,42 @@ async def dashboard_departure_check(user_id: int, payload: dict | None = Body(de
 @router.websocket("/ws/{user_id}")
 async def dashboard_ws(websocket: WebSocket, user_id: int):
     await websocket.accept()
+    print(f"[dashboard-ws] connected user_id={user_id}")
     try:
         while True:
-            await websocket.send_json(await get_dashboard_status_payload(user_id))
-            await asyncio.sleep(WEBSOCKET_REFRESH_SECONDS)
+            try:
+                payload = await get_dashboard_status_payload(user_id)
+                await websocket.send_json(payload)
+                await asyncio.sleep(WEBSOCKET_REFRESH_SECONDS)
+            except Exception as e:
+                print(f"[dashboard-ws] send error user_id={user_id} error={e}")
+                break
     except WebSocketDisconnect:
         print(f"[dashboard-ws] disconnected user_id={user_id}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @router.websocket("/household/{household_id}/ws")
 async def household_dashboard_ws(websocket: WebSocket, household_id: str):
     await websocket.accept()
+    print(f"[dashboard-ws] connected household_id={household_id}")
     try:
         while True:
-            payload = await get_household_dashboard_status_payload(household_id)
-            await websocket.send_json(payload)
-            await asyncio.sleep(payload.get("refresh_seconds") or WEBSOCKET_REFRESH_SECONDS)
+            try:
+                payload = await get_household_dashboard_status_payload(household_id)
+                await websocket.send_json(payload)
+                await asyncio.sleep(payload.get("refresh_seconds") or WEBSOCKET_REFRESH_SECONDS)
+            except Exception as e:
+                print(f"[dashboard-ws] send error household_id={household_id} error={e}")
+                break
     except WebSocketDisconnect:
         print(f"[dashboard-ws] household disconnected household_id={household_id}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

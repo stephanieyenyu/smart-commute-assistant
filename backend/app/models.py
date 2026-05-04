@@ -100,6 +100,14 @@ class CommuteScheduleTemplate(Base):
     is_fixed = Column(Boolean, nullable=False, default=True)
     is_active = Column(Boolean, nullable=False, default=True)
 
+    # Custom origin (fallback to home if null)
+    origin_address = Column(String, nullable=True)
+    origin_lat = Column(Float, nullable=True)
+    origin_lng = Column(Float, nullable=True)
+    origin_city = Column(String, nullable=True)
+    origin_township = Column(String, nullable=True)
+    origin_place_name = Column(String, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -217,11 +217,21 @@ def setup_quick_replies_for_step(step: str | None) -> list[dict]:
         return HOME_QUICK_REPLY
     if step == "office_location":
         return OFFICE_QUICK_REPLY
+    if step == "schedule_origin_question":
+        return ORIGIN_QUESTION_QUICK_REPLIES
+    if step == "schedule_origin_location":
+        return HOME_QUICK_REPLY
     if step == "preferred_arrival_time":
         return ARRIVAL_TIME_QUICK_REPLIES
     if step in {"active_weekdays", "custom_active_weekdays", *WIZARD_WEEKDAY_PENDING_FIELDS}:
         return WIZARD_WEEKDAY_QUICK_REPLIES
     return MAIN_MENU_QUICK_REPLIES
+
+
+ORIGIN_QUESTION_QUICK_REPLIES = [
+    {"type": "message", "label": "相同，從家裡出發", "text": "相同，從家裡出發"},
+    {"type": "message", "label": "不同，設定其他出發地", "text": "不同，設定其他出發地"},
+]
 
 
 WIZARD_WEEKDAY_QUICK_REPLIES = with_done_button([
@@ -239,6 +249,7 @@ SWITCH_SETTING_QUICK_REPLIES = [
 
 WIZARD_WEEKDAY_PENDING_FIELDS = {"wizard_active_weekdays", "wizard_custom_active_weekdays"}
 WIZARD_DESTINATION_PENDING_FIELDS = {"wizard_office_location"}
+WIZARD_ORIGIN_PENDING_FIELDS = {"schedule_origin_question", "schedule_origin_location"}
 SETTING_FLOW_PENDING_FIELDS = {
     "identity_type",
     "destination_label",
@@ -251,8 +262,10 @@ SETTING_FLOW_PENDING_FIELDS = {
     "template_label",
     "template_days",
     "template_conflict",
+    "confirm_reset",
     *WIZARD_WEEKDAY_PENDING_FIELDS,
     *WIZARD_DESTINATION_PENDING_FIELDS,
+    *WIZARD_ORIGIN_PENDING_FIELDS,
 }
 
 
@@ -284,6 +297,10 @@ def field_prompt_for_profile(field_name: str, profile) -> str:
         return f"請設定固定{label}。\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 08:30）"
     if field_name in {"active_weekdays", "custom_active_weekdays", *WIZARD_WEEKDAY_PENDING_FIELDS}:
         return "請選擇這組排程適用的重複提醒日。點選星期後會變成綠色，選完請按「儲存排程」。"
+    if field_name == "schedule_origin_question":
+        return "請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。"
+    if field_name == "schedule_origin_location":
+        return "請傳送這趟排程的專屬出發地址或位置 📍\n可以點下方按鈕開啟地圖，也可以直接輸入名稱或完整地址。"
     if field_name == "override_today_arrival_time":
         return f"請設定今天臨時{label}。\n點下方按鈕快速選擇，或直接輸入 HH:MM（例如 15:30）"
     if field_name == "override_tomorrow_arrival_time":
@@ -619,24 +636,66 @@ def parse_schedule_template_pending(value: str | None) -> dict:
         copy_from = int(copy_from_text) if copy_from_text else None
     except ValueError:
         copy_from = None
+
+    destination_id = None
+    if len(parts) > 5:
+        try:
+            destination_id = int(parts[5]) if parts[5] else None
+        except ValueError:
+            destination_id = None
+
+    origin_address, origin_lat, origin_lng, origin_city, origin_township, origin_place_name = None, None, None, None, None, None
+    if len(parts) > 6:
+        origin_parts = parts[6:12]
+        origin_address = decode_pending_part(origin_parts[0]) if len(origin_parts) > 0 and origin_parts[0] else None
+        try:
+            origin_lat = float(origin_parts[1]) if len(origin_parts) > 1 and origin_parts[1] else None
+        except (ValueError, IndexError):
+            origin_lat = None
+        try:
+            origin_lng = float(origin_parts[2]) if len(origin_parts) > 2 and origin_parts[2] else None
+        except (ValueError, IndexError):
+            origin_lng = None
+        origin_city = decode_pending_part(origin_parts[3]) if len(origin_parts) > 3 and origin_parts[3] else None
+        origin_township = decode_pending_part(origin_parts[4]) if len(origin_parts) > 4 and origin_parts[4] else None
+        origin_place_name = decode_pending_part(origin_parts[5]) if len(origin_parts) > 5 and origin_parts[5] else None
+
     return {
         "action": action,
         "time": time_value,
         "label": label,
         "days": sorted(days),
         "copy_from": copy_from,
+        "destination_id": destination_id,
+        "origin_address": origin_address,
+        "origin_lat": origin_lat,
+        "origin_lng": origin_lng,
+        "origin_city": origin_city,
+        "origin_township": origin_township,
+        "origin_place_name": origin_place_name,
     }
 
 
-def build_schedule_template_pending(action: str, time_value: str, label: str, days: list[int] | None = None, copy_from: int | None = None) -> str:
+def build_schedule_template_pending(action: str, time_value: str, label: str, days: list[int] | None = None, copy_from: int | None = None, destination_id: int | None = None, origin_address: str | None = None, origin_lat: float | None = None, origin_lng: float | None = None, origin_city: str | None = None, origin_township: str | None = None, origin_place_name: str | None = None) -> str:
     days_text = ",".join(str(day) for day in sorted(days or []))
     copy_text = "" if copy_from is None else str(copy_from)
+    dest_id_text = "" if destination_id is None else str(destination_id)
+    origin_text = "|".join([
+        encode_pending_part(origin_address or ""),
+        str(origin_lat or ""),
+        str(origin_lng or ""),
+        encode_pending_part(origin_city or ""),
+        encode_pending_part(origin_township or ""),
+        encode_pending_part(origin_place_name or ""),
+    ])
     return "|".join([
         action,
         encode_pending_part(time_value),
         encode_pending_part(label),
         days_text,
         copy_text,
+        dest_id_text,
+        origin_text,
     ])
 
 
@@ -725,6 +784,12 @@ def save_schedule_template_from_pending(db, user_id: int, pending: dict, *, repl
         name=f"{pending['label']} {pending['time']}",
         destination_id=destination.id if destination else None,
         replace_conflicts=replace_conflicts,
+        origin_address=pending.get("origin_address"),
+        origin_lat=pending.get("origin_lat"),
+        origin_lng=pending.get("origin_lng"),
+        origin_city=pending.get("origin_city"),
+        origin_township=pending.get("origin_township"),
+        origin_place_name=pending.get("origin_place_name"),
     )
 
 
@@ -1888,12 +1953,36 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["reset"]:
+                set_pending_field(db, user.id, "confirm_reset")
+                await reply_with_quick_reply(
+                    reply_token,
+                    "⚠️ 警告：執行重新設定將會『永久刪除』您之前設定的所有地址與排程資訊！\n\n"
+                    "💡 若您只是想要修改或刪除『單一排程』，請點選 [排程設定] 進行管理即可。\n\n"
+                    "請問您確定要徹底清除所有資料並重新開始嗎？",
+                    [
+                        {"type": "message", "label": "確定重設 (清除資料)", "text": "確定重設"},
+                        {"type": "message", "label": "取消 (保留資料)", "text": "取消重設"},
+                        {"type": "message", "label": "前往排程設定", "text": "排程設定"},
+                    ],
+                )
+                continue
+
+            if command_text in {"確定重設", "確定重設 (清除資料)"} and current_step == "confirm_reset":
                 reset_profile_for_reconfigure(db, user.id)
                 clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(
                     reply_token,
                     "好的，現在開始重新設定。\n" + field_prompt_for_profile("home_location", get_profile(db, user.id)),
                     HOME_QUICK_REPLY,
+                )
+                continue
+
+            if command_text in {"取消重設", "取消 (保留資料)"} and current_step == "confirm_reset":
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已取消重新設定，所有資料已保留。",
+                    MAIN_MENU_QUICK_REPLIES,
                 )
                 continue
 
@@ -3018,8 +3107,12 @@ async def line_webhook(
                         with_done_button([{"type": "location", "label": "📍 開啟地圖選位置"}]),
                     )
                     continue
-                set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], label, []))
-                await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], label, [], "請批次勾選這組時間適用的星期。")
+                set_pending_field(db, user.id, build_schedule_template_pending("schedule_origin_question", pending_template["time"], label, [], destination_id=destination.id))
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。",
+                    ORIGIN_QUESTION_QUICK_REPLIES,
+                )
                 continue
 
             if pending_template.get("action") == "template_destination_address":
@@ -3039,8 +3132,52 @@ async def line_webhook(
                     (geocode_result or {}).get("township"),
                     (geocode_result or {}).get("place_name"),
                 )
-                set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], destination.label, []))
-                await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], destination.label, [], "目的地地址已儲存，請批次勾選這組時間適用的星期。")
+                set_pending_field(db, user.id, build_schedule_template_pending("schedule_origin_question", pending_template["time"], destination.label, [], destination_id=destination.id))
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。",
+                    ORIGIN_QUESTION_QUICK_REPLIES,
+                )
+                continue
+
+            if pending_template.get("action") == "schedule_origin_question":
+                if user_text.strip() in {"相同，從家裡出發", "相同"}:
+                    # Use home as origin, proceed to weekday selection
+                    set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], pending_template["label"], pending_template.get("days", []), pending_template.get("copy_from"), destination_id=pending_template.get("destination_id")))
+                    await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], [], "出發地已設定為家裡，請批次勾選這組時間適用的星期。")
+                    continue
+                if user_text.strip() in {"不同，設定其他出發地", "不同"}:
+                    # Ask for custom origin
+                    set_pending_field(db, user.id, build_schedule_template_pending("schedule_origin_location", pending_template["time"], pending_template["label"], pending_template.get("days", []), pending_template.get("copy_from"), destination_id=pending_template.get("destination_id")))
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "請傳送這趟排程的專屬出發地址或位置 📍\n可以點下方按鈕開啟地圖，也可以直接輸入名稱或完整地址。",
+                        with_done_button([{"type": "location", "label": "📍 開啟地圖選位置"}]),
+                    )
+                    continue
+                await reply_with_quick_reply(reply_token, "請選擇出發地是否與家裡相同。", ORIGIN_QUESTION_QUICK_REPLIES)
+                continue
+
+            if pending_template.get("action") == "schedule_origin_location":
+                typed_address = user_text.strip()
+                if not typed_address:
+                    await reply_with_quick_reply(reply_token, "請輸入出發地址，或直接傳送地圖位置。", with_done_button([{"type": "location", "label": "📍 開啟地圖選位置"}]))
+                    continue
+                origin_geocode = await geocode_address(typed_address)
+                origin_lat = (origin_geocode or {}).get("lat")
+                origin_lng = (origin_geocode or {}).get("lng")
+                if origin_lat is None or origin_lng is None:
+                    await reply_with_quick_reply(reply_token, "找不到該出發地址的座標，請輸入更完整的地址。", with_done_button([{"type": "location", "label": "📍 開啟地圖選位置"}]))
+                    continue
+                # Store origin info in pending template
+                pending_template["origin_address"] = (origin_geocode or {}).get("formatted_address") or typed_address
+                pending_template["origin_lat"] = origin_lat
+                pending_template["origin_lng"] = origin_lng
+                pending_template["origin_city"] = (origin_geocode or {}).get("city")
+                pending_template["origin_township"] = (origin_geocode or {}).get("township")
+                pending_template["origin_place_name"] = (origin_geocode or {}).get("place_name")
+                set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], pending_template["label"], [], pending_template.get("copy_from"), destination_id=pending_template.get("destination_id"), origin_address=pending_template["origin_address"], origin_lat=pending_template["origin_lat"], origin_lng=pending_template["origin_lng"], origin_city=pending_template["origin_city"], origin_township=pending_template["origin_township"], origin_place_name=pending_template["origin_place_name"]))
+                await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], [], "出發地址已儲存，請批次勾選這組時間適用的星期。")
                 continue
 
             if pending_template.get("action") == "template_days":

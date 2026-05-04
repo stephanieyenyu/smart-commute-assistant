@@ -233,6 +233,55 @@ def get_next_setup_step(profile: CommuteProfile) -> str | None:
     return None
 
 
+def set_schedule_origin_from_home(db: Session, user_id: int, schedule_id: int):
+    """Copy user's home coordinates to a schedule's origin fields."""
+    profile = get_profile(db, user_id)
+    schedule = db.query(CommuteScheduleTemplate).filter(
+        CommuteScheduleTemplate.id == schedule_id,
+        CommuteScheduleTemplate.user_id == user_id,
+    ).first()
+    if not schedule:
+        return None
+    schedule.origin_address = profile.home_address
+    schedule.origin_lat = profile.home_lat
+    schedule.origin_lng = profile.home_lng
+    schedule.origin_city = profile.home_city
+    schedule.origin_township = profile.home_township
+    schedule.origin_place_name = profile.home_place_name
+    db.commit()
+    db.refresh(schedule)
+    return schedule
+
+
+def update_schedule_origin_coords(
+    db: Session,
+    user_id: int,
+    schedule_id: int,
+    address: str | None,
+    lat: float | None,
+    lng: float | None,
+    city: str | None = None,
+    township: str | None = None,
+    place_name: str | None = None,
+):
+    """Update a schedule's custom origin coordinates."""
+    schedule = db.query(CommuteScheduleTemplate).filter(
+        CommuteScheduleTemplate.id == schedule_id,
+        CommuteScheduleTemplate.user_id == user_id,
+    ).first()
+    if not schedule:
+        return None
+    schedule.origin_address = address
+    schedule.origin_lat = lat
+    schedule.origin_lng = lng
+    schedule.origin_city = city
+    schedule.origin_township = township
+    schedule.origin_place_name = place_name
+    db.commit()
+    db.refresh(schedule)
+    return schedule
+
+
 def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile = get_profile(db, user_id)
 
@@ -468,6 +517,12 @@ def create_schedule_template(
     is_fixed: bool = True,
     *,
     replace_conflicts: bool = False,
+    origin_address: str | None = None,
+    origin_lat: float | None = None,
+    origin_lng: float | None = None,
+    origin_city: str | None = None,
+    origin_township: str | None = None,
+    origin_place_name: str | None = None,
 ) -> CommuteScheduleTemplate:
     weekdays = sorted({int(day) for day in active_weekdays if 0 <= int(day) <= 6})
     if replace_conflicts:
@@ -482,6 +537,12 @@ def create_schedule_template(
         active_weekdays=weekdays,
         is_fixed=bool(is_fixed),
         is_active=True,
+        origin_address=origin_address,
+        origin_lat=origin_lat,
+        origin_lng=origin_lng,
+        origin_city=origin_city,
+        origin_township=origin_township,
+        origin_place_name=origin_place_name,
     )
     db.add(template)
     db.commit()
@@ -524,6 +585,9 @@ def effective_commute_setting_for_date(db: Session, profile: CommuteProfile, tar
         "schedule_template_id": template_id,
         "schedule_template": schedule_template,
         "destination": getattr(schedule_template, "destination", None) if schedule_template is not None else None,
+        "origin_lat": getattr(schedule_template, "origin_lat", None) if schedule_template is not None else None,
+        "origin_lng": getattr(schedule_template, "origin_lng", None) if schedule_template is not None else None,
+        "origin_address": getattr(schedule_template, "origin_address", None) if schedule_template is not None else None,
     }
 
 

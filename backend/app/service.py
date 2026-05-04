@@ -702,14 +702,26 @@ async def _compute_today_plan(
         office_lat = getattr(profile, "office_lat", None)
         office_lng = getattr(profile, "office_lng", None)
 
-        print(f"[compute-plan] coords home=({home_lat},{home_lng}) office=({office_lat},{office_lng}) arrival={effective_arrival_time}")
+        # Check for custom schedule origin
+        schedule_origin_lat = effective_setting.get("origin_lat")
+        schedule_origin_lng = effective_setting.get("origin_lng")
+        if schedule_origin_lat is not None and schedule_origin_lng is not None:
+            effective_origin_lat = schedule_origin_lat
+            effective_origin_lng = schedule_origin_lng
+            print(f"[compute-plan] using schedule custom origin: lat={effective_origin_lat} lng={effective_origin_lng}")
+        else:
+            effective_origin_lat = home_lat
+            effective_origin_lng = home_lng
+            print(f"[compute-plan] using home as origin: lat={effective_origin_lat} lng={effective_origin_lng}")
 
-        if home_lat is None or home_lng is None:
-            print(f"[compute-plan] missing home coordinates")
+        print(f"[compute-plan] coords origin=({effective_origin_lat},{effective_origin_lng}) office=({office_lat},{office_lng}) arrival={effective_arrival_time}")
+
+        if effective_origin_lat is None or effective_origin_lng is None:
+            print(f"[compute-plan] missing origin coordinates")
             return {
                 "ok": False,
                 "reason": "missing_home_address",
-                "message": "您的住家地址尚未設定完整經緯度，請重新傳送住家位置 📍",
+                "message": "您的出發地址尚未設定完整經緯度，請重新傳送出發位置 📍",
             }
 
         if office_lat is None or office_lng is None:
@@ -731,10 +743,19 @@ async def _compute_today_plan(
 
         print(f"[compute-plan] calling Google Maps API: mode_override={mode_override}")
 
+        # Inject effective origin into profile for API calls
+        api_profile = profile
+        if effective_origin_lat != home_lat or effective_origin_lng != home_lng:
+            api_profile = SimpleNamespace(**profile.__dict__)
+            api_profile.home_lat = effective_origin_lat
+            api_profile.home_lng = effective_origin_lng
+            if effective_setting.get("origin_address"):
+                api_profile.home_address = effective_setting["origin_address"]
+
         weather_info, option_choice = await asyncio.gather(
-            safe_call(get_commute_weather(profile), timeout_seconds=1.5),
+            safe_call(get_commute_weather(api_profile), timeout_seconds=1.5),
             safe_call(choose_commute_option_with_override(
-                profile=profile,
+                profile=api_profile,
                 effective_arrival_time=effective_arrival_time,
                 weather_buffer_minutes=0,
                 target_date=target_date,
