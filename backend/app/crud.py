@@ -284,11 +284,13 @@ def update_schedule_origin_coords(
 
 def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile = get_profile(db, user_id)
+    print(f"[reset-profile] Starting reset for user_id={user_id}")
 
-    db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).delete(synchronize_session=False)
-    db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).delete(synchronize_session=False)
-    db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
-    db.query(CommuteLog).filter(CommuteLog.user_id == user_id).delete(synchronize_session=False)
+    deleted_templates = db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).delete(synchronize_session=False)
+    deleted_destinations = db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).delete(synchronize_session=False)
+    deleted_overrides = db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
+    deleted_logs = db.query(CommuteLog).filter(CommuteLog.user_id == user_id).delete(synchronize_session=False)
+    print(f"[reset-profile] Deleted: templates={deleted_templates}, destinations={deleted_destinations}, overrides={deleted_overrides}, logs={deleted_logs}")
 
     profile.home_address = None
     profile.home_lat = None

@@ -1998,11 +1998,16 @@ async def line_webhook(
                 continue
 
             if command_text in {"確定重設", "確定重設 (清除資料)"} and current_step == "confirm_reset":
+                print(f"[reset] User {user.id} confirmed reset. Starting data wipe...")
                 reset_profile_for_reconfigure(db, user.id)
                 clear_today_reminder_state_for_user(user.id)
+                # 强制设定为 home_location 状态，确保进入 Onboarding
+                set_pending_field(db, user.id, "home_location")
+                profile_after_reset = get_profile(db, user.id)
+                print(f"[reset] After reset: pending_field={profile_after_reset.pending_field}")
                 await reply_with_quick_reply(
                     reply_token,
-                    "好的，現在開始重新設定。\n" + field_prompt_for_profile("home_location", get_profile(db, user.id)),
+                    "⚠️ 已清除所有个人资料、目的地与排程。\n\n现在开始重新设定：\n" + field_prompt_for_profile("home_location", profile_after_reset),
                     HOME_QUICK_REPLY,
                 )
                 continue
