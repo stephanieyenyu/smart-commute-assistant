@@ -1703,8 +1703,13 @@ async def line_webhook(
                         lng,
                         infer_city_from_text(raw_address),
                     )
-                    set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], destination.label, []))
-                    await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], destination.label, [], "目的地地址已儲存，請批次勾選這組時間適用的星期。")
+                    # 保存後詢問出發地
+                    set_pending_field(db, user.id, build_schedule_template_pending("schedule_origin_question", pending_template["time"], destination.label, [], destination_id=destination.id))
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"✅ 已設定目的地：{destination.address}\n\n請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。",
+                        ORIGIN_QUESTION_QUICK_REPLIES,
+                    )
                     continue
 
                 if current_step not in {"home_location", "office_location", *WIZARD_DESTINATION_PENDING_FIELDS}:
@@ -3140,24 +3145,24 @@ async def line_webhook(
                     await reply_with_quick_reply(reply_token, "請直接輸入目的地名稱，例如：學校、公司、兼職公司。", SCHEDULE_TEMPLATE_LABEL_QUICK_REPLIES)
                     continue
                 destination = get_destination_by_label(db, user.id, label)
-                if destination is None or not destination.address:
-                    set_pending_field(
-                        db,
-                        user.id,
-                        build_schedule_template_pending("template_destination_address", pending_template["time"], label, []),
-                    )
+                # 無論目的地是否存在，都彈出地圖讓用戶確認/選擇位置
+                set_pending_field(
+                    db,
+                    user.id,
+                    build_schedule_template_pending("template_destination_address", pending_template["time"], label, [], destination_id=destination.id if destination else None),
+                )
+                if destination and destination.address:
                     await reply_with_quick_reply(
                         reply_token,
-                        f"這是新的目的地「{label}」，請先輸入完整地址（或直接傳送地圖位置）以建立目的地資料。",
+                        f"已選擇目的地：{label}（{destination.address}）\n請確認位置是否正確，或點擊下方按鈕重新選擇地圖位置。",
+                        with_done_button([{"type": "location", "label": "📍 重新定位目的地"}]),
+                    )
+                else:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"這是新的目的地「{label}」，請點擊下方按鈕開啟地圖選擇位置，或直接輸入完整地址。",
                         with_done_button([{"type": "location", "label": "📍 開啟地圖選位置"}]),
                     )
-                    continue
-                set_pending_field(db, user.id, build_schedule_template_pending("schedule_origin_question", pending_template["time"], label, [], destination_id=destination.id))
-                await reply_with_quick_reply(
-                    reply_token,
-                    "請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。",
-                    ORIGIN_QUESTION_QUICK_REPLIES,
-                )
                 continue
 
             if pending_template.get("action") == "template_destination_address":
