@@ -937,21 +937,41 @@ def render_dashboard_html_for_paths(
       }}
     }}
 
+    let wsReconnectAttempts = 0;
+    const WS_MAX_RECONNECT_ATTEMPTS = 10;
+    const WS_BASE_RECONNECT_DELAY = 2000;
+
     function connectWebSocket() {{
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${{protocol}}://${{window.location.host}}${{wsPath}}`);
+
       ws.onopen = () => {{
+        wsReconnectAttempts = 0;
         connection.textContent = "即時更新中";
       }};
+
       ws.onmessage = (event) => {{
-        render(JSON.parse(event.data));
+        try {{
+          render(JSON.parse(event.data));
+        }} catch (e) {{
+          console.warn("WebSocket parse error", e);
+        }}
       }};
+
       ws.onclose = () => {{
-        connection.textContent = "即時連線中斷，改用定時更新";
-        setTimeout(connectWebSocket, 5000);
+        connection.textContent = "即時連線中斷，正在重連...";
+        wsReconnectAttempts++;
+        if (wsReconnectAttempts <= WS_MAX_RECONNECT_ATTEMPTS) {{
+          const delay = Math.min(WS_BASE_RECONNECT_DELAY * Math.pow(1.5, wsReconnectAttempts - 1), 30000);
+          console.log(`WebSocket reconnect attempt ${{wsReconnectAttempts}} in ${{delay}}ms`);
+          setTimeout(connectWebSocket, delay);
+        }} else {{
+          connection.textContent = "即時連線中斷，改用定時更新";
+        }}
       }};
+
       ws.onerror = () => {{
-        connection.textContent = "即時連線不穩，改用定時更新";
+        console.warn("WebSocket error, closing for reconnect");
         ws.close();
       }};
     }}
