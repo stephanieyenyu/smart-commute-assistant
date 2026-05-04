@@ -284,13 +284,19 @@ def update_schedule_origin_coords(
 
 def reset_profile_for_reconfigure(db: Session, user_id: int):
     profile = get_profile(db, user_id)
+    print(f"[reset-profile] ========== HARD RESET START =========")
     print(f"[reset-profile] Starting reset for user_id={user_id}")
 
+    # 物理刪除所有用戶相關資料
     deleted_templates = db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).delete(synchronize_session=False)
     deleted_destinations = db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).delete(synchronize_session=False)
     deleted_overrides = db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
     deleted_logs = db.query(CommuteLog).filter(CommuteLog.user_id == user_id).delete(synchronize_session=False)
-    print(f"[reset-profile] Deleted: templates={deleted_templates}, destinations={deleted_destinations}, overrides={deleted_overrides}, logs={deleted_logs}")
+    print(f"[reset-profile] Deleted records: templates={deleted_templates}, destinations={deleted_destinations}, overrides={deleted_overrides}, logs={deleted_logs}")
+    
+    # 同時清除 session 狀態，確保不會有殘留狀態
+    db.query(User).filter(User.id == user_id).update({"household_id": None})
+    print(f"[reset-profile] Cleared household_id")
 
     profile.home_address = None
     profile.home_lat = None
