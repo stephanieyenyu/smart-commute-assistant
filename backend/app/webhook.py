@@ -3221,33 +3221,33 @@ async def line_webhook(
                 await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], [], "出發地址已儲存，請批次勾選這組時間適用的星期。")
                 continue
 
-                if pending_template.get("action") == "template_days":
-                    weekdays = parse_custom_weekdays(user_text)
-                    if weekdays is None:
-                        await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], pending_template["days"], "請用下方卡片勾選星期，或輸入例如：週一週三週五。")
-                        continue
-                    pending_template["days"] = weekdays
-                    conflicts = get_schedule_conflicts(db, user.id, pending_template["days"])
-                    if conflicts:
-                        set_pending_field(db, user.id, build_schedule_template_pending("template_conflict", pending_template["time"], pending_template["label"], pending_template["days"], pending_template.get("copy_from"), destination_id=pending_template.get("destination_id"), origin_address=pending_template.get("origin_address"), origin_lat=pending_template.get("origin_lat"), origin_lng=pending_template.get("origin_lng"), origin_city=pending_template.get("origin_city"), origin_township=pending_template.get("origin_township"), origin_place_name=pending_template.get("origin_place_name")))
-                        await reply_with_quick_reply(
-                            reply_token,
-                            f"{format_schedule_conflict_text(db, user.id, pending_template['days'])}\n\n要以哪一組為準？",
-                            SCHEDULE_CONFLICT_QUICK_REPLIES,
-                        )
-                        continue
-                    created_template = save_schedule_template_from_pending(db, user.id, pending_template)
-                    set_pending_field(db, user.id, f"template_fixed_confirm:{created_template.id}")
-                    clear_today_reminder_state_for_user(user.id)
+            if pending_template.get("action") == "template_days":
+                weekdays = parse_custom_weekdays(user_text)
+                if weekdays is None:
+                    await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], pending_template["days"], "請用下方卡片勾選星期，或輸入例如：週一週三週五。")
+                    continue
+                pending_template["days"] = weekdays
+                conflicts = get_schedule_conflicts(db, user.id, pending_template["days"])
+                if conflicts:
+                    set_pending_field(db, user.id, build_schedule_template_pending("template_conflict", pending_template["time"], pending_template["label"], pending_template["days"], pending_template.get("copy_from"), destination_id=pending_template.get("destination_id"), origin_address=pending_template.get("origin_address"), origin_lat=pending_template.get("origin_lat"), origin_lng=pending_template.get("origin_lng"), origin_city=pending_template.get("origin_city"), origin_township=pending_template.get("origin_township"), origin_place_name=pending_template.get("origin_place_name")))
                     await reply_with_quick_reply(
                         reply_token,
-                        f"已新增常用排程：{schedule_template_summary(pending_template['time'], pending_template['label'], pending_template['days'])}\n請問這筆是否為固定排程？",
-                        with_done_button([
-                            {"type": "message", "label": "固定：是", "text": "固定排程 是"},
-                            {"type": "message", "label": "固定：否", "text": "固定排程 否"},
-                        ]),
+                        f"{format_schedule_conflict_text(db, user.id, pending_template['days'])}\n\n要以哪一組為準？",
+                        SCHEDULE_CONFLICT_QUICK_REPLIES,
                     )
                     continue
+                created_template = save_schedule_template_from_pending(db, user.id, pending_template)
+                set_pending_field(db, user.id, f"template_fixed_confirm:{created_template.id}")
+                clear_today_reminder_state_for_user(user.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    f"已新增常用排程：{schedule_template_summary(pending_template['time'], pending_template['label'], pending_template['days'])}\n請問這筆是否為固定排程？",
+                    with_done_button([
+                        {"type": "message", "label": "固定：是", "text": "固定排程 是"},
+                        {"type": "message", "label": "固定：否", "text": "固定排程 否"},
+                    ]),
+                )
+                continue
 
             if current_step in SCHEDULE_PENDING_FIELDS:
                 weekdays = parse_custom_weekdays(user_text)
