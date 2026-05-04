@@ -617,6 +617,12 @@ def encode_pending_part(value: str) -> str:
     return str(value or "").replace("|", "／").replace(":", "：").strip()
 
 
+def decode_pending_part(value: str) -> str | None:
+    if not value:
+        return None
+    return value.replace("／", "|").replace("：", ":").strip() or None
+
+
 def parse_schedule_template_pending(value: str | None) -> dict:
     parts = (value or "").split("|")
     if len(parts) < 5:
@@ -1478,7 +1484,13 @@ async def line_webhook(
                         set_pending_field(
                             db,
                             user.id,
-                            build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
+                            build_schedule_template_pending(
+                                "template_days", pending["time"], pending["label"], pending["days"],
+                                pending.get("copy_from"), destination_id=pending.get("destination_id"),
+                                origin_address=pending.get("origin_address"), origin_lat=pending.get("origin_lat"),
+                                origin_lng=pending.get("origin_lng"), origin_city=pending.get("origin_city"),
+                                origin_township=pending.get("origin_township"), origin_place_name=pending.get("origin_place_name"),
+                            ),
                         )
                         # 無縫複選：點擊當下只暫存，不額外推播新訊息避免洗版
                         continue
@@ -1500,7 +1512,13 @@ async def line_webhook(
                         set_pending_field(
                             db,
                             user.id,
-                            build_schedule_template_pending("template_days", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
+                            build_schedule_template_pending(
+                                "template_days", pending["time"], pending["label"], pending["days"],
+                                pending.get("copy_from"), destination_id=pending.get("destination_id"),
+                                origin_address=pending.get("origin_address"), origin_lat=pending.get("origin_lat"),
+                                origin_lng=pending.get("origin_lng"), origin_city=pending.get("origin_city"),
+                                origin_township=pending.get("origin_township"), origin_place_name=pending.get("origin_place_name"),
+                            ),
                         )
                         # 無縫複選：點擊當下只暫存，不額外推播新訊息避免洗版
                         continue
@@ -1510,7 +1528,13 @@ async def line_webhook(
                         set_pending_field(
                             db,
                             user.id,
-                            build_schedule_template_pending("template_conflict", pending["time"], pending["label"], pending["days"], pending.get("copy_from")),
+                            build_schedule_template_pending(
+                                "template_conflict", pending["time"], pending["label"], pending["days"],
+                                pending.get("copy_from"), destination_id=pending.get("destination_id"),
+                                origin_address=pending.get("origin_address"), origin_lat=pending.get("origin_lat"),
+                                origin_lng=pending.get("origin_lng"), origin_city=pending.get("origin_city"),
+                                origin_township=pending.get("origin_township"), origin_place_name=pending.get("origin_place_name"),
+                            ),
                         )
                         await reply_with_quick_reply(
                             reply_token,
@@ -1554,7 +1578,13 @@ async def line_webhook(
                             await reply_with_quick_reply(reply_token, "找不到原本排程，請重新選擇。", TIME_TOPIC_QUICK_REPLIES)
                             continue
                         days = template_weekdays(template)
-                        set_pending_field(db, user.id, build_schedule_template_pending("template_days", time_value, template.destination_label, days, copy_from=template.id))
+                        set_pending_field(db, user.id, build_schedule_template_pending(
+                            "template_days", time_value, template.destination_label, days, copy_from=template.id,
+                            destination_id=template.destination_id,
+                            origin_address=template.origin_address, origin_lat=template.origin_lat,
+                            origin_lng=template.origin_lng, origin_city=template.origin_city,
+                            origin_township=template.origin_township, origin_place_name=template.origin_place_name,
+                        ))
                         await reply_schedule_template_weekday_picker(reply_token, time_value, template.destination_label, days, "已複製原排程，請確認星期後按「儲存排程」。")
                         continue
                     was_initial_arrival = (
@@ -3084,7 +3114,13 @@ async def line_webhook(
                     await reply_with_quick_reply(reply_token, "時間格式錯誤，請輸入 HH:MM，例如 08:30。", ARRIVAL_TIME_QUICK_REPLIES)
                     continue
                 days = template_weekdays(template)
-                set_pending_field(db, user.id, build_schedule_template_pending("template_days", value, template.destination_label, days, copy_from=template.id))
+                set_pending_field(db, user.id, build_schedule_template_pending(
+                    "template_days", value, template.destination_label, days, copy_from=template.id,
+                    destination_id=template.destination_id,
+                    origin_address=template.origin_address, origin_lat=template.origin_lat,
+                    origin_lng=template.origin_lng, origin_city=template.origin_city,
+                    origin_township=template.origin_township, origin_place_name=template.origin_place_name,
+                ))
                 await reply_schedule_template_weekday_picker(reply_token, value, template.destination_label, days, "已複製原排程，請確認星期後按「儲存排程」。")
                 continue
 
@@ -3180,33 +3216,33 @@ async def line_webhook(
                 await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], [], "出發地址已儲存，請批次勾選這組時間適用的星期。")
                 continue
 
-            if pending_template.get("action") == "template_days":
-                weekdays = parse_custom_weekdays(user_text)
-                if weekdays is None:
-                    await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], pending_template["days"], "請用下方卡片勾選星期，或輸入例如：週一週三週五。")
-                    continue
-                pending_template["days"] = weekdays
-                conflicts = get_schedule_conflicts(db, user.id, pending_template["days"])
-                if conflicts:
-                    set_pending_field(db, user.id, build_schedule_template_pending("template_conflict", pending_template["time"], pending_template["label"], pending_template["days"], pending_template.get("copy_from")))
+                if pending_template.get("action") == "template_days":
+                    weekdays = parse_custom_weekdays(user_text)
+                    if weekdays is None:
+                        await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], pending_template["days"], "請用下方卡片勾選星期，或輸入例如：週一週三週五。")
+                        continue
+                    pending_template["days"] = weekdays
+                    conflicts = get_schedule_conflicts(db, user.id, pending_template["days"])
+                    if conflicts:
+                        set_pending_field(db, user.id, build_schedule_template_pending("template_conflict", pending_template["time"], pending_template["label"], pending_template["days"], pending_template.get("copy_from"), destination_id=pending_template.get("destination_id"), origin_address=pending_template.get("origin_address"), origin_lat=pending_template.get("origin_lat"), origin_lng=pending_template.get("origin_lng"), origin_city=pending_template.get("origin_city"), origin_township=pending_template.get("origin_township"), origin_place_name=pending_template.get("origin_place_name")))
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"{format_schedule_conflict_text(db, user.id, pending_template['days'])}\n\n要以哪一組為準？",
+                            SCHEDULE_CONFLICT_QUICK_REPLIES,
+                        )
+                        continue
+                    created_template = save_schedule_template_from_pending(db, user.id, pending_template)
+                    set_pending_field(db, user.id, f"template_fixed_confirm:{created_template.id}")
+                    clear_today_reminder_state_for_user(user.id)
                     await reply_with_quick_reply(
                         reply_token,
-                        f"{format_schedule_conflict_text(db, user.id, pending_template['days'])}\n\n要以哪一組為準？",
-                        SCHEDULE_CONFLICT_QUICK_REPLIES,
+                        f"已新增常用排程：{schedule_template_summary(pending_template['time'], pending_template['label'], pending_template['days'])}\n請問這筆是否為固定排程？",
+                        with_done_button([
+                            {"type": "message", "label": "固定：是", "text": "固定排程 是"},
+                            {"type": "message", "label": "固定：否", "text": "固定排程 否"},
+                        ]),
                     )
                     continue
-                created_template = save_schedule_template_from_pending(db, user.id, pending_template)
-                set_pending_field(db, user.id, f"template_fixed_confirm:{created_template.id}")
-                clear_today_reminder_state_for_user(user.id)
-                await reply_with_quick_reply(
-                    reply_token,
-                    f"已新增常用排程：{schedule_template_summary(pending_template['time'], pending_template['label'], pending_template['days'])}\n請問這筆是否為固定排程？",
-                    with_done_button([
-                        {"type": "message", "label": "固定：是", "text": "固定排程 是"},
-                        {"type": "message", "label": "固定：否", "text": "固定排程 否"},
-                    ]),
-                )
-                continue
 
             if current_step in SCHEDULE_PENDING_FIELDS:
                 weekdays = parse_custom_weekdays(user_text)
