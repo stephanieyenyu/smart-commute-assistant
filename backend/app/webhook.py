@@ -1281,6 +1281,7 @@ async def line_webhook(
                 postback_date = params.get("date") if isinstance(params, dict) else getattr(params, "date", None)
                 if postback_action == "departure_check":
                     if postback_choice == "left":
+                        print(f"[postback] user_id={user.id} confirmed departure (left)")
                         confirm_departure_for_user(db, user.id, today_date)
                         await reply_with_quick_reply(
                             reply_token,

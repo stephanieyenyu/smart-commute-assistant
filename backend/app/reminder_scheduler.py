@@ -28,6 +28,7 @@ from app.departure_confirmation import (
     DEPARTURE_TIMEOUT_LINE_MESSAGE,
     DEPARTURE_TIMEOUT_LOOKAHEAD_HOURS,
     DEPARTURE_TIMEOUT_MINUTES,
+    send_departure_check_for_user,
 )
 from app.reminder_timing import (
     ReminderTimingDecision,
@@ -43,8 +44,9 @@ _PREPARE_ATTEMPT_CACHE: dict[tuple[int, str], datetime] = {}
 PREPARE_RETRY_SECONDS = 300
 BUS_RECOMPUTE_SECONDS = 60
 METRO_RECOMPUTE_SECONDS = 300
-MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8
-WATCHDOG_DEPARTURE_WARNING_SECONDS = 15 * 60
+WATCHDOG_ONE_HOUR_BEFORE_SECONDS = 60 * 60
+WATCHDOG_FIVE_MIN_BEFORE_SECONDS = 5 * 60
+WATCHDOG_TRIGGER_TOLERANCE_SECONDS = 180
 SNOOZE_ONE_MINUTE_WARNING_SECONDS = 60
 DEPARTURE_TIMEOUT_SECONDS = DEPARTURE_TIMEOUT_MINUTES * 60
 
@@ -243,6 +245,8 @@ async def check_and_send_departure_reminders():
                     continue
 
                 if timing_decision == ReminderTimingDecision.SEND:
+                    # LINE text push is completely independent of voice/dashboard state
+                    # It fires purely based on time reaching the departure threshold
                     await push_with_quick_reply(
                         user.line_user_id,
                         override.frozen_reminder_text,
@@ -256,6 +260,15 @@ async def check_and_send_departure_reminders():
                         sent_at=now_dt,
                     )
                     print(f"[reminder] sent user_id={user.id} at {now_hhmmss}")
+
+                    # Immediately trigger departure check ("您出門了嗎？") after sending reminder
+                    # This is fully decoupled from voice - only depends on time
+                    if not override.departure_check_sent_at:
+                        try:
+                            await send_departure_check_for_user(db, user.id, today, sent_at=now_dt)
+                            print(f"[reminder] departure-check triggered user_id={user.id}")
+                        except Exception as e:
+                            print(f"[reminder] departure-check failed user_id={user.id} error={e}")
 
             except Exception as e:
                 import traceback
@@ -462,10 +475,16 @@ async def send_nightly_briefs():
 
 
 async def run_morning_watchdog():
+    """Morning watchdog that triggers alerts at exactly two times:
+    1. One hour before estimated departure time
+    2. Five minutes before estimated departure time
+    Each trigger re-fetches live API data and sends a fresh push notification.
+    No other alerts are sent outside these two trigger points."""
     db = SessionLocal()
     try:
         now_dt = now_taipei()
         today = now_dt.date()
+        now_sec = current_seconds_of_day()
 
         for profile in get_all_profiles(db):
             try:
@@ -476,18 +495,48 @@ async def run_morning_watchdog():
                 override = get_override_for_date(db, profile.user_id, today)
                 if not effective_commute_date_is_active(db, profile, today, override):
                     continue
+                if override and override.departure_confirmed_at:
+                    continue
 
-                effective_arrival_time = _effective_arrival_time_for_profile(db, profile, today)
-                arrival_dt = _parse_hhmm_for_date(today, effective_arrival_time)
-                if arrival_dt is None:
+                # Get departure time from frozen data or compute fresh
+                departure_hhmm = override.frozen_departure_time if override else None
+                if not departure_hhmm:
+                    plan = await build_today_commute_payload(
+                        db=db,
+                        user_id=profile.user_id,
+                        target_date=today,
+                        force_mode_override=None,
+                        header="⚠️ 早晨通勤監控：",
+                    )
+                    if not plan.get("ok"):
+                        continue
+                    departure_hhmm = plan.get("final_departure_time")
+                    if not departure_hhmm:
+                        continue
+
+                departure_sec = hhmm_to_seconds(departure_hhmm)
+                seconds_until = departure_sec - now_sec
+
+                # Check if we are within tolerance of the two trigger points
+                one_hour_trigger = abs(seconds_until - WATCHDOG_ONE_HOUR_BEFORE_SECONDS) <= WATCHDOG_TRIGGER_TOLERANCE_SECONDS
+                five_min_trigger = abs(seconds_until - WATCHDOG_FIVE_MIN_BEFORE_SECONDS) <= WATCHDOG_TRIGGER_TOLERANCE_SECONDS
+
+                if not one_hour_trigger and not five_min_trigger:
                     continue
-                if not (arrival_dt - timedelta(hours=MORNING_WATCHDOG_LOOKAHEAD_HOURS) <= now_dt <= arrival_dt):
-                    continue
+
+                # Determine which trigger this is
+                if one_hour_trigger:
+                    trigger_label = "一小時前"
+                    alert_key_prefix = "watchdog_1h"
+                else:
+                    trigger_label = "五分鐘前"
+                    alert_key_prefix = "watchdog_5m"
 
                 user = db.query(User).filter(User.id == profile.user_id).first()
                 if not user or not user.line_user_id:
                     continue
 
+                # Re-fetch live API data for this trigger
                 payload = await build_today_commute_payload(
                     db=db,
                     user_id=user.id,
@@ -498,29 +547,16 @@ async def run_morning_watchdog():
                 if not payload.get("ok"):
                     continue
 
-                departure_sec = hhmm_to_seconds(payload["final_departure_time"])
-                seconds_until_departure = departure_sec - current_seconds_of_day()
-                weather_buffer = payload.get("weather_buffer") or 0
-                recommended_mode = payload.get("recommended_mode")
-                mode_override = payload.get("mode_override") or "auto"
-                should_alert = (
-                    weather_buffer > 0
-                    or 0 <= seconds_until_departure <= WATCHDOG_DEPARTURE_WARNING_SECONDS
-                    or (mode_override == "auto" and recommended_mode == "metro")
-                )
-                if not should_alert:
-                    continue
-
                 alert_key = _hash_notification_key(
-                    "watchdog",
+                    alert_key_prefix,
                     today.isoformat(),
                     payload.get("effective_arrival_time"),
                     payload.get("final_departure_time"),
-                    recommended_mode,
-                    weather_buffer,
-                    payload.get("text"),
+                    payload.get("recommended_mode"),
+                    payload.get("weather_buffer"),
                 )
                 if override and override.watchdog_alert_key == alert_key:
+                    print(f"[watchdog] duplicate {trigger_label} skipped user_id={user.id}")
                     continue
 
                 try:
@@ -530,11 +566,11 @@ async def run_morning_watchdog():
 
                 text = (
                     f"{payload['text']}\n\n"
-                    "系統已更新今天的出門提醒，會持續監控即時交通與天氣。"
+                    f"🔔 這是出發前{trigger_label}的即時更新，系統會持續監控交通與天氣狀況。"
                 )
                 await push_with_quick_reply(user.line_user_id, text, WATCHDOG_QUICK_REPLIES)
                 mark_watchdog_alert_sent(db, user.id, today, alert_key, now_dt)
-                print(f"[watchdog] sent user_id={user.id} target_date={today.isoformat()}")
+                print(f"[watchdog] {trigger_label} sent user_id={user.id} departure={departure_hhmm}")
             except Exception as e:
                 import traceback
                 print(f"[watchdog] failed user_id={getattr(profile, 'user_id', None)} error={e}")
@@ -565,7 +601,7 @@ def start_reminder_scheduler():
     scheduler.add_job(
         run_morning_watchdog,
         "interval",
-        minutes=5,
+        minutes=1,
         id="morning_watchdog_job",
         replace_existing=True,
     )
