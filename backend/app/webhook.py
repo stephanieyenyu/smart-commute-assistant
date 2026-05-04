@@ -1998,6 +1998,7 @@ async def line_webhook(
                 continue
 
             if command_text in {"確定重設", "確定重設 (清除資料)"} and current_step == "confirm_reset":
+                print(f"[reset] ========= USER CONFIRMED HARD RESET =========")
                 print(f"[reset] User {user.id} confirmed reset. Starting data wipe...")
                 reset_profile_for_reconfigure(db, user.id)
                 clear_today_reminder_state_for_user(user.id)
@@ -2005,11 +2006,14 @@ async def line_webhook(
                 set_pending_field(db, user.id, "home_location")
                 profile_after_reset = get_profile(db, user.id)
                 print(f"[reset] After reset: pending_field={profile_after_reset.pending_field}")
+                # 強制引導至初始設定，傳送第一步引導訊息
                 await reply_with_quick_reply(
                     reply_token,
-                    "⚠️ 已清除所有个人资料、目的地与排程。\n\n现在开始重新设定：\n" + field_prompt_for_profile("home_location", profile_after_reset),
+                    "⚠️ 已徹底清除您的個人資料、所有目的地與排程紀錄！\n\n🔄 現在開始重新設定：\n" 
+                    + "【步驟 1/4】" + field_prompt_for_profile("home_location", profile_after_reset),
                     HOME_QUICK_REPLY,
                 )
+                print(f"[reset] ========= HARD RESET COMPLETE - ONBOARDING STARTED =========")
                 continue
 
             if command_text in {"取消重設", "取消 (保留資料)"} and current_step == "confirm_reset":
@@ -3173,10 +3177,11 @@ async def line_webhook(
                     (geocode_result or {}).get("township"),
                     (geocode_result or {}).get("place_name"),
                 )
+                # 強制彈出地圖按鈕讓用戶確認位置，確保取得正確經緯度
                 set_pending_field(db, user.id, build_schedule_template_pending("schedule_origin_question", pending_template["time"], destination.label, [], destination_id=destination.id))
                 await reply_with_quick_reply(
                     reply_token,
-                    "請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。",
+                    f"✅ 已設定目的地：{destination.address}\n\n請問這趟行程的出發地與預設的「家裡」相同嗎？\n\n選「相同」直接使用家裡地址出發。\n選「不同」可設定這趟排程的專屬出發地址。",
                     ORIGIN_QUESTION_QUICK_REPLIES,
                 )
                 continue
@@ -3218,7 +3223,7 @@ async def line_webhook(
                 pending_template["origin_township"] = (origin_geocode or {}).get("township")
                 pending_template["origin_place_name"] = (origin_geocode or {}).get("place_name")
                 set_pending_field(db, user.id, build_schedule_template_pending("template_days", pending_template["time"], pending_template["label"], [], pending_template.get("copy_from"), destination_id=pending_template.get("destination_id"), origin_address=pending_template["origin_address"], origin_lat=pending_template["origin_lat"], origin_lng=pending_template["origin_lng"], origin_city=pending_template["origin_city"], origin_township=pending_template["origin_township"], origin_place_name=pending_template["origin_place_name"]))
-                await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], [], "出發地址已儲存，請批次勾選這組時間適用的星期。")
+                await reply_schedule_template_weekday_picker(reply_token, pending_template["time"], pending_template["label"], [], f"✅ 已設定出發地址：{pending_template['origin_address']}\n請批次勾選這組時間適用的星期。")
                 continue
 
             if pending_template.get("action") == "template_days":
