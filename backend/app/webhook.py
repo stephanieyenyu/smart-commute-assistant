@@ -327,6 +327,8 @@ def setting_step_label(step: str | None) -> str:
         return "常用排程"
     if step and step.startswith("copy_template_time:"):
         return "複製排程"
+    if step and (step.startswith("add_schedule:") or step.startswith("add_schedule_pick_origin:") or step.startswith("add_schedule_pick_destination:")):
+        return "新增排程"
     return {
         "identity_type": "身份",
         "destination_label": "目的地名稱",
@@ -346,6 +348,8 @@ def is_setting_flow_pending(step: str | None) -> bool:
     if not step:
         return False
     if step.startswith("confirm_switch|") or step.startswith("copy_template_time:"):
+        return True
+    if step.startswith("add_schedule:") or step.startswith("add_schedule_pick_origin:") or step.startswith("add_schedule_pick_destination:"):
         return True
     if parse_schedule_template_pending(step).get("action"):
         return True
@@ -1159,6 +1163,394 @@ async def reply_schedule_template_weekday_picker(reply_token: str, time_value: s
     )
 
 
+# ===========================================================
+# 新版「新增排程」Flex Message 表單
+# ===========================================================
+
+def parse_add_schedule_pending(value: str | None) -> dict:
+    """
+    解析 add_schedule: 前綴的 pending_field。
+    格式：add_schedule:<time>|<origin_label>|<origin_lat>|<origin_lng>|<dest_label>|<dest_lat>|<dest_lng>|<days>
+    days 為逗號分隔的整數（0=週日,1=週一,...,6=週六）
+    """
+    if not value or not value.startswith("add_schedule:"):
+        return {}
+    payload = value[len("add_schedule:"):]
+    parts = payload.split("|")
+    # 補齊至 8 個欄位
+    while len(parts) < 8:
+        parts.append("")
+
+    def _float(s: str) -> float | None:
+        try:
+            return float(s) if s else None
+        except ValueError:
+            return None
+
+    def _days(s: str) -> list[int]:
+        result = []
+        for item in s.split(","):
+            try:
+                d = int(item)
+                if 0 <= d <= 6 and d not in result:
+                    result.append(d)
+            except (ValueError, TypeError):
+                pass
+        return sorted(result)
+
+    return {
+        "time": parts[0] or "09:00",
+        "origin_label": parts[1] or "",
+        "origin_lat": _float(parts[2]),
+        "origin_lng": _float(parts[3]),
+        "dest_label": parts[4] or "",
+        "dest_lat": _float(parts[5]),
+        "dest_lng": _float(parts[6]),
+        "days": _days(parts[7]) if parts[7] else [1, 2, 3, 4, 5],
+    }
+
+
+def build_add_schedule_pending(
+    time: str = "09:00",
+    origin_label: str = "",
+    origin_lat: float | None = None,
+    origin_lng: float | None = None,
+    dest_label: str = "",
+    dest_lat: float | None = None,
+    dest_lng: float | None = None,
+    days: list[int] | None = None,
+) -> str:
+    """建立 add_schedule: 前綴的 pending_field 字串。"""
+    if days is None:
+        days = [1, 2, 3, 4, 5]
+    days_str = ",".join(str(d) for d in sorted(days))
+    parts = [
+        time or "09:00",
+        origin_label or "",
+        str(origin_lat) if origin_lat is not None else "",
+        str(origin_lng) if origin_lng is not None else "",
+        dest_label or "",
+        str(dest_lat) if dest_lat is not None else "",
+        str(dest_lng) if dest_lng is not None else "",
+        days_str,
+    ]
+    return "add_schedule:" + "|".join(parts)
+
+
+def build_add_schedule_flex(
+    profile,
+    time: str = "09:00",
+    origin_label: str = "",
+    origin_lat: float | None = None,
+    origin_lng: float | None = None,
+    dest_label: str = "",
+    dest_lat: float | None = None,
+    dest_lng: float | None = None,
+    days: list[int] | None = None,
+) -> dict:
+    """
+    建立新版「新增通勤排程」Flex Message 表單。
+    動態顯示出發地、目的地座標與選取的星期。
+    """
+    if days is None:
+        days = [1, 2, 3, 4, 5]
+    active_days = set(days)
+
+    # 出發地顯示文字
+    if origin_lat is not None and origin_lng is not None:
+        origin_display = f"📍 {origin_label or '自訂位置'} ({origin_lat:.4f}, {origin_lng:.4f})"
+    elif origin_label:
+        origin_display = f"📍 {origin_label}"
+    else:
+        home_address = getattr(profile, "home_address", None)
+        origin_display = f"🏠 預設：{home_address[:20] + '...' if home_address and len(home_address) > 20 else (home_address or '我的家')}"
+
+    # 目的地顯示文字
+    if dest_lat is not None and dest_lng is not None:
+        dest_display = f"📍 {dest_label or '自訂位置'} ({dest_lat:.4f}, {dest_lng:.4f})"
+    elif dest_label:
+        dest_display = f"📍 {dest_label}"
+    else:
+        dest_display = "尚未設定"
+
+    dest_color = "#333333" if dest_label or dest_lat is not None else "#b2b2b2"
+
+    def day_button(day: int, label: str) -> dict:
+        active = day in active_days
+        return {
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": label,
+                "data": f"action=toggle_day&day={day}",
+            },
+            "style": "primary",
+            "color": "#1DB446" if active else "#AAAAAA",
+            "height": "sm",
+        }
+
+    return {
+        "type": "bubble",
+        "size": "giga",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📅 新增通勤排程",
+                    "weight": "bold",
+                    "size": "xl",
+                    "color": "#FFFFFF",
+                },
+                {
+                    "type": "text",
+                    "text": "請確認排程資訊，完成後點擊儲存",
+                    "size": "xs",
+                    "color": "#dddddd",
+                    "margin": "sm",
+                    "wrap": True,
+                },
+            ],
+            "backgroundColor": "#5E6472",
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                # 出發地
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "📍 出發地",
+                            "size": "sm",
+                            "color": "#aaaaaa",
+                            "weight": "bold",
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "margin": "sm",
+                            "alignItems": "center",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": origin_display,
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 3,
+                                    "color": "#333333",
+                                    "wrap": True,
+                                },
+                                {
+                                    "type": "button",
+                                    "action": {
+                                        "type": "postback",
+                                        "label": "更改定位",
+                                        "data": "action=pick_location&target=origin",
+                                    },
+                                    "style": "secondary",
+                                    "height": "sm",
+                                    "flex": 2,
+                                },
+                            ],
+                        },
+                    ],
+                },
+                {"type": "separator"},
+                # 目的地
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "🎯 目的地",
+                            "size": "sm",
+                            "color": "#aaaaaa",
+                            "weight": "bold",
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "margin": "sm",
+                            "alignItems": "center",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": dest_display,
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 3,
+                                    "color": dest_color,
+                                    "wrap": True,
+                                },
+                                {
+                                    "type": "button",
+                                    "action": {
+                                        "type": "postback",
+                                        "label": "更改定位",
+                                        "data": "action=pick_location&target=destination",
+                                    },
+                                    "style": "secondary",
+                                    "height": "sm",
+                                    "flex": 2,
+                                },
+                            ],
+                        },
+                    ],
+                },
+                {"type": "separator"},
+                # 抵達時間
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "⏰ 預計抵達時間",
+                            "size": "sm",
+                            "color": "#aaaaaa",
+                            "weight": "bold",
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "margin": "sm",
+                            "alignItems": "center",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": time or "09:00",
+                                    "weight": "bold",
+                                    "size": "md",
+                                    "flex": 3,
+                                    "color": "#333333",
+                                },
+                                {
+                                    "type": "button",
+                                    "action": {
+                                        "type": "datetimepicker",
+                                        "label": "選擇",
+                                        "data": "action=edit_time",
+                                        "mode": "time",
+                                    },
+                                    "style": "secondary",
+                                    "height": "sm",
+                                    "flex": 1,
+                                },
+                            ],
+                        },
+                    ],
+                },
+                {"type": "separator"},
+                # 提醒星期
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "🗓️ 提醒星期（點擊切換開關）",
+                            "size": "sm",
+                            "color": "#aaaaaa",
+                            "weight": "bold",
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "margin": "md",
+                            "spacing": "sm",
+                            "contents": [
+                                day_button(1, "一"),
+                                day_button(2, "二"),
+                                day_button(3, "三"),
+                                day_button(4, "四"),
+                                day_button(5, "五"),
+                                day_button(6, "六"),
+                                day_button(0, "日"),
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "✅ 確認並儲存排程",
+                        "data": "action=submit_schedule",
+                    },
+                    "style": "primary",
+                    "color": "#1DB446",
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "取消",
+                        "data": "action=cancel_schedule",
+                    },
+                    "style": "link",
+                    "color": "#ff4d4f",
+                    "margin": "sm",
+                },
+            ],
+        },
+    }
+
+
+async def push_add_schedule_flex(line_user_id: str, profile, pending: dict) -> None:
+    """用 push API 重新推播最新的新增排程表單（用於 location 更新後刷新卡片）。"""
+    from app.line_client import push_with_quick_reply
+    import httpx
+    from app.config import LINE_CHANNEL_ACCESS_TOKEN
+
+    flex_contents = build_add_schedule_flex(
+        profile,
+        time=pending.get("time", "09:00"),
+        origin_label=pending.get("origin_label", ""),
+        origin_lat=pending.get("origin_lat"),
+        origin_lng=pending.get("origin_lng"),
+        dest_label=pending.get("dest_label", ""),
+        dest_lat=pending.get("dest_lat"),
+        dest_lng=pending.get("dest_lng"),
+        days=pending.get("days", [1, 2, 3, 4, 5]),
+    )
+    message = {
+        "type": "flex",
+        "altText": "📅 新增通勤排程（已更新定位）",
+        "contents": flex_contents,
+    }
+    payload = {
+        "to": line_user_id,
+        "messages": [message],
+    }
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.post(
+                "https://api.line.me/v2/bot/message/push",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+    except Exception as e:
+        print(f"[add_schedule_flex] push error: {e}")
+
+
 def build_command_help_carousel() -> dict:
     bubbles = []
     for title, prompts in CANONICAL_PROMPT_GROUPS.items():
@@ -1727,6 +2119,204 @@ async def line_webhook(
                     )
                     continue
 
+                # -------------------------------------------------------
+                # 新版「新增排程」Flex 表單 postback handlers
+                # -------------------------------------------------------
+
+                # 切換星期
+                if postback_action == "toggle_day":
+                    profile = get_profile(db, user.id)
+                    pf = profile.pending_field or ""
+                    if pf.startswith("add_schedule_pick_origin:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_origin:"):])
+                    elif pf.startswith("add_schedule_pick_destination:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_destination:"):])
+                    else:
+                        pending = parse_add_schedule_pending(pf)
+                    if not pending:
+                        await reply_with_quick_reply(reply_token, "目前沒有正在新增的排程，請先點選「新增常用排程」。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    try:
+                        day = int((postback_parts.get("day") or [""])[0])
+                    except ValueError:
+                        day = -1
+                    if not 0 <= day <= 6:
+                        continue
+                    days = set(pending.get("days", [1, 2, 3, 4, 5]))
+                    if day in days:
+                        days.remove(day)
+                    else:
+                        days.add(day)
+                    pending["days"] = sorted(days)
+                    set_pending_field(db, user.id, build_add_schedule_pending(**pending))
+                    # 重新推播更新後的卡片
+                    await reply_flex_with_quick_reply(
+                        reply_token,
+                        "📅 新增通勤排程（已更新星期）",
+                        build_add_schedule_flex(profile, **pending),
+                        [],
+                    )
+                    continue
+
+                # 修改抵達時間（datetimepicker 回傳）
+                if postback_action == "edit_time" and time_value:
+                    profile = get_profile(db, user.id)
+                    pf = profile.pending_field or ""
+                    if pf.startswith("add_schedule_pick_origin:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_origin:"):])
+                    elif pf.startswith("add_schedule_pick_destination:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_destination:"):])
+                    else:
+                        pending = parse_add_schedule_pending(pf)
+                    if not pending:
+                        await reply_with_quick_reply(reply_token, "目前沒有正在新增的排程，請先點選「新增常用排程」。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    pending["time"] = time_value
+                    set_pending_field(db, user.id, build_add_schedule_pending(**pending))
+                    await reply_flex_with_quick_reply(
+                        reply_token,
+                        "📅 新增通勤排程（已更新時間）",
+                        build_add_schedule_flex(profile, **pending),
+                        [],
+                    )
+                    continue
+
+                # 點擊「更改定位」→ 回傳帶 location Quick Reply 的訊息
+                if postback_action == "pick_location":
+                    profile = get_profile(db, user.id)
+                    pf = profile.pending_field or ""
+                    # 支援 add_schedule:、add_schedule_pick_origin:、add_schedule_pick_destination: 三種狀態
+                    if pf.startswith("add_schedule_pick_origin:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_origin:"):])
+                    elif pf.startswith("add_schedule_pick_destination:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_destination:"):])
+                    else:
+                        pending = parse_add_schedule_pending(pf)
+                    if not pending:
+                        await reply_with_quick_reply(reply_token, "目前沒有正在新增的排程，請先點選「新增常用排程」。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    target = (postback_parts.get("target") or ["origin"])[0]
+                    if target == "destination":
+                        # 切換到「等待目的地定位」狀態
+                        set_pending_field(db, user.id, "add_schedule_pick_destination:" + build_add_schedule_pending(**pending)[len("add_schedule:"):])
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "請傳送目的地位置 🎯\n點下方按鈕開啟 LINE 地圖，或直接輸入地址。",
+                            [
+                                {"type": "location", "label": "📍 開啟地圖選位置"},
+                            ],
+                        )
+                    else:
+                        set_pending_field(db, user.id, "add_schedule_pick_origin:" + build_add_schedule_pending(**pending)[len("add_schedule:"):])
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "請傳送出發地位置 📍\n點下方按鈕開啟 LINE 地圖，或直接輸入地址。\n（若要使用預設住家，請點「使用住家」）",
+                            [
+                                {"type": "location", "label": "📍 開啟地圖選位置"},
+                                {"type": "message", "label": "🏠 使用住家", "text": "使用住家出發"},
+                            ],
+                        )
+                    continue
+
+                # 確認並儲存排程
+                if postback_action == "submit_schedule":
+                    profile = get_profile(db, user.id)
+                    pf = profile.pending_field or ""
+                    if pf.startswith("add_schedule_pick_origin:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_origin:"):])
+                    elif pf.startswith("add_schedule_pick_destination:"):
+                        pending = parse_add_schedule_pending("add_schedule:" + pf[len("add_schedule_pick_destination:"):])
+                    else:
+                        pending = parse_add_schedule_pending(pf)
+                    if not pending:
+                        await reply_with_quick_reply(reply_token, "目前沒有正在新增的排程，請先點選「新增常用排程」。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    # 驗證目的地
+                    if not pending.get("dest_label") and pending.get("dest_lat") is None:
+                        await reply_flex_with_quick_reply(
+                            reply_token,
+                            "⚠️ 請先設定目的地再儲存",
+                            build_add_schedule_flex(profile, **pending),
+                            [],
+                        )
+                        continue
+                    if not pending.get("days"):
+                        await reply_flex_with_quick_reply(
+                            reply_token,
+                            "⚠️ 請至少選擇一天再儲存",
+                            build_add_schedule_flex(profile, **pending),
+                            [],
+                        )
+                        continue
+                    # 決定出發地資訊
+                    origin_address = pending.get("origin_label") or None
+                    origin_lat = pending.get("origin_lat")
+                    origin_lng = pending.get("origin_lng")
+                    # 若未設定出發地，使用住家
+                    if not origin_address and origin_lat is None:
+                        origin_address = profile.home_address
+                        origin_lat = getattr(profile, "home_lat", None)
+                        origin_lng = getattr(profile, "home_lng", None)
+                    # 決定目的地資訊
+                    dest_label = pending.get("dest_label") or "目的地"
+                    dest_lat = pending.get("dest_lat")
+                    dest_lng = pending.get("dest_lng")
+                    # 檢查衝突
+                    conflicts = get_schedule_conflicts(db, user.id, pending["days"]) if pending["days"] else []
+                    if conflicts:
+                        # 暫存衝突待處理狀態（沿用舊格式）
+                        set_pending_field(
+                            db, user.id,
+                            build_schedule_template_pending(
+                                "template_conflict",
+                                pending["time"],
+                                dest_label,
+                                pending["days"],
+                                origin_address=origin_address,
+                                origin_lat=origin_lat,
+                                origin_lng=origin_lng,
+                            ),
+                        )
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"{format_schedule_conflict_text(db, user.id, pending['days'])}\n\n要以哪一組為準？",
+                            SCHEDULE_CONFLICT_QUICK_REPLIES,
+                        )
+                        continue
+                    # 儲存排程
+                    destination = get_destination_by_label(db, user.id, dest_label)
+                    created_template = create_schedule_template(
+                        db,
+                        user_id=user.id,
+                        target_arrival_time=pending["time"],
+                        destination_label=dest_label,
+                        active_weekdays=pending["days"],
+                        name=f"{dest_label} {pending['time']}",
+                        destination_id=destination.id if destination else None,
+                        replace_conflicts=False,
+                        origin_address=origin_address,
+                        origin_lat=origin_lat,
+                        origin_lng=origin_lng,
+                    )
+                    set_pending_field(db, user.id, f"template_fixed_confirm:{created_template.id}")
+                    clear_today_reminder_state_for_user(user.id)
+                    day_text = "、".join(WEEKDAY_NAMES[d] for d in sorted(pending["days"]))
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"✅ 已新增排程：{pending['time']} 到{dest_label}｜{day_text}\n請問這筆是否為固定排程？",
+                        with_done_button([
+                            {"type": "message", "label": "固定：是", "text": "固定排程 是"},
+                            {"type": "message", "label": "固定：否", "text": "固定排程 否"},
+                        ]),
+                    )
+                    continue
+
+                # 取消新增排程
+                if postback_action == "cancel_schedule":
+                    set_pending_field(db, user.id, None)
+                    await reply_with_quick_reply(reply_token, "已取消新增排程。", SCHEDULE_QUICK_REPLIES)
+                    continue
+
                 if postback_action in {"template_toggle_weekday", "template_preset", "template_save"}:
                     profile = get_profile(db, user.id)
                     pending = parse_schedule_template_pending(profile.pending_field)
@@ -1948,6 +2538,42 @@ async def line_webhook(
                 title = message.title
                 address = message.address
                 raw_address = address or title or "未命名位置"
+
+                # ── 新版「新增排程」表單：等待出發地定位 ──
+                if current_step and current_step.startswith("add_schedule_pick_origin:"):
+                    payload_str = current_step[len("add_schedule_pick_origin:"):]
+                    pending = parse_add_schedule_pending("add_schedule:" + payload_str)
+                    pending["origin_label"] = raw_address[:30]
+                    pending["origin_lat"] = lat
+                    pending["origin_lng"] = lng
+                    new_pending_str = build_add_schedule_pending(**pending)
+                    set_pending_field(db, user.id, new_pending_str)
+                    # 重新推播更新後的卡片
+                    await push_add_schedule_flex(line_user_id, profile, pending)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"✅ 出發地已更新：{raw_address[:30]}\n排程卡片已重新推播，請繼續完成設定。",
+                        [],
+                    )
+                    continue
+
+                # ── 新版「新增排程」表單：等待目的地定位 ──
+                if current_step and current_step.startswith("add_schedule_pick_destination:"):
+                    payload_str = current_step[len("add_schedule_pick_destination:"):]
+                    pending = parse_add_schedule_pending("add_schedule:" + payload_str)
+                    pending["dest_label"] = raw_address[:30]
+                    pending["dest_lat"] = lat
+                    pending["dest_lng"] = lng
+                    new_pending_str = build_add_schedule_pending(**pending)
+                    set_pending_field(db, user.id, new_pending_str)
+                    # 重新推播更新後的卡片
+                    await push_add_schedule_flex(line_user_id, profile, pending)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"✅ 目的地已更新：{raw_address[:30]}\n排程卡片已重新推播，請繼續完成設定。",
+                        [],
+                    )
+                    continue
 
                 if pending_template.get("action") == "template_destination_address":
                     destination = upsert_destination(
@@ -2381,12 +3007,67 @@ async def line_webhook(
                 )
                 continue
 
-            if command_text in COMMAND_ALIASES["add_schedule_template"]:
-                set_pending_field(db, user.id, "template_time")
-                await reply_with_quick_reply(
+            # ── 新版「新增排程」表單：文字輸入地址（等待出發地）──
+            if get_profile(db, user.id).pending_field and get_profile(db, user.id).pending_field.startswith("add_schedule_pick_origin:"):
+                profile = get_profile(db, user.id)
+                payload_str = profile.pending_field[len("add_schedule_pick_origin:"):]
+                pending = parse_add_schedule_pending("add_schedule:" + payload_str)
+                if command_text in {"使用住家出發", "相同，從家裡出發"}:
+                    # 清除自訂出發地，使用住家
+                    pending["origin_label"] = ""
+                    pending["origin_lat"] = None
+                    pending["origin_lng"] = None
+                else:
+                    # 用文字地址作為出發地
+                    pending["origin_label"] = user_text.strip()[:30]
+                    pending["origin_lat"] = None
+                    pending["origin_lng"] = None
+                new_pending_str = build_add_schedule_pending(**pending)
+                set_pending_field(db, user.id, new_pending_str)
+                await reply_flex_with_quick_reply(
                     reply_token,
-                    "請輸入這組常用排程的目標到達時間，例如：09:00。",
-                    ARRIVAL_TIME_QUICK_REPLIES,
+                    "📅 新增通勤排程（已更新出發地）",
+                    build_add_schedule_flex(profile, **pending),
+                    [],
+                )
+                continue
+
+            # ── 新版「新增排程」表單：文字輸入地址（等待目的地）──
+            if get_profile(db, user.id).pending_field and get_profile(db, user.id).pending_field.startswith("add_schedule_pick_destination:"):
+                profile = get_profile(db, user.id)
+                payload_str = profile.pending_field[len("add_schedule_pick_destination:"):]
+                pending = parse_add_schedule_pending("add_schedule:" + payload_str)
+                pending["dest_label"] = user_text.strip()[:30]
+                pending["dest_lat"] = None
+                pending["dest_lng"] = None
+                new_pending_str = build_add_schedule_pending(**pending)
+                set_pending_field(db, user.id, new_pending_str)
+                await reply_flex_with_quick_reply(
+                    reply_token,
+                    "📅 新增通勤排程（已更新目的地）",
+                    build_add_schedule_flex(profile, **pending),
+                    [],
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["add_schedule_template"]:
+                profile = get_profile(db, user.id)
+                # 初始化暫存狀態（預設平日 1-5，時間 09:00）
+                pending_str = build_add_schedule_pending(
+                    time="09:00",
+                    days=[1, 2, 3, 4, 5],
+                )
+                set_pending_field(db, user.id, pending_str)
+                flex_contents = build_add_schedule_flex(
+                    profile,
+                    time="09:00",
+                    days=[1, 2, 3, 4, 5],
+                )
+                await reply_flex_with_quick_reply(
+                    reply_token,
+                    "📅 新增通勤排程",
+                    flex_contents,
+                    [],
                 )
                 continue
 
