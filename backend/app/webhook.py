@@ -119,8 +119,9 @@ BASIC_SETTINGS_QUICK_REPLIES = [
     {"type": "message", "label": "查看設定", "text": "查看設定"},
     {"type": "message", "label": "今日通勤建議", "text": "今日通勤建議"},
     {"type": "message", "label": "明日通勤建議", "text": "明日通勤建議"},
-    {"type": "message", "label": "重新設定", "text": "重新設定"},
 ]
+
+MAIN_MENU_QUICK_REPLIES = BASIC_SETTINGS_QUICK_REPLIES
 
 
 def with_done_button(items: list[dict]) -> list[dict]:
@@ -359,7 +360,7 @@ def is_setting_flow_pending(step: str | None) -> bool:
 
 
 def topic_key_for_command(command_text: str) -> str | None:
-    for key in ("topic_commute", "topic_time", "topic_reminder", "topic_schedule", "topic_dashboard", "topic_help"):
+    for key in ("topic_commute", "topic_time", "topic_reminder", "topic_schedule", "topic_dashboard", "topic_help", "topic_system"):
         if command_text in COMMAND_ALIASES[key]:
             return key
     return None
@@ -383,6 +384,18 @@ COMMUTE_RESULT_QUICK_REPLIES = MAIN_MENU_QUICK_REPLIES
 REMINDER_SETTING_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "✅ 開啟自動提醒", "text": "開啟自動提醒"},
     {"type": "message", "label": "⏸ 關閉自動提醒", "text": "關閉自動提醒"},
+])
+
+# 「系統設定」選單：只在用戶點擊圖文選單「系統設定」時出現
+# 包含提醒設定 + 系統功能 + 重新設定（危險操作隔離）
+SYSTEM_SETTINGS_QUICK_REPLIES = with_done_button([
+    {"type": "message", "label": "✅ 開啟自動提醒", "text": "開啟自動提醒"},
+    {"type": "message", "label": "⏸ 關閉自動提醒", "text": "關閉自動提醒"},
+    {"type": "message", "label": "📋 查看提醒設定", "text": "查看提醒設定"},
+    {"type": "message", "label": "📍 更新住家位置", "text": "傳送住家位置"},
+    {"type": "message", "label": "🏢 更新目的地", "text": "傳送目的地位置"},
+    {"type": "message", "label": "👤 查看設定", "text": "查看設定"},
+    {"type": "message", "label": "⚠️ 重新設定", "text": "重新設定"},
 ])
 
 SCHEDULE_QUICK_REPLIES = with_done_button([
@@ -440,6 +453,7 @@ COMMAND_ALIASES = {
     "topic_schedule": {"排程設定", "日程排程", "週間設定"},
     "topic_dashboard": {"看板管理", "看板與家庭", "Dashboard管理"},
     "topic_help": {"指令說明", "提示詞說明", "使用說明", "幫助"},
+    "topic_system": {"系統設定", "設定選單"},
     "finish_settings": {"完成修改設定", "完成設定", "結束設定"},
     "view_settings": {"查看設定"},
     "today_commute": {"今天通勤建議", "今日通勤建議", "通勤建議"},
@@ -581,7 +595,7 @@ def unsupported_canonical_prompts() -> list[str]:
 
 READY_MENU_TEXT = (
     "您目前設定已完成。\n"
-    "請使用下方 Rich Menu 的 6 個大主題：通勤選單、時間設定、自動提醒、排程設定、看板管理、指令說明。\n"
+    "請使用下方 Rich Menu 的 6 個大主題：通勤選單、時間設定、系統設定、排程設定、看板管理、指令說明。\n"
     "需要完整提示詞時，請傳送「指令說明」。"
 )
 
@@ -1305,13 +1319,12 @@ def build_destination_history_quick_replies(db, user_id: int) -> list[dict]:
     """
     建立目的地歷史快選 Quick Reply 列表。
     前幾個是歷史目的地（postback 直接套用），最後一個是地圖定位按鈕。
-    LINE Quick Reply 上限 13 個，歷史最多取 5 個。
+    LINE Quick Reply 上限 13 個，歷史最多取 12 個，最後 1 個保留給地圖。
     """
-    recent = get_recent_destinations(db, user_id, limit=5)
+    recent = get_recent_destinations(db, user_id, limit=12)
     items: list[dict] = []
     for dest in recent:
         label = dest.label or "目的地"
-        # 顯示名稱截短到 20 字（LINE Quick Reply label 上限）
         display = label[:20]
         items.append({
             "type": "postback",
@@ -1322,6 +1335,40 @@ def build_destination_history_quick_replies(db, user_id: int) -> list[dict]:
     # 最後一個：重新地圖定位
     items.append({"type": "location", "label": "📍 重新地圖定位"})
     return items
+
+
+def find_matching_destination(db, user_id: int, lat: float, lng: float, address: str | None = None):
+    """
+    智慧比對：將傳入的座標或地址與歷史目的地比對。
+    - 座標距離 < 50 公尺視為同一地點
+    - 若無座標，用地址字串完全比對
+    回傳匹配的 CommuteDestination，或 None。
+    """
+    import math
+
+    def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+        r = 6371000.0
+        dlat = math.radians(lat2 - lat1)
+        dlng = math.radians(lng2 - lng1)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(lat1))
+            * math.cos(math.radians(lat2))
+            * math.sin(dlng / 2) ** 2
+        )
+        return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    recent = get_recent_destinations(db, user_id, limit=50)
+    for dest in recent:
+        # 座標比對（優先）
+        if dest.lat is not None and dest.lng is not None:
+            dist = _haversine_m(lat, lng, dest.lat, dest.lng)
+            if dist < 50:
+                return dest
+        # 地址字串比對（fallback）
+        if address and dest.address and address.strip() == dest.address.strip():
+            return dest
+    return None
 
 
 def build_add_schedule_flex(
@@ -1911,6 +1958,20 @@ async def reply_topic_menu(reply_token: str, topic_key: str, db, user, today_dat
         return
     if topic_key == "topic_help":
         await reply_flex_with_quick_reply(reply_token, "指令說明", build_command_help_carousel(), [])
+        return
+    if topic_key == "topic_system":
+        profile = get_profile(db, user.id)
+        reminder_status = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
+        await reply_with_quick_reply(
+            reply_token,
+            (
+                f"⚙️ 系統設定\n"
+                f"目前自動提醒：{reminder_status}\n\n"
+                "請選擇要進行的設定："
+            ),
+            SYSTEM_SETTINGS_QUICK_REPLIES,
+        )
+        return
 
 
 async def reply_current_setting_prompt(reply_token: str, db, user, step: str | None) -> None:
@@ -2875,12 +2936,32 @@ async def line_webhook(
                 if current_step and current_step.startswith("add_schedule_pick_destination:"):
                     payload_str = current_step[len("add_schedule_pick_destination:"):]
                     pending = parse_add_schedule_pending("add_schedule:" + payload_str)
-                    # 先暫存座標，進入「等待目的地名稱」狀態
                     pending["dest_lat"] = lat
                     pending["dest_lng"] = lng
-                    # 用 Google Maps 地標名稱作為預設建議名稱
+
+                    # 智慧比對：若座標與歷史地點吻合，直接沿用名稱，跳過詢問步驟
+                    matched_dest = find_matching_destination(db, user.id, lat, lng, raw_address)
+                    if matched_dest:
+                        pending["dest_label"] = matched_dest.label
+                        # 更新 updated_at（觸發 upsert）
+                        upsert_destination(
+                            db, user.id, matched_dest.label,
+                            address=matched_dest.address,
+                            lat=lat, lng=lng,
+                        )
+                        new_pending_str = build_add_schedule_pending(**pending)
+                        set_pending_field(db, user.id, new_pending_str)
+                        fresh_profile = get_profile(db, user.id)
+                        await push_add_schedule_flex(line_user_id, fresh_profile, pending)
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"✅ 已自動套用歷史地點「{matched_dest.label}」\n排程卡片已更新，請繼續完成設定。",
+                            [],
+                        )
+                        continue
+
+                    # 無歷史比對：進入詢問名稱步驟
                     suggested_name = (title or "").strip()[:20] or ""
-                    # 暫存格式：add_schedule_name_dest:<payload>|<suggested>
                     base_payload = build_add_schedule_pending(**pending)[len("add_schedule:"):]
                     set_pending_field(db, user.id, f"add_schedule_name_dest:{base_payload}|{suggested_name}")
                     hint = f"（建議：{suggested_name}）" if suggested_name else ""
@@ -3168,6 +3249,10 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["topic_help"]:
                 await reply_topic_menu(reply_token, "topic_help", db, user, today_date, tomorrow_date, today_override, tomorrow_override)
+                continue
+
+            if command_text in COMMAND_ALIASES["topic_system"]:
+                await reply_topic_menu(reply_token, "topic_system", db, user, today_date, tomorrow_date, today_override, tomorrow_override)
                 continue
 
             if command_text in COMMAND_ALIASES["send_home_location"]:

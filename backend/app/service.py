@@ -405,7 +405,7 @@ async def choose_commute_option_with_override(
     office_lat = getattr(profile, "office_lat", None)
     office_lng = getattr(profile, "office_lng", None)
 
-    if not home_lat or not home_lng or not office_lat or not office_lng:
+    if home_lat is None or home_lng is None or office_lat is None or office_lng is None:
         print(f"[choose-commute] INVALID COORDS: home=({home_lat},{home_lng}) office=({office_lat},{office_lng})")
         return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
 
@@ -724,6 +724,23 @@ async def _compute_today_plan(
                 "reason": "missing_home_address",
                 "message": "您的出發地址尚未設定完整經緯度，請重新傳送出發位置 📍",
             }
+
+        if office_lat is None or office_lng is None:
+            # 嘗試從 destination 的 address 做 geocode 補救
+            dest_address = getattr(profile, "office_address", None)
+            if dest_address:
+                try:
+                    from app.google_maps import geocode_address as _geocode
+                    geo = await _geocode(dest_address)
+                    if geo and geo.get("lat") and geo.get("lng"):
+                        profile = SimpleNamespace(**profile.__dict__)
+                        profile.office_lat = geo["lat"]
+                        profile.office_lng = geo["lng"]
+                        office_lat = geo["lat"]
+                        office_lng = geo["lng"]
+                        print(f"[compute-plan] geocoded destination: lat={office_lat} lng={office_lng}")
+                except Exception as _ge:
+                    print(f"[compute-plan] geocode fallback failed: {_ge}")
 
         if office_lat is None or office_lng is None:
             print(f"[compute-plan] missing destination coordinates for label={destination_label}")
