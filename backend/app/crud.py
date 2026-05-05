@@ -681,6 +681,18 @@ def delete_schedule_template(db: Session, user_id: int, template_id: int) -> boo
     return True
 
 
+def undelete_schedule_template(db: Session, user_id: int, template_id: int) -> bool:
+    template = get_schedule_template(db, user_id, template_id)
+    if template is None:
+        return False
+    template.is_deleted = False
+    template.is_active = True
+    template.deleted_at = None
+    db.commit()
+    db.refresh(template)
+    return True
+
+
 def effective_commute_date_is_active(db: Session, profile: CommuteProfile, target_date, override=None) -> bool:
     return effective_commute_setting_for_date(db, profile, target_date, override) is not None
 

@@ -58,6 +58,10 @@ REMINDER_QUICK_REPLIES = [
     {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
 ]
 
+# Feature flag / hook: whether to merge 1-hour and 5-minute watchdog alerts into
+# a single 15-20 minute consolidated alert. Default False until UI/copy finalized.
+MERGE_WATCHDOG_ALERTS = False
+
 NIGHTLY_BRIEF_QUICK_REPLIES = [
     {"type": "datetimepicker", "label": "⏰ 修改明日時間", "data": "action=set_tomorrow_arrival_time", "mode": "time"},
     {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
