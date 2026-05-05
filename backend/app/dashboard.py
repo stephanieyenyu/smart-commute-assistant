@@ -2,8 +2,10 @@ import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.security import APIKeyHeader
+from fastapi import Security, HTTPException
 
 from app import route_formatter
 from app.commute_schedule import dashboard_should_sleep
@@ -13,7 +15,10 @@ from app.crud import (
     get_profile,
     get_users_for_household,
     next_effective_commute_date,
+    undelete_destination,
+    undelete_schedule_template,
 )
+from app.config import UNDELETE_API_KEY
 from app.dashboard_page import render_dashboard_html, render_household_dashboard_html
 from app.dashboard_status import (
     build_dashboard_payload,
@@ -30,6 +35,14 @@ from app.service import build_today_commute_payload
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 WEBSOCKET_REFRESH_SECONDS = 30
+
+# API Key verification for sensitive operations
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_api_key(api_key: str = Security(api_key_header)):
+    if api_key != UNDELETE_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    return api_key
 
 
 def now_taipei() -> datetime:
@@ -253,6 +266,52 @@ async def dashboard_departure_check(user_id: int, payload: dict | None = Body(de
     try:
         target_date = parse_target_date((payload or {}).get("target_date"))
         return await send_departure_check_for_user(db, user_id, target_date)
+    finally:
+        db.close()
+
+
+@router.post("/undelete-destination/{user_id}/{destination_id}")
+async def api_undelete_destination(
+    user_id: int,
+    destination_id: int,
+    db: SessionLocal = None,
+    api_key: str = Security(verify_api_key),
+):
+    """Restore a soft-deleted destination. Requires API Key."""
+    import logging
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+    try:
+        logger.info(f"[API] undelete_destination user_id={user_id} destination_id={destination_id}")
+        result = undelete_destination(db, user_id, destination_id)
+        if result:
+            logger.info(f"[API] destination restored successfully")
+            return {"ok": True, "message": "目的地已還原"}
+        logger.warning(f"[API] destination not found or cannot restore")
+        return {"ok": False, "message": "找不到該目的地或無法還原"}
+    finally:
+        db.close()
+
+
+@router.post("/undelete-schedule/{user_id}/{template_id}")
+async def api_undelete_schedule(
+    user_id: int,
+    template_id: int,
+    db: SessionLocal = None,
+    api_key: str = Security(verify_api_key),
+):
+    """Restore a soft-deleted schedule template. Requires API Key."""
+    import logging
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+    try:
+        logger.info(f"[API] undelete_schedule user_id={user_id} template_id={template_id}")
+        result = undelete_schedule_template(db, user_id, template_id)
+        if result:
+            logger.info(f"[API] schedule restored successfully")
+            return {"ok": True, "message": "排程已還原"}
+        logger.warning(f"[API] schedule not found or cannot restore")
+        return {"ok": False, "message": "找不到該排程或無法還原"}
     finally:
         db.close()
 
