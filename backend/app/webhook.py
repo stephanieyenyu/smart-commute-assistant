@@ -36,6 +36,8 @@ from app.departure_confirmation import (
 from app.line_client import reply_flex_with_quick_reply, reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
 from app.crud import (
     delete_schedule_template,
+        undelete_schedule_template,
+        undelete_destination,
     get_or_create_user,
     get_or_create_profile,
     get_profile,
@@ -1349,7 +1351,16 @@ async def line_webhook(
 
                 print(f"[postback] user_id={user.id} data={postback_data} time={time_value}")
 
-                postback_parts = parse_qs(postback_data)
+                # postback_data may come as query-string style or JSON from Flex actions
+                try:
+                    if postback_data and postback_data.strip().startswith("{"):
+                        parsed = json.loads(postback_data)
+                        # normalize into parse_qs-style mapping of str->list[str]
+                        postback_parts = {k: ([str(v)] if not isinstance(v, list) else [str(i) for i in v]) for k, v in parsed.items()}
+                    else:
+                        postback_parts = parse_qs(postback_data)
+                except Exception:
+                    postback_parts = parse_qs(postback_data)
                 postback_action = (postback_parts.get("action") or [""])[0]
                 postback_choice = (postback_parts.get("choice") or [""])[0]
                 postback_date = params.get("date") if isinstance(params, dict) else getattr(params, "date", None)
@@ -1991,14 +2002,20 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["reset"]:
+                # Schedule a soft reset to run after 15 minutes. User can cancel within that window,
+                # or confirm to execute immediately.
+                try:
+                    expiry = schedule_soft_reset(db, user.id, delay_minutes=15)
+                except Exception as e:
+                    print(f"[soft_reset] schedule failed for user {user.id}: {e}")
+                    expiry = None
                 set_pending_field(db, user.id, "confirm_reset")
+                expiry_text = "" if not expiry else f"（將於 15 分鐘後執行）"
                 await reply_with_quick_reply(
                     reply_token,
-                    "⚠️ 警告：執行重新設定將會『永久刪除』您之前設定的所有地址與排程資訊！\n\n"
-                    "💡 若您只是想要修改或刪除『單一排程』，請點選 [排程設定] 進行管理即可。\n\n"
-                    "請問您確定要徹底清除所有資料並重新開始嗎？",
+                    "⚠️ 已排程：即將在 15 分鐘內執行重新設定，按取消可撤回。" + expiry_text,
                     [
-                        {"type": "message", "label": "確定重設 (清除資料)", "text": "確定重設"},
+                        {"type": "message", "label": "立即執行", "text": "確定重設"},
                         {"type": "message", "label": "取消 (保留資料)", "text": "取消重設"},
                         {"type": "message", "label": "前往排程設定", "text": "排程設定"},
                     ],
@@ -2006,31 +2023,48 @@ async def line_webhook(
                 continue
 
             if command_text in {"確定重設", "確定重設 (清除資料)"} and current_step == "confirm_reset":
-                print(f"[reset] ========= USER CONFIRMED HARD RESET =========")
-                print(f"[reset] User {user.id} confirmed reset. Starting data wipe...")
-                reset_profile_for_reconfigure(db, user.id)
-                clear_today_reminder_state_for_user(user.id)
-                # 强制设定为 home_location 状态，确保进入 Onboarding
-                set_pending_field(db, user.id, "home_location")
-                profile_after_reset = get_profile(db, user.id)
-                print(f"[reset] After reset: pending_field={profile_after_reset.pending_field}")
-                # 強制引導至初始設定，傳送第一步引導訊息
-                await reply_with_quick_reply(
-                    reply_token,
-                    "⚠️ 已徹底清除您的個人資料、所有目的地與排程紀錄！\n\n🔄 現在開始重新設定：\n" 
-                    + "【步驟 1/4】" + field_prompt_for_profile("home_location", profile_after_reset),
-                    HOME_QUICK_REPLY,
-                )
-                print(f"[reset] ========= HARD RESET COMPLETE - ONBOARDING STARTED =========")
+                print(f"[soft_reset] user {user.id} requested immediate reset")
+                try:
+                    # Cancel scheduled soft reset if present to avoid duplicate
+                    try:
+                        cancel_soft_reset(user.id)
+                    except Exception:
+                        pass
+                    reset_profile_for_reconfigure(db, user.id)
+                    clear_today_reminder_state_for_user(user.id)
+                    # Force onboarding
+                    set_pending_field(db, user.id, "home_location")
+                    profile_after_reset = get_profile(db, user.id)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "⚠️ 已徹底清除您的個人資料、所有目的地與排程紀錄！\n\n🔄 現在開始重新設定：\n" + "【步驟 1/4】" + field_prompt_for_profile("home_location", profile_after_reset),
+                        HOME_QUICK_REPLY,
+                    )
+                    print(f"[soft_reset] immediate reset complete for user {user.id}")
+                except Exception as e:
+                    print(f"[soft_reset] immediate reset failed for user {user.id}: {e}")
+                    await reply_with_quick_reply(reply_token, "重設失敗，請稍後再試。", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in {"取消重設", "取消 (保留資料)"} and current_step == "confirm_reset":
-                set_pending_field(db, user.id, None)
-                await reply_with_quick_reply(
-                    reply_token,
-                    "已取消重新設定，所有資料已保留。",
-                    MAIN_MENU_QUICK_REPLIES,
-                )
+                try:
+                    cancelled = cancel_soft_reset(user.id)
+                    set_pending_field(db, user.id, None)
+                    if cancelled:
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "已取消重新設定，所有資料已保留。",
+                            MAIN_MENU_QUICK_REPLIES,
+                        )
+                    else:
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "目前沒有排程中的重設，或已執行中。若要重新設定請再次按「重新設定」。",
+                            MAIN_MENU_QUICK_REPLIES,
+                        )
+                except Exception as e:
+                    print(f"[soft_reset] cancel failed for user {user.id}: {e}")
+                    await reply_with_quick_reply(reply_token, "取消失敗，請稍後再試。", MAIN_MENU_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["view_settings"]:
@@ -2130,6 +2164,36 @@ async def line_webhook(
                     continue
                 clear_today_reminder_state_for_user(user.id)
                 await reply_with_quick_reply(reply_token, "已刪除指定排程。", SCHEDULE_QUICK_REPLIES)
+                continue
+
+            # Simple restore commands (admin/debug convenience)
+            if user_text.startswith("還原排程"):
+                rest = user_text.replace("還原排程", "").strip()
+                try:
+                    tid = int(rest)
+                except Exception:
+                    await reply_with_quick_reply(reply_token, "排程編號無效。請使用：還原排程 123", SCHEDULE_QUICK_REPLIES)
+                    continue
+                ok = undelete_schedule_template(db, user.id, tid)
+                if ok:
+                    clear_today_reminder_state_for_user(user.id)
+                    await reply_with_quick_reply(reply_token, "已還原指定排程。", SCHEDULE_QUICK_REPLIES)
+                else:
+                    await reply_with_quick_reply(reply_token, "找不到該排程或無法還原。", SCHEDULE_QUICK_REPLIES)
+                continue
+
+            if user_text.startswith("還原目的地"):
+                rest = user_text.replace("還原目的地", "").strip()
+                try:
+                    did = int(rest)
+                except Exception:
+                    await reply_with_quick_reply(reply_token, "目的地編號無效。請使用：還原目的地 45", SCHEDULE_QUICK_REPLIES)
+                    continue
+                ok = undelete_destination(db, user.id, did)
+                if ok:
+                    await reply_with_quick_reply(reply_token, "已還原指定目的地。", SCHEDULE_QUICK_REPLIES)
+                else:
+                    await reply_with_quick_reply(reply_token, "找不到該目的地或無法還原。", SCHEDULE_QUICK_REPLIES)
                 continue
 
             edit_template_value = extract_command_value(user_text, COMMAND_ALIASES["edit_schedule_template"])
