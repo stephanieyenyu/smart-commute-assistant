@@ -911,14 +911,17 @@ def format_schedule_conflict_text(db, user_id: int, weekdays: list[int]) -> str:
 
 
 def save_schedule_template_from_pending(db, user_id: int, pending: dict, *, replace_conflicts: bool = False):
-    destination = get_destination_by_label(db, user_id, pending["label"])
+    # 支援兩種 pending 格式：「新增排程」用 dest_label，「模板排程」用 label
+    dest_label = pending.get("dest_label") or pending.get("label") or "目的地"
+    destination = get_destination_by_label(db, user_id, dest_label)
+    print(f"[save-template] label={dest_label} destination_id={destination.id if destination else None}")
     return create_schedule_template(
         db,
         user_id=user_id,
         target_arrival_time=pending["time"],
-        destination_label=pending["label"],
+        destination_label=dest_label,
         active_weekdays=pending["days"],
-        name=f"{pending['label']} {pending['time']}",
+        name=f"{dest_label} {pending['time']}",
         destination_id=destination.id if destination else None,
         replace_conflicts=replace_conflicts,
         origin_address=pending.get("origin_address"),

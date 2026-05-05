@@ -671,13 +671,29 @@ def effective_commute_setting_for_date(db: Session, profile: CommuteProfile, tar
     if not arrival_time:
         return None
 
+    # 嘗試取得目的地物件（優先從 relationship，若失敗則用 ID 或 label 查詢）
+    destination = None
+    if schedule_template is not None:
+        destination = getattr(schedule_template, "destination", None)
+        if destination is None and schedule_template.destination_id is not None:
+            destination = get_destination_by_id(db, user_id, schedule_template.destination_id)
+        if destination is None and schedule_template.destination_label:
+            destination = get_destination_by_label(db, user_id, schedule_template.destination_label)
+            if destination:
+                print(f"[effective-setting] recovered destination by label: {destination.label} lat={destination.lat} lng={destination.lng}")
+
+    print(f"[effective-setting] user_id={user_id} date={target_date} label={destination_label} "
+          f"dest_id={schedule_template.destination_id if schedule_template else None} "
+          f"dest_lat={getattr(destination, 'lat', None) if destination else None} "
+          f"dest_lng={getattr(destination, 'lng', None) if destination else None}")
+
     return {
         "arrival_time": arrival_time,
         "destination_label": destination_label,
         "source": source,
         "schedule_template_id": template_id,
         "schedule_template": schedule_template,
-        "destination": getattr(schedule_template, "destination", None) if schedule_template is not None else None,
+        "destination": destination,
         "origin_lat": getattr(schedule_template, "origin_lat", None) if schedule_template is not None else None,
         "origin_lng": getattr(schedule_template, "origin_lng", None) if schedule_template is not None else None,
         "origin_address": getattr(schedule_template, "origin_address", None) if schedule_template is not None else None,

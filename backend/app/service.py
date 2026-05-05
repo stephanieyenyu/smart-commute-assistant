@@ -1260,8 +1260,33 @@ async def build_today_commute_payload(
             force_mode_override=force_mode_override,
         )
         if not plan.get("ok"):
-            print(f"[build-payload] plan not ok: reason={plan.get('reason')}")
-            return plan
+            reason = plan.get("reason", "unknown")
+            message = plan.get("message", "無法計算通勤建議")
+            print(f"[build-payload] plan not ok: reason={reason}")
+            # 即使 plan 失敗，也回傳包含必要欄位的結構，避免 Dashboard 報 NoneType 錯誤
+            safe_plan = {
+                "ok": False,
+                "reason": reason,
+                "message": message,
+                "text": f"❌ {message}",
+                "target_date": target_date,
+                "effective_arrival_time": "",
+                "final_departure_time": "",
+                "baseline_minutes": 0,
+                "weather_buffer": 0,
+                "weather_info": {},
+                "best_option": {},
+                "recommended_mode": "",
+                "target_label_text": "",
+                "mode_override": force_mode_override or "auto",
+                "plan_key": None,
+            }
+            if log_plan:
+                try:
+                    record_commute_plan_log(db, user_id, safe_plan)
+                except Exception as log_e:
+                    print(f"[build-payload] log error: {log_e}")
+            return safe_plan
 
         try:
             plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
@@ -1272,6 +1297,18 @@ async def build_today_commute_payload(
                 "ok": False,
                 "reason": "format_error",
                 "message": f"格式化通勤建議時發生錯誤：{str(e)}",
+                "text": f"❌ 格式化通勤建議時發生錯誤：{str(e)}",
+                "target_date": target_date,
+                "effective_arrival_time": "",
+                "final_departure_time": "",
+                "baseline_minutes": 0,
+                "weather_buffer": 0,
+                "weather_info": {},
+                "best_option": {},
+                "recommended_mode": "",
+                "target_label_text": "",
+                "mode_override": force_mode_override or "auto",
+                "plan_key": None,
             }
 
         try:
@@ -1295,6 +1332,18 @@ async def build_today_commute_payload(
             "ok": False,
             "reason": "unexpected_error",
             "message": f"系統內部錯誤：{str(e)}",
+            "text": f"❌ 系統內部錯誤：{str(e)}",
+            "target_date": target_date,
+            "effective_arrival_time": "",
+            "final_departure_time": "",
+            "baseline_minutes": 0,
+            "weather_buffer": 0,
+            "weather_info": {},
+            "best_option": {},
+            "recommended_mode": "",
+            "target_label_text": "",
+            "mode_override": force_mode_override or "auto",
+            "plan_key": None,
         }
 
 
