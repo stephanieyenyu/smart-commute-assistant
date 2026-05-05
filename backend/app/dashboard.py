@@ -274,6 +274,7 @@ async def dashboard_departure_check(user_id: int, payload: dict | None = Body(de
 async def api_undelete_destination(
     user_id: int,
     destination_id: int,
+    db: SessionLocal = None,
     api_key: str = Security(verify_api_key),
 ):
     """Restore a soft-deleted destination. Requires API Key."""
@@ -288,27 +289,6 @@ async def api_undelete_destination(
             return {"ok": True, "message": "目的地已還原"}
         logger.warning(f"[API] destination not found or cannot restore")
         return {"ok": False, "message": "找不到該目的地或無法還原"}
-    finally:
-        db.close()
-
-@router.post("/undelete-schedule/{user_id}/{template_id}")
-async def api_undelete_schedule(
-    user_id: int,
-    template_id: int,
-    api_key: str = Security(verify_api_key),
-):
-    """Restore a soft-deleted schedule template. Requires API Key."""
-    import logging
-    logger = logging.getLogger(__name__)
-    db = SessionLocal()
-    try:
-        logger.info(f"[API] undelete_schedule user_id={user_id} template_id={template_id}")
-        result = undelete_schedule_template(db, user_id, template_id)
-        if result:
-            logger.info(f"[API] schedule restored successfully")
-            return {"ok": True, "message": "排程已還原"}
-        logger.warning(f"[API] schedule not found or cannot restore")
-        return {"ok": False, "message": "找不到該排程或無法還原"}
     finally:
         db.close()
 
