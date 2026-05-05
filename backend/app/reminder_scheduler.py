@@ -59,8 +59,10 @@ REMINDER_QUICK_REPLIES = [
 ]
 
 # Feature flag / hook: whether to merge 1-hour and 5-minute watchdog alerts into
-# a single 15-20 minute consolidated alert. Default False until UI/copy finalized.
-MERGE_WATCHDOG_ALERTS = False
+# a single 15-20 minute consolidated alert.
+MERGE_WATCHDOG_ALERTS = True
+MERGE_WATCHDOG_ALERT_SECONDS_BEFORE = 15 * 60  # 15 minutes before departure
+MERGE_WATCHDOG_ALERT_WINDOW = 5 * 60  # Accept trigger within 15-20 minutes before
 
 NIGHTLY_BRIEF_QUICK_REPLIES = [
     {"type": "datetimepicker", "label": "⏰ 修改明日時間", "data": "action=set_tomorrow_arrival_time", "mode": "time"},
@@ -479,11 +481,15 @@ async def send_nightly_briefs():
 
 
 async def run_morning_watchdog():
-    """Morning watchdog that triggers alerts at exactly two times:
-    1. One hour before estimated departure time
-    2. Five minutes before estimated departure time
-    Each trigger re-fetches live API data and sends a fresh push notification.
-    No other alerts are sent outside these two trigger points."""
+    """Morning watchdog that sends a consolidated alert 15-20 minutes before departure.
+    Includes: estimated travel time, weather summary, and suggested departure time.
+    When MERGE_WATCHDOG_ALERTS is True, merges 1-hour and 5-minute alerts into one.
+    """
+    if not MERGE_WATCHDOG_ALERTS:
+        # Fall back to original two-trigger logic
+        await _run_morning_watchdog_original()
+        return
+
     db = SessionLocal()
     try:
         now_dt = now_taipei()
@@ -521,26 +527,124 @@ async def run_morning_watchdog():
                 departure_sec = hhmm_to_seconds(departure_hhmm)
                 seconds_until = departure_sec - now_sec
 
-                # Check if we are within tolerance of the two trigger points
+                # Check if we are within the 15-20 minute window before departure
+                in_merge_window = (MERGE_WATCHDOG_ALERT_SECONDS_BEFORE - MERGE_WATCHDOG_ALERT_WINDOW) <= seconds_until <= (MERGE_WATCHDOG_ALERT_SECONDS_BEFORE + MERGE_WATCHDOG_ALERT_WINDOW)
+
+                if not in_merge_window:
+                    continue
+
+                user = db.query(User).filter(User.id == profile.user_id).first()
+                if not user or not user.line_user_id:
+                    continue
+
+                # Re-fetch live API data for consolidated alert
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=today,
+                    force_mode_override=None,
+                    header="⚠️ 出發前提醒：",
+                )
+                if not payload.get("ok"):
+                    continue
+
+                # Build consolidated alert key
+                alert_key = _hash_notification_key(
+                    "watchdog_merged",
+                    today.isoformat(),
+                    payload.get("effective_arrival_time"),
+                    payload.get("final_departure_time"),
+                    payload.get("recommended_mode"),
+                    payload.get("weather_buffer"),
+                )
+                if override and override.watchdog_alert_key == alert_key:
+                    print(f"[watchdog-merged] duplicate skipped user_id={user.id}")
+                    continue
+
+                try:
+                    await freeze_today_reminder_payload(db, user.id, today, plan=payload)
+                except Exception as e:
+                    print(f"[watchdog-merged] freeze skipped user_id={user.id} error={e}")
+
+                # Build friendly, concise push message
+                weather_info = payload.get("weather_info") or {}
+                weather_text = ""
+                if weather_info.get("weather_text"):
+                    weather_text = f"天氣：{weather_info['weather_text']}"
+                    if weather_info.get("pop"):
+                        weather_text += f"，降雨機率 {weather_info['pop']}%"
+
+                travel_min = payload.get("baseline_minutes", "未知")
+                departure_display = payload.get("final_departure_time", "未知")
+
+                text = (
+                    f"🚌 出發提醒（{departure_display} 出門）\n"
+                    f"預計車程：約 {travel_min} 分鐘\n"
+                    f"{weather_text}\n"
+                    f"建議 {departure_display} 出門，祝您一路順風！"
+                )
+                await push_with_quick_reply(user.line_user_id, text, WATCHDOG_QUICK_REPLIES)
+                mark_watchdog_alert_sent(db, user.id, today, alert_key, now_dt)
+                print(f"[watchdog-merged] sent user_id={user.id} departure={departure_hhmm}")
+            except Exception as e:
+                import traceback
+                print(f"[watchdog-merged] failed user_id={getattr(profile, 'user_id', None)} error={e}")
+                print(traceback.format_exc())
+    finally:
+        db.close()
+
+
+async def _run_morning_watchdog_original():
+    """Original two-trigger watchdog (1 hour and 5 minutes before)."""
+    db = SessionLocal()
+    try:
+        now_dt = now_taipei()
+        today = now_dt.date()
+        now_sec = current_seconds_of_day()
+
+        for profile in get_all_profiles(db):
+            try:
+                if not getattr(profile, "reminder_enabled", True):
+                    continue
+                if get_next_setup_step(profile) is not None:
+                    continue
+                override = get_override_for_date(db, profile.user_id, today)
+                if not effective_commute_date_is_active(db, profile, today, override):
+                    continue
+                if override and override.departure_confirmed_at:
+                    continue
+
+                departure_hhmm = override.frozen_departure_time if override else None
+                if not departure_hhmm:
+                    plan = await build_today_commute_payload(
+                        db=db,
+                        user_id=profile.user_id,
+                        target_date=today,
+                        force_mode_override=None,
+                        header="⚠️ 早晨通勤監控：",
+                    )
+                    if not plan.get("ok"):
+                        continue
+                    departure_hhmm = plan.get("final_departure_time")
+                    if not departure_hhmm:
+                        continue
+
+                departure_sec = hhmm_to_seconds(departure_hhmm)
+                seconds_until = departure_sec - now_sec
+
                 one_hour_trigger = abs(seconds_until - WATCHDOG_ONE_HOUR_BEFORE_SECONDS) <= WATCHDOG_TRIGGER_TOLERANCE_SECONDS
                 five_min_trigger = abs(seconds_until - WATCHDOG_FIVE_MIN_BEFORE_SECONDS) <= WATCHDOG_TRIGGER_TOLERANCE_SECONDS
 
                 if not one_hour_trigger and not five_min_trigger:
                     continue
 
-                # Determine which trigger this is
-                if one_hour_trigger:
-                    trigger_label = "一小時前"
-                    alert_key_prefix = "watchdog_1h"
-                else:
-                    trigger_label = "五分鐘前"
-                    alert_key_prefix = "watchdog_5m"
+                trigger_label = "一小時前" if one_hour_trigger else "五分鐘前"
+                alert_key_prefix = "watchdog_1h" if one_hour_trigger else "watchdog_5m"
 
                 user = db.query(User).filter(User.id == profile.user_id).first()
                 if not user or not user.line_user_id:
                     continue
 
-                # Re-fetch live API data for this trigger
                 payload = await build_today_commute_payload(
                     db=db,
                     user_id=user.id,
@@ -560,7 +664,6 @@ async def run_morning_watchdog():
                     payload.get("weather_buffer"),
                 )
                 if override and override.watchdog_alert_key == alert_key:
-                    print(f"[watchdog] duplicate {trigger_label} skipped user_id={user.id}")
                     continue
 
                 try:
@@ -574,7 +677,6 @@ async def run_morning_watchdog():
                 )
                 await push_with_quick_reply(user.line_user_id, text, WATCHDOG_QUICK_REPLIES)
                 mark_watchdog_alert_sent(db, user.id, today, alert_key, now_dt)
-                print(f"[watchdog] {trigger_label} sent user_id={user.id} departure={departure_hhmm}")
             except Exception as e:
                 import traceback
                 print(f"[watchdog] failed user_id={getattr(profile, 'user_id', None)} error={e}")

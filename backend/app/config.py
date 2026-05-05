@@ -20,3 +20,4 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 TDX_CLIENT_ID = os.getenv("TDX_CLIENT_ID", "")
 TDX_CLIENT_SECRET = os.getenv("TDX_CLIENT_SECRET", "")
+UNDELETE_API_KEY = os.getenv("UNDELETE_API_KEY", "default-secret-key-change-me")

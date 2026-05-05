@@ -503,15 +503,20 @@ def upsert_destination(
 
 
 def undelete_destination(db: Session, user_id: int, destination_id: int) -> bool:
+    import logging
+    logger = logging.getLogger(__name__)
     dest = db.query(CommuteDestination).filter(
         CommuteDestination.user_id == user_id,
         CommuteDestination.id == destination_id,
     ).first()
     if dest is None:
+        logger.warning(f"[undelete_destination] user_id={user_id} destination_id={destination_id} not found")
         return False
     dest.is_deleted = False
+    dest.deleted_at = None
     db.commit()
     db.refresh(dest)
+    logger.info(f"[undelete_destination] user_id={user_id} destination_id={destination_id} label={dest.label} restored successfully")
     return True
 
 
