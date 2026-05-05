@@ -392,8 +392,6 @@ SYSTEM_SETTINGS_QUICK_REPLIES = with_done_button([
     {"type": "message", "label": "✅ 開啟自動提醒", "text": "開啟自動提醒"},
     {"type": "message", "label": "⏸ 關閉自動提醒", "text": "關閉自動提醒"},
     {"type": "message", "label": "📋 查看提醒設定", "text": "查看提醒設定"},
-    {"type": "message", "label": "📍 更新住家位置", "text": "傳送住家位置"},
-    {"type": "message", "label": "🏢 更新目的地", "text": "傳送目的地位置"},
     {"type": "message", "label": "👤 查看設定", "text": "查看設定"},
     {"type": "message", "label": "⚠️ 重新設定", "text": "重新設定"},
 ])
@@ -2921,6 +2919,30 @@ async def line_webhook(
                     pending = parse_add_schedule_pending("add_schedule:" + _payload)
                     pending["dest_lat"] = lat
                     pending["dest_lng"] = lng
+
+                    # 智慧比對：若座標與歷史地點吻合，直接沿用名稱，跳過詢問步驟
+                    matched_dest = find_matching_destination(db, user.id, lat, lng, raw_address)
+                    if matched_dest:
+                        pending["dest_label"] = matched_dest.label
+                        upsert_destination(
+                            db, user.id, matched_dest.label,
+                            address=matched_dest.address,
+                            lat=lat, lng=lng,
+                        )
+                        if _edit_tid:
+                            update_schedule_template(db, user.id, _edit_tid, destination_label=matched_dest.label)
+                        base_payload = build_add_schedule_pending(**pending)[len("add_schedule:"):]
+                        set_pending_field(db, user.id, f"edit_schedule:{_edit_tid}:{base_payload}")
+                        fresh_profile = get_profile(db, user.id)
+                        await push_add_schedule_flex(line_user_id, fresh_profile, pending)
+                        await reply_with_quick_reply(
+                            reply_token,
+                            f"✅ 已自動套用歷史地點「{matched_dest.label}」並儲存。\n排程卡片已更新，請繼續完成設定。",
+                            [],
+                        )
+                        continue
+
+                    # 無歷史比對：進入詢問名稱步驟
                     suggested_name = (title or "").strip()[:20] or ""
                     base_payload = build_add_schedule_pending(**pending)[len("add_schedule:"):]
                     set_pending_field(db, user.id, f"edit_schedule_name_dest:{_edit_tid}:{base_payload}|{suggested_name}")

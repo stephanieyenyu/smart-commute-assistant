@@ -456,10 +456,12 @@ def get_user_destinations(db: Session, user_id: int) -> list[CommuteDestination]
 
 def get_recent_destinations(db: Session, user_id: int, limit: int = 12) -> list[CommuteDestination]:
     """
-    取得用戶最近使用的目的地（按 updated_at 降序）。
+    取得用戶最近使用的目的地（按 updated_at 降序，label 去重）。
     用於 pick_location 的歷史快選 Quick Reply。
     """
-    return (
+    from sqlalchemy import func as _func
+    # 先取所有符合條件的，再在 Python 層做 label 去重（保留最新的）
+    all_dests = (
         db.query(CommuteDestination)
         .filter(
             CommuteDestination.user_id == user_id,
@@ -467,9 +469,19 @@ def get_recent_destinations(db: Session, user_id: int, limit: int = 12) -> list[
             CommuteDestination.label.isnot(None),
         )
         .order_by(CommuteDestination.updated_at.desc())
-        .limit(limit)
         .all()
     )
+    seen_labels: set[str] = set()
+    deduped: list[CommuteDestination] = []
+    for dest in all_dests:
+        normalized = (dest.label or "").strip()
+        if not normalized or normalized in seen_labels:
+            continue
+        seen_labels.add(normalized)
+        deduped.append(dest)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 def get_destination_by_label(db: Session, user_id: int, label: str | None) -> CommuteDestination | None:
