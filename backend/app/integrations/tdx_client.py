@@ -39,7 +39,7 @@ async def _get_access_token() -> str | None:
         print(f"[tdx] auth error: {e}")
     return None
 
-async def fetch_tdx_data(endpoint: str, params: dict = None, cache_seconds: int = 60, retries: int = 2) -> list | dict | None:
+async def fetch_tdx_data(endpoint: str, params: dict = None, cache_seconds: int = 300, retries: int = 2) -> list | dict | None:
     # 1. Try Cache
     cache_key = f"tdx:api:{endpoint}:{params}"
     cached = await get_cache(cache_key)

@@ -180,6 +180,25 @@ def set_pending_field(db: Session, user_id: int, field_name: str | None):
     profile.pending_field = field_name
     db.commit()
     db.refresh(profile)
+
+    # Manage temporary pending timeout: auto-clear after 15 minutes
+    try:
+        from app.temp_pending import schedule_pending_timeout, cancel_pending_timeout
+        if field_name is None:
+            # Cancel any pending timeout when clearing
+            try:
+                cancel_pending_timeout(user_id)
+            except Exception:
+                pass
+        else:
+            try:
+                schedule_pending_timeout(db, user_id, minutes=15)
+            except Exception:
+                pass
+    except Exception:
+        # If temp_pending module unavailable, ignore
+        pass
+
     return profile
 
 
@@ -425,14 +444,14 @@ def set_active_weekdays(db: Session, user_id: int, weekdays: list[int] | None):
 
 
 def get_schedule_templates(db: Session, user_id: int, active_only: bool = False) -> list[CommuteScheduleTemplate]:
-    query = db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id)
+    query = db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).filter(CommuteScheduleTemplate.is_deleted.is_(False))
     if active_only:
         query = query.filter(CommuteScheduleTemplate.is_active.is_(True))
     return query.order_by(CommuteScheduleTemplate.id.asc()).all()
 
 
 def get_user_destinations(db: Session, user_id: int) -> list[CommuteDestination]:
-    return db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).order_by(CommuteDestination.id.asc()).all()
+    return db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).filter(CommuteDestination.is_deleted.is_(False)).order_by(CommuteDestination.id.asc()).all()
 
 
 def get_destination_by_label(db: Session, user_id: int, label: str | None) -> CommuteDestination | None:
@@ -442,6 +461,7 @@ def get_destination_by_label(db: Session, user_id: int, label: str | None) -> Co
     return db.query(CommuteDestination).filter(
         CommuteDestination.user_id == user_id,
         CommuteDestination.label == normalized,
+        CommuteDestination.is_deleted.is_(False),
     ).first()
 
 
@@ -469,6 +489,7 @@ def upsert_destination(
     destination = get_destination_by_label(db, user_id, normalized_label)
     if destination is None:
         destination = CommuteDestination(user_id=user_id, label=normalized_label)
+        destination.is_deleted = False
         db.add(destination)
     destination.address = address
     destination.lat = lat
@@ -651,8 +672,12 @@ def delete_schedule_template(db: Session, user_id: int, template_id: int) -> boo
     template = get_schedule_template(db, user_id, template_id)
     if template is None:
         return False
-    db.delete(template)
+    # Soft delete: mark as deleted and clear active flag
+    template.is_deleted = True
+    template.is_active = False
+    template.deleted_at = datetime.utcnow()
     db.commit()
+    db.refresh(template)
     return True
 
 

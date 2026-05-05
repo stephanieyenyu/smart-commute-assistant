@@ -9,7 +9,8 @@ from app.integrations.api_health import api_timer_start, log_api_health
 
 
 _weather_cache: dict[str, tuple[float, dict]] = {}
-WEATHER_CACHE_SECONDS = 300
+# Cache weather for 30 minutes to reduce frequent API calls per user's request
+WEATHER_CACHE_SECONDS = 1800
 
 
 def _get_weather_api_key() -> str | None:

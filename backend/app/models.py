@@ -99,6 +99,9 @@ class CommuteScheduleTemplate(Base):
     active_weekdays = Column(JSON, nullable=False)
     is_fixed = Column(Boolean, nullable=False, default=True)
     is_active = Column(Boolean, nullable=False, default=True)
+    # Soft delete support
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Custom origin (fallback to home if null)
     origin_address = Column(String, nullable=True)
@@ -130,6 +133,9 @@ class CommuteDestination(Base):
     city = Column(String, nullable=True)
     township = Column(String, nullable=True)
     place_name = Column(String, nullable=True)
+    # Soft delete support
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
