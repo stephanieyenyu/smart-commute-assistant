@@ -761,29 +761,14 @@ async def _compute_today_plan(
                 "message": "您的出發地址尚未設定完整經緯度，請重新傳送出發位置 📍",
             }
 
-        if office_lat is None or office_lng is None:
-            # 嘗試從 destination 的 address 做 geocode 補救
-            dest_address = getattr(profile, "office_address", None)
-            if dest_address:
-                try:
-                    from app.google_maps import geocode_address as _geocode
-                    geo = await _geocode(dest_address)
-                    if geo and geo.get("lat") and geo.get("lng"):
-                        profile = SimpleNamespace(**profile.__dict__)
-                        profile.office_lat = geo["lat"]
-                        profile.office_lng = geo["lng"]
-                        office_lat = geo["lat"]
-                        office_lng = geo["lng"]
-                        print(f"[compute-plan] geocoded destination: lat={office_lat} lng={office_lng}")
-                except Exception as _ge:
-                    print(f"[compute-plan] geocode fallback failed: {_ge}")
-
+        # 移除 geocode 補救邏輯與地址字串驗證
+        # 只要有 destination_lat 與 destination_lng 就視為合法
         if office_lat is None or office_lng is None:
             print(f"[compute-plan] missing destination coordinates for label={destination_label}")
             return {
                 "ok": False,
                 "reason": "missing_destination_address",
-                "message": f"您的排程「{destination_label}」缺少完整的地址資訊，請先至 [排程設定] 補齊地址喔！",
+                "message": f"您的排程「{destination_label}」缺少經緯度資訊，請先至 [排程設定] 補齊經緯度喔！",
             }
 
         schedule_template_id = effective_setting.get("schedule_template_id")
