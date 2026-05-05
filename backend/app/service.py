@@ -763,6 +763,27 @@ async def _compute_today_plan(
             print(f"[compute-plan] using home as origin: lat={effective_origin_lat} lng={effective_origin_lng} address={effective_origin_address}")
 
         # 雙軌制驗證：只要有「經緯度」或「地址字串」其中一項就視為合法
+        # 強制型態轉換：確保字串轉浮點數不會失敗
+        try:
+            if effective_origin_lat is not None:
+                effective_origin_lat = float(effective_origin_lat)
+            if effective_origin_lng is not None:
+                effective_origin_lng = float(effective_origin_lng)
+        except (ValueError, TypeError) as e:
+            print(f"[compute-plan] origin coordinate conversion error: {e}, lat={effective_origin_lat}, lng={effective_origin_lng}")
+            effective_origin_lat = None
+            effective_origin_lng = None
+        
+        try:
+            if office_lat is not None:
+                office_lat = float(office_lat)
+            if office_lng is not None:
+                office_lng = float(office_lng)
+        except (ValueError, TypeError) as e:
+            print(f"[compute-plan] destination coordinate conversion error: {e}, lat={office_lat}, lng={office_lng}")
+            office_lat = None
+            office_lng = None
+        
         has_origin_coords = effective_origin_lat is not None and effective_origin_lng is not None
         has_origin_address = effective_origin_address and effective_origin_address.strip()
         
@@ -784,6 +805,8 @@ async def _compute_today_plan(
                 "reason": "missing_destination_address",
                 "message": f"您的排程「{destination_label}」缺少經緯度或地址資訊，請先至 [排程設定] 補齊喔！",
             }
+        
+        print(f"[compute-plan] validation passed: origin_coords={has_origin_coords}, origin_addr={has_origin_address}, dest_coords={has_dest_coords}, dest_addr={has_dest_address}")
 
         schedule_template_id = effective_setting.get("schedule_template_id")
         used_override = False
