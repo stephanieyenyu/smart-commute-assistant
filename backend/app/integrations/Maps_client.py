@@ -60,29 +60,39 @@ def _extract_city_from_address_components(components: list[dict]) -> str | None:
     return _normalize_city_name(city)
 
 async def geocode_address(address: str):
+    print(f"[maps-geocode] Called with address={address}")
+    
     cache_key = f"maps:geocode:{address}"
     cached = await get_cache(cache_key)
     if cached:
+        print(f"[maps-geocode] Cache hit for address={address}")
         return cached
 
     params = {"address": address, "key": GOOGLE_MAPS_API_KEY}
+    print(f"[maps-geocode] Request params: {params}")
+    
     timer = api_timer_start()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
             response = await client.get(GEOCODE_URL, params=params)
+            print(f"[maps-geocode] Response status: {response.status_code}")
             log_api_health("google.geocode", timer, status_code=response.status_code)
             response.raise_for_status()
             data = response.json()
     except Exception as e:
         log_api_health("google.geocode", timer, error_message=str(e))
+        print(f"[maps-geocode] exception: {e}")
+        print(f"[maps-geocode] Error details - address={address}, params={params}")
         raise
 
     status = data.get("status")
     if status != "OK":
+        print(f"[maps-geocode] API returned non-OK status: {status}")
         return None
 
     results = data.get("results", [])
     if not results:
+        print(f"[maps-geocode] No results found for address={address}")
         return None
 
     first = results[0]
@@ -96,6 +106,7 @@ async def geocode_address(address: str):
         "lng": location["lng"],
         "city": city,
     }
+    print(f"[maps-geocode] Success for address={address}: lat={location['lat']}, lng={location['lng']}, city={city}")
     # Cache geocode for 24 hours since locations rarely change
     await set_cache(cache_key, result, expire_seconds=86400)
     return result
@@ -103,8 +114,8 @@ async def geocode_address(address: str):
 async def estimate_transit_minutes_detailed(
     origin_lat: float,
     origin_lng: float,
-    dest_lat: float,
-    dest_lng: float,
+    destination_lat: float,
+    destination_lng: float,
     arrival_datetime: datetime,
     allowed_travel_modes: list[str] | None = None,
     routing_preference: str | None = None,
@@ -114,12 +125,14 @@ async def estimate_transit_minutes_detailed(
         print("[maps] estimate_transit_minutes_detailed: GOOGLE_MAPS_API_KEY is not set, skipping")
         return None
 
+    print(f"[maps-transit-detailed] Called with parameters: origin_lat={origin_lat}, origin_lng={origin_lng}, destination_lat={destination_lat}, destination_lng={destination_lng}, arrival_datetime={arrival_datetime}, allowed_travel_modes={allowed_travel_modes}")
+
     # Create cache key, round coordinates and minute precision
     time_str = arrival_datetime.strftime('%Y%m%d%H%M')
     mode_key = ",".join(allowed_travel_modes or ["ANY"])
     preference_key = routing_preference or "FASTEST"
     alternatives_key = "alts" if compute_alternatives else "single"
-    cache_key = f"maps:transit:detailed:v2:{origin_lat:.4f},{origin_lng:.4f}:{dest_lat:.4f},{dest_lng:.4f}:{time_str}:{mode_key}:{preference_key}:{alternatives_key}"
+    cache_key = f"maps:transit:detailed:v2:{origin_lat:.4f},{origin_lng:.4f}:{destination_lat:.4f},{destination_lng:.4f}:{time_str}:{mode_key}:{preference_key}:{alternatives_key}"
 
     cached = await get_cache(cache_key)
     if cached:
@@ -147,10 +160,12 @@ async def estimate_transit_minutes_detailed(
 
     body = {
         "origin": {"location": {"latLng": {"latitude": origin_lat, "longitude": origin_lng}}},
-        "destination": {"location": {"latLng": {"latitude": dest_lat, "longitude": dest_lng}}},
+        "destination": {"location": {"latLng": {"latitude": destination_lat, "longitude": destination_lng}}},
         "travelMode": "TRANSIT",
         "arrivalTime": arrival_time_str,
     }
+
+    print(f"[maps-transit-detailed] Request payload: {body}")
     if transit_preferences:
         body["transitPreferences"] = transit_preferences
     if compute_alternatives:
@@ -158,7 +173,7 @@ async def estimate_transit_minutes_detailed(
 
     print(
         f"[maps-transit] origin=({origin_lat:.5f},{origin_lng:.5f}) "
-        f"dest=({dest_lat:.5f},{dest_lng:.5f}) "
+        f"dest=({destination_lat:.5f},{destination_lng:.5f}) "
         f"arrivalTime={arrival_time_str} modes={allowed_travel_modes}"
     )
 
@@ -179,11 +194,12 @@ async def estimate_transit_minutes_detailed(
     except Exception as e:
         log_api_health("google.routes.transit", timer, error_message=str(e))
         print(f"[maps-transit] exception: {e}")
+        print(f"[maps-transit] Error details - origin=({origin_lat},{origin_lng}) destination=({destination_lat},{destination_lng}) arrival_time={arrival_time_str}")
         raise
 
     routes = data.get("routes", [])
     if not routes:
-        print(f"[maps-transit] no routes returned for origin=({origin_lat},{origin_lng}) dest=({dest_lat},{dest_lng})")
+        print(f"[maps-transit] no routes returned for origin=({origin_lat},{origin_lng}) dest=({destination_lat},{destination_lng})")
         return None
 
     route = _select_shortest_route(routes)
@@ -228,17 +244,26 @@ async def estimate_transit_minutes_detailed(
     return result
 
 
-async def estimate_transit_minutes(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float, arrival_datetime: datetime):
+async def estimate_transit_minutes(origin_lat: float, origin_lng: float, destination_lat: float, destination_lng: float, arrival_datetime: datetime):
     # Backward compatibility
-    res = await estimate_transit_minutes_detailed(origin_lat, origin_lng, dest_lat, dest_lng, arrival_datetime)
-    return res["duration_minutes"] if res else None
+    print(f"[maps-transit-simple] Called with parameters: origin_lat={origin_lat}, origin_lng={origin_lng}, destination_lat={destination_lat}, destination_lng={destination_lng}, arrival_datetime={arrival_datetime}")
+    try:
+        res = await estimate_transit_minutes_detailed(origin_lat, origin_lng, destination_lat, destination_lng, arrival_datetime)
+        return res["duration_minutes"] if res else None
+    except Exception as e:
+        print(f"[maps-transit-simple] exception: {e}")
+        print(f"[maps-transit-simple] Error details - origin=({origin_lat},{origin_lng}) destination=({destination_lat},{destination_lng}) arrival_datetime={arrival_datetime}")
+        raise
 
 async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destination_lat: float, destination_lng: float):
+    print(f"[maps-walk] Called with parameters: origin_lat={origin_lat}, origin_lng={origin_lng}, destination_lat={destination_lat}, destination_lng={destination_lng}")
+    
     time_str = datetime.now().strftime('%Y%m%d%H')
     cache_key = f"maps:walk:{origin_lat:.4f},{origin_lng:.4f}:{destination_lat:.4f},{destination_lng:.4f}:{time_str}"
     
     cached = await get_cache(cache_key)
     if cached:
+        print(f"[maps-walk] Cache hit, returning cached value: {cached} minutes")
         return cached
 
     headers = {
@@ -253,10 +278,13 @@ async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destina
         "travelMode": "WALK",
     }
 
+    print(f"[maps-walk] Request payload: {body}")
+
     timer = api_timer_start()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5)) as client:
             response = await client.post(ROUTES_URL, headers=headers, json=body)
+            print(f"[maps-walk] Response status: {response.status_code}")
             log_api_health("google.routes.walk", timer, status_code=response.status_code)
             if response.status_code >= 400:
                 print(f"[maps-walk] failed: {response.text}")
@@ -264,16 +292,21 @@ async def estimate_walking_minutes(origin_lat: float, origin_lng: float, destina
             data = response.json()
     except Exception as e:
         log_api_health("google.routes.walk", timer, error_message=str(e))
+        print(f"[maps-walk] exception: {e}")
+        print(f"[maps-walk] Error details - origin=({origin_lat},{origin_lng}) destination=({destination_lat},{destination_lng})")
         raise
 
     routes = data.get("routes", [])
     if not routes:
+        print(f"[maps-walk] No routes returned")
         return None
 
     duration_str = routes[0].get("duration")
     if not duration_str or not duration_str.endswith("s"):
+        print(f"[maps-walk] Invalid duration format: {duration_str}")
         return None
 
     minutes = max(1, round(float(duration_str[:-1]) / 60))
+    print(f"[maps-walk] Success: duration={minutes} minutes")
     await set_cache(cache_key, minutes, expire_seconds=3600)
     return minutes

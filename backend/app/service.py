@@ -124,13 +124,21 @@ async def _fetch_arrivals_for_stop(city_name: str, stop: dict) -> list[dict]:
 
 
 async def estimate_commute_minutes(profile, target_date: date, arrival_time_str: str) -> int:
+    home_lat = getattr(profile, "home_lat", None)
+    home_lng = getattr(profile, "home_lng", None)
+    office_lat = getattr(profile, "office_lat", None)
+    office_lng = getattr(profile, "office_lng", None)
+    
+    print(f"[estimate-commute] Called with parameters: home_lat={home_lat}, home_lng={home_lng}, office_lat={office_lat}, office_lng={office_lng}, target_date={target_date}, arrival_time_str={arrival_time_str}")
+    
     if (
-        getattr(profile, "home_lat", None) is None
-        or getattr(profile, "home_lng", None) is None
-        or getattr(profile, "office_lat", None) is None
-        or getattr(profile, "office_lng", None) is None
+        home_lat is None
+        or home_lng is None
+        or office_lat is None
+        or office_lng is None
         or not arrival_time_str
     ):
+        print(f"[estimate-commute] Missing required parameters, returning default")
         return DEFAULT_COMMUTE_MINUTES
 
     cache_key = (
@@ -141,9 +149,11 @@ async def estimate_commute_minutes(profile, target_date: date, arrival_time_str:
     now = time.time()
     cached = _TRANSIT_CACHE.get(cache_key)
     if cached and now - cached[0] <= TRANSIT_CACHE_SECONDS:
+        print(f"[estimate-commute] Cache hit, returning cached value: {cached[1]} minutes")
         return cached[1]
 
     arrival_dt = combine_date_hhmm(target_date, arrival_time_str)
+    print(f"[estimate-commute] Calling Google Maps API with arrival_dt={arrival_dt}")
 
     try:
         minutes = await estimate_transit_minutes(
@@ -153,10 +163,13 @@ async def estimate_commute_minutes(profile, target_date: date, arrival_time_str:
             destination_lng=profile.office_lng,
             arrival_datetime=arrival_dt,
         )
+        print(f"[estimate-commute] Google Maps API returned: {minutes} minutes")
         _TRANSIT_CACHE[cache_key] = (now, minutes)
         return minutes
     except Exception as e:
-        print(f"[routes] estimate failed: {e}")
+        print(f"[estimate-commute] exception: {e}")
+        print(f"[estimate-commute] Error details - origin=({profile.home_lat},{profile.home_lng}) destination=({profile.office_lat},{profile.office_lng}) arrival_time={arrival_time_str}")
+        traceback.print_exc()
         return DEFAULT_COMMUTE_MINUTES
 
 
@@ -247,15 +260,20 @@ async def get_bus_realtime_snapshot(profile):
         home_lng = getattr(profile, "home_lng", None)
         city_name = _city_from_profile(profile)
 
+        print(f"[bus-snapshot] Called with parameters: home_lat={home_lat}, home_lng={home_lng}, city_name={city_name}")
+
         if home_lat is None or home_lng is None or not city_name:
+            print(f"[bus-snapshot] Missing required parameters: home_lat={home_lat}, home_lng={home_lng}, city_name={city_name}")
             return {"available": False, "reason": "city_or_coords_missing"}
 
         cache_key = f"{home_lat}|{home_lng}|{city_name}"
         now = time.time()
         cached = _BUS_CACHE.get(cache_key)
         if cached and now - cached[0] <= BUS_CACHE_SECONDS:
+            print(f"[bus-snapshot] Cache hit, returning cached data")
             return cached[1]
 
+        print(f"[bus-snapshot] Calling get_nearby_stops with city_name={city_name}, lat={home_lat}, lng={home_lng}")
         nearby_stops = await get_nearby_stops(
             city_name=city_name,
             lat=home_lat,
@@ -263,9 +281,11 @@ async def get_bus_realtime_snapshot(profile):
             distance_m=500,
             top=8,
         )
+        print(f"[bus-snapshot] get_nearby_stops returned {len(nearby_stops) if nearby_stops else 0} stops")
         nearby_stops = _dedupe_stops_by_name(nearby_stops)
 
         if not nearby_stops:
+            print(f"[bus-snapshot] No nearby stops found")
             result = {"available": False, "reason": "no_nearby_stops"}
             _BUS_CACHE[cache_key] = (now, result)
             return result
@@ -284,8 +304,10 @@ async def get_bus_realtime_snapshot(profile):
             walk_minutes = max(1, round(dist_km * 1000 / 80))
 
         arrival_at_stop_min = (walk_minutes or 0) + 1
+        print(f"[bus-snapshot] Fetching arrivals for stop: {first_stop.get('stop_name')}")
         valid_eta_list = await _fetch_arrivals_for_stop(city_name, first_stop)
         valid_eta_list = [eta for eta in valid_eta_list if eta.get("eta_min") is not None]
+        print(f"[bus-snapshot] Got {len(valid_eta_list)} valid ETA entries")
 
         chosen_bus = None
         for eta in valid_eta_list:
@@ -312,7 +334,8 @@ async def get_bus_realtime_snapshot(profile):
         return result
 
     except Exception as e:
-        print(f"[bus-snapshot] failed: {e}")
+        print(f"[bus-snapshot] exception: {e}")
+        traceback.print_exc()
         return {"available": False, "reason": "exception"}
 
 
@@ -323,15 +346,20 @@ async def get_metro_snapshot(profile):
         office_lat = getattr(profile, "office_lat", None)
         office_lng = getattr(profile, "office_lng", None)
 
+        print(f"[metro-snapshot] Called with parameters: home_lat={home_lat}, home_lng={home_lng}, office_lat={office_lat}, office_lng={office_lng}")
+
         if home_lat is None or home_lng is None:
+            print(f"[metro-snapshot] Missing home coordinates")
             return {"available": False, "reason": "coords_missing"}
 
         cache_key = f"{home_lat}|{home_lng}|{office_lat}|{office_lng}"
         now = time.time()
         cached = _METRO_CACHE.get(cache_key)
         if cached and now - cached[0] <= METRO_CACHE_SECONDS:
+            print(f"[metro-snapshot] Cache hit, returning cached data")
             return cached[1]
 
+        print(f"[metro-snapshot] Fetching nearest metro station for home=({home_lat},{home_lng})")
         station_task = asyncio.create_task(get_nearest_metro_station_async(home_lat, home_lng))
         destination_station_task = (
             asyncio.create_task(get_nearest_metro_station_async(office_lat, office_lng))
@@ -341,17 +369,22 @@ async def get_metro_snapshot(profile):
 
         station = await station_task
         if not station:
+            print(f"[metro-snapshot] No station found near home")
             if destination_station_task:
                 destination_station_task.cancel()
             result = {"available": False, "reason": "no_station"}
             _METRO_CACHE[cache_key] = (now, result)
             return result
 
+        print(f"[metro-snapshot] Found station: {station.get('name')}")
+
         destination_station = None
         suggested_exit = None
         if destination_station_task:
             destination_station = await destination_station_task
+            print(f"[metro-snapshot] Found destination station: {destination_station.get('name') if destination_station else None}")
             exits = await get_station_exits_async((destination_station or {}).get("id"))
+            print(f"[metro-snapshot] Got {len(exits) if exits else 0} exits for destination station")
             exits_with_distance = []
             for exit_info in exits:
                 exit_lat = exit_info.get("lat")
@@ -364,6 +397,7 @@ async def get_metro_snapshot(profile):
                 ))
             if exits_with_distance:
                 suggested_exit = min(exits_with_distance, key=lambda item: item[0])[1]
+                print(f"[metro-snapshot] Suggested exit: {suggested_exit.get('name')}")
 
         station_lat = station.get("lat")
         station_lng = station.get("lng")
@@ -390,7 +424,8 @@ async def get_metro_snapshot(profile):
         return result
 
     except Exception as e:
-        print(f"[metro-snapshot] failed: {e}")
+        print(f"[metro-snapshot] exception: {e}")
+        traceback.print_exc()
         return {"available": False, "reason": "exception"}
 
 
