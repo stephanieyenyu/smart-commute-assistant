@@ -736,39 +736,53 @@ async def _compute_today_plan(
 
         home_lat = getattr(profile, "home_lat", None)
         home_lng = getattr(profile, "home_lng", None)
+        home_address = getattr(profile, "home_address", None)
         office_lat = getattr(profile, "office_lat", None)
         office_lng = getattr(profile, "office_lng", None)
+        office_address = getattr(profile, "office_address", None)
 
-        # Check for custom schedule origin
+        # Check for custom schedule origin (coordinates or address)
         schedule_origin_lat = effective_setting.get("origin_lat")
         schedule_origin_lng = effective_setting.get("origin_lng")
+        schedule_origin_address = effective_setting.get("origin_address")
+        
         if schedule_origin_lat is not None and schedule_origin_lng is not None:
             effective_origin_lat = schedule_origin_lat
             effective_origin_lng = schedule_origin_lng
+            effective_origin_address = schedule_origin_address or home_address
             print(f"[compute-plan] using schedule custom origin: lat={effective_origin_lat} lng={effective_origin_lng}")
+        elif schedule_origin_address and schedule_origin_address.strip():
+            effective_origin_lat = None
+            effective_origin_lng = None
+            effective_origin_address = schedule_origin_address
+            print(f"[compute-plan] using schedule custom origin address: {effective_origin_address}")
         else:
             effective_origin_lat = home_lat
             effective_origin_lng = home_lng
-            print(f"[compute-plan] using home as origin: lat={effective_origin_lat} lng={effective_origin_lng}")
+            effective_origin_address = home_address
+            print(f"[compute-plan] using home as origin: lat={effective_origin_lat} lng={effective_origin_lng} address={effective_origin_address}")
 
-        print(f"[compute-plan] coords origin=({effective_origin_lat},{effective_origin_lng}) office=({office_lat},{office_lng}) arrival={effective_arrival_time}")
-
-        if effective_origin_lat is None or effective_origin_lng is None:
-            print(f"[compute-plan] missing origin coordinates")
+        # 雙軌制驗證：只要有「經緯度」或「地址字串」其中一項就視為合法
+        has_origin_coords = effective_origin_lat is not None and effective_origin_lng is not None
+        has_origin_address = effective_origin_address and effective_origin_address.strip()
+        
+        if not has_origin_coords and not has_origin_address:
+            print(f"[compute-plan] missing origin: coords=({effective_origin_lat},{effective_origin_lng}) address={effective_origin_address}")
             return {
                 "ok": False,
                 "reason": "missing_home_address",
-                "message": "您的出發地址尚未設定完整經緯度，請重新傳送出發位置 📍",
+                "message": "您的出發地址尚未設定完整，請提供經緯度或地址字串 📍",
             }
 
-        # 移除 geocode 補救邏輯與地址字串驗證
-        # 只要有 destination_lat 與 destination_lng 就視為合法
-        if office_lat is None or office_lng is None:
-            print(f"[compute-plan] missing destination coordinates for label={destination_label}")
+        has_dest_coords = office_lat is not None and office_lng is not None
+        has_dest_address = office_address and office_address.strip()
+        
+        if not has_dest_coords and not has_dest_address:
+            print(f"[compute-plan] missing destination: coords=({office_lat},{office_lng}) address={office_address}")
             return {
                 "ok": False,
                 "reason": "missing_destination_address",
-                "message": f"您的排程「{destination_label}」缺少經緯度資訊，請先至 [排程設定] 補齊經緯度喔！",
+                "message": f"您的排程「{destination_label}」缺少經緯度或地址資訊，請先至 [排程設定] 補齊喔！",
             }
 
         schedule_template_id = effective_setting.get("schedule_template_id")
@@ -782,25 +796,46 @@ async def _compute_today_plan(
 
         print(f"[compute-plan] calling Google Maps API: mode_override={mode_override}")
 
-        # Inject effective origin into profile for API calls
+        # Inject effective origin into profile for API calls (智慧參數帶入)
         api_profile = profile
-        if effective_origin_lat != home_lat or effective_origin_lng != home_lng:
-            api_profile = SimpleNamespace(**profile.__dict__)
-            api_profile.home_lat = effective_origin_lat
-            api_profile.home_lng = effective_origin_lng
-            if effective_setting.get("origin_address"):
-                api_profile.home_address = effective_setting["origin_address"]
+        if effective_origin_lat is not None and effective_origin_lng is not None:
+            # 使用經緯度（優先）
+            if effective_origin_lat != home_lat or effective_origin_lng != home_lng:
+                api_profile = SimpleNamespace(**profile.__dict__)
+                api_profile.home_lat = effective_origin_lat
+                api_profile.home_lng = effective_origin_lng
+                print(f"[compute-plan] API call using origin coordinates: ({effective_origin_lat},{effective_origin_lng})")
+        elif effective_origin_address and effective_origin_address.strip():
+            # 使用地址字串（備援）
+            if effective_origin_address != home_address:
+                api_profile = SimpleNamespace(**profile.__dict__)
+                api_profile.home_address = effective_origin_address
+                print(f"[compute-plan] API call using origin address: {effective_origin_address}")
+        
+        # 目的地也使用智慧參數帶入
+        if office_lat is not None and office_lng is not None:
+            print(f"[compute-plan] API call using destination coordinates: ({office_lat},{office_lng})")
+        elif office_address and office_address.strip():
+            print(f"[compute-plan] API call using destination address: {office_address}")
 
-        weather_info, option_choice = await asyncio.gather(
-            safe_call(get_commute_weather(api_profile), timeout_seconds=1.5),
-            safe_call(choose_commute_option_with_override(
-                profile=api_profile,
-                effective_arrival_time=effective_arrival_time,
-                weather_buffer_minutes=0,
-                target_date=target_date,
-                mode_override=mode_override,
-            ), timeout_seconds=3.5),
-        )
+        try:
+            weather_info, option_choice = await asyncio.gather(
+                safe_call(get_commute_weather(api_profile), timeout_seconds=1.5),
+                safe_call(choose_commute_option_with_override(
+                    profile=api_profile,
+                    effective_arrival_time=effective_arrival_time,
+                    weather_buffer_minutes=0,
+                    target_date=target_date,
+                    mode_override=mode_override,
+                ), timeout_seconds=3.5),
+            )
+            print(f"[compute-plan] API calls completed: weather={weather_info is not None} option={option_choice is not None}")
+        except Exception as e:
+            print(f"[compute-plan] API calls failed: {e}")
+            traceback.print_exc()
+            # 即使 API 失敗也嘗試繼續使用預設值
+            weather_info = {"extra_buffer_minutes": 0, "weather_text": "未知", "temperature": None, "pop": None}
+            option_choice = {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
 
         print(f"[compute-plan] weather={weather_info is not None} option_choice={option_choice is not None}")
         weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
