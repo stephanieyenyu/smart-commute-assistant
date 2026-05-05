@@ -375,22 +375,58 @@ def format_today_commute_text(plan: dict, header: str = "今日通勤建議：")
     commute_line = f"通勤時間：約 {baseline_minutes} 分鐘"
     transport_line = f"通勤方式：{get_transport_line(plan)}"
 
+    # 完整天氣資訊：氣溫、天氣狀況描述、降雨機率
     wx_text = weather_info.get("weather_text", "未知")
     temp_min = weather_info.get("temperature_min")
     temp_max = weather_info.get("temperature_max")
     temp = weather_info.get("temperature")
     pop = weather_info.get("pop")
+    wx_description = weather_info.get("wx_description", "")  # 天氣狀況詳細描述
 
     if temp is not None:
-        temp_str = f"，{temp}°C"
+        temp_str = f"，氣溫 {temp}°C"
     elif temp_min is not None and temp_max is not None:
-        temp_str = f"，{temp_min}-{temp_max}°C"
+        temp_str = f"，氣溫 {temp_min}-{temp_max}°C"
     else:
         temp_str = ""
-    pop_str = f"。降雨機率 {pop}%" if pop is not None else ""
-    weather_line = f"今日天氣：{wx_text}{temp_str}{pop_str}"
+    
+    pop_str = f"，降雨機率 {pop}%" if pop is not None else ""
+    desc_str = f"（{wx_description}）" if wx_description else ""
+    weather_line = f"今日天氣：{wx_text}{temp_str}{pop_str}{desc_str}"
 
-    return "\n".join([header, arrival_line, departure_line, transport_line, commute_line, weather_line])
+    # 完整交通方式詳細說明（從 API 回傳的 Transit Details 解析）
+    detailed_transport = ""
+    best_option = plan.get("best_option", {})
+    if best_option and isinstance(best_option, dict):
+        google_steps = best_option.get("google_steps", [])
+        if google_steps and isinstance(google_steps, list):
+            transport_details = []
+            for step in google_steps:
+                step_mode = step.get("travel_mode", "")
+                if step_mode == "WALK":
+                    duration = step.get("duration", {})
+                    if isinstance(duration, dict):
+                        duration_text = duration.get("text", "")
+                        if duration_text:
+                            transport_details.append(f"步行 {duration_text}")
+                elif step_mode in ["TRANSIT", "BUS", "SUBWAY", "RAIL"]:
+                    transit_details = step.get("transit_details", {})
+                    if isinstance(transit_details, dict):
+                        line_name = transit_details.get("line", {}).get("name", "")
+                        num_stops = transit_details.get("num_stops", 0)
+                        departure_stop = transit_details.get("departure_stop", {}).get("name", "")
+                        arrival_stop = transit_details.get("arrival_stop", {}).get("name", "")
+                        
+                        if line_name:
+                            if departure_stop and arrival_stop:
+                                transport_details.append(f"搭乘 {line_name}（{departure_stop} → {arrival_stop}）")
+                            else:
+                                transport_details.append(f"搭乘 {line_name}")
+            
+            if transport_details:
+                detailed_transport = "\n詳細路線：" + " → ".join(transport_details)
+
+    return "\n".join([header, arrival_line, departure_line, transport_line, commute_line, weather_line, detailed_transport])
 
 
 def build_reminder_payload_from_plan(plan: dict) -> dict:
