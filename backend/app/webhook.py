@@ -231,6 +231,7 @@ def setup_quick_replies_for_step(step: str | None) -> list[dict]:
 ORIGIN_QUESTION_QUICK_REPLIES = [
     {"type": "message", "label": "相同，從家裡出發", "text": "相同，從家裡出發"},
     {"type": "message", "label": "不同，設定其他出發地", "text": "不同，設定其他出發地"},
+    {"type": "location", "label": "📍 開啟地圖選位置"},
 ]
 
 

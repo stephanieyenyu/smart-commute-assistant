@@ -61,6 +61,22 @@ def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
     return profile
 
 
+def hard_reset_database_via_crud(db: Session):
+    """
+    Convenience wrapper to hard reset the physical database file or drop
+    and recreate all tables. This function expects the caller to have
+    an active SQLAlchemy session (which will be closed after this call).
+    """
+    try:
+        # Import here to avoid circular import at module load time
+        from app.db import hard_reset_database
+        hard_reset_database()
+        return True
+    except Exception as e:
+        print(f"[crud.hard_reset_database_via_crud] error: {e}")
+        return False
+
+
 def get_profile(db: Session, user_id: int) -> CommuteProfile:
     profile = db.query(CommuteProfile).filter(CommuteProfile.user_id == user_id).first()
     if profile:
