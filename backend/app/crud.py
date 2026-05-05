@@ -454,9 +454,9 @@ def get_user_destinations(db: Session, user_id: int) -> list[CommuteDestination]
     return db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).filter(CommuteDestination.is_deleted.is_(False)).order_by(CommuteDestination.id.asc()).all()
 
 
-def get_recent_destinations(db: Session, user_id: int, limit: int = 5) -> list[CommuteDestination]:
+def get_recent_destinations(db: Session, user_id: int, limit: int = 12) -> list[CommuteDestination]:
     """
-    取得用戶最近使用的目的地（有座標的優先，按 updated_at 降序）。
+    取得用戶最近使用的目的地（按 updated_at 降序）。
     用於 pick_location 的歷史快選 Quick Reply。
     """
     return (
