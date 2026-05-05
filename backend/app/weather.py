@@ -161,17 +161,21 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
     city_name = normalize_city_name(city_name)
 
     if not city_name:
+        print("[weather-city] missing city_name parameter")
         return _build_failed_weather_result(scope="missing_city")
+
+    print(f"[weather-city] Fetching weather for city={city_name}")
 
     now_ts = datetime.now().timestamp()
     cached = _weather_cache.get(city_name)
     if cached and now_ts - cached[0] <= WEATHER_CACHE_SECONDS:
+        print(f"[weather-city] Cache hit for city={city_name}")
         return cached[1]
     stale_cached = cached
 
     api_key = _get_weather_api_key()
     if not api_key:
-        print("[weather] missing API key")
+        print("[weather-city] missing API key")
         return _build_failed_weather_result(city=city_name, scope="missing_api_key")
 
     url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
@@ -181,6 +185,9 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
         "locationName": city_name,
     }
 
+    print(f"[weather-city] Request URL: {url}")
+    print(f"[weather-city] Request params: {params}")
+
     timer = api_timer_start()
     try:
         async with httpx.AsyncClient(
@@ -189,22 +196,25 @@ async def get_today_weather_by_city(city_name: str | None) -> dict[str, Any]:
         ) as client:
             response = await client.get(url, params=params)
             log_api_health("cwa.weather.city", timer, status_code=response.status_code)
+            print(f"[weather-city] Response status: {response.status_code}")
             if response.status_code >= 400:
-                print(f"[weather] city lookup failed: city={city_name}, status={response.status_code}, body={response.text}")
+                print(f"[weather-city] city lookup failed: city={city_name}, status={response.status_code}, body={response.text}")
             response.raise_for_status()
             payload = response.json()
+            print(f"[weather-city] Successfully received payload for city={city_name}")
             result = _parse_city_weather_payload(city_name, payload)
             _weather_cache[city_name] = (now_ts, result)
-            print(f"[weather] success city={city_name} result={result}")
+            print(f"[weather-city] success city={city_name} result={result}")
             return result
 
     except Exception as e:
         log_api_health("cwa.weather.city", timer, error_message=str(e))
-        print(f"[weather] city lookup failed: city={city_name}, error={e}")
+        print(f"[weather-city] city lookup failed: city={city_name}, error={e}")
+        print(f"[weather-city] Error details - url={url}, params={params}")
         if stale_cached:
             result = dict(stale_cached[1])
             result["scope"] = f"{result.get('scope') or 'city'}_stale_cache"
-            print(f"[weather] using stale cache city={city_name}")
+            print(f"[weather-city] using stale cache city={city_name}")
             return result
         return _build_failed_weather_result(city=city_name, scope="weather_api_failed")
 
@@ -218,7 +228,7 @@ async def get_commute_weather(profile) -> dict[str, Any]:
     office_address = getattr(profile, "office_address", None)
 
     print(
-        f"[weather-debug] home_city={home_city}, home_township={home_township}, "
+        f"[weather-commute] profile data - home_city={home_city}, home_township={home_township}, "
         f"home_address={home_address}, office_city={office_city}, office_address={office_address}"
     )
 
@@ -229,8 +239,10 @@ async def get_commute_weather(profile) -> dict[str, Any]:
         or extract_city_from_text(office_address)
     )
 
+    print(f"[weather-commute] Determined city_name={city_name}")
+
     if not city_name:
-        print("[weather] no city info found from profile/address")
+        print("[weather-commute] no city info found from profile/address")
         return _build_failed_weather_result(
             city=None,
             township=home_township,
