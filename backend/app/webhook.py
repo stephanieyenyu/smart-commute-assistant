@@ -85,6 +85,76 @@ router = APIRouter()
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 
+async def send_commute_suggestion_with_dashboard_update(
+    db,
+    user_id: int,
+    line_user_id: str,
+    reply_token: str,
+    target_date: date | None = None,
+    mode_override: str | None = None,
+    header: str = "今日通勤建議：",
+):
+    """
+    強制執行通勤計算 API，並同時回傳 LINE 訊息與更新 Dashboard
+    確保即使 API 失敗也會回傳明確的錯誤訊息
+    """
+    try:
+        print(f"[commute-suggestion] user_id={user_id} target_date={target_date} mode_override={mode_override}")
+        
+        # 強制執行通勤計算
+        plan = await build_today_commute_payload(
+            db=db,
+            user_id=user_id,
+            target_date=target_date,
+            force_mode_override=mode_override,
+            header=header,
+            log_plan=True,
+        )
+        
+        if not plan.get("ok"):
+            reason = plan.get("reason", "unknown")
+            message = plan.get("message", "無法計算通勤建議")
+            print(f"[commute-suggestion] plan failed: reason={reason} message={message}")
+            await reply_with_quick_reply(
+                reply_token,
+                f"❌ {message}",
+                [],
+            )
+            return False
+        
+        # 回傳完整通勤建議訊息給 LINE
+        commute_text = plan.get("text", "")
+        print(f"[commute-suggestion] sending to LINE: {commute_text[:200]}...")
+        await reply_with_quick_reply(
+            reply_token,
+            commute_text,
+            [],
+        )
+        
+        # 同步更新 Dashboard（透過 WebSocket 或 REST API）
+        try:
+            from app.dashboard import update_dashboard_commute_data
+            await update_dashboard_commute_data(db, user_id, plan)
+            print(f"[commute-suggestion] dashboard updated successfully")
+        except Exception as e:
+            print(f"[commute-suggestion] dashboard update failed: {e}")
+            # Dashboard 更新失敗不影響 LINE 回傳
+        
+        print(f"[commute-suggestion] completed successfully")
+        return True
+        
+    except Exception as e:
+        print(f"[commute-suggestion] UNEXPECTED ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        await reply_with_quick_reply(
+            reply_token,
+            f"❌ 系統內部錯誤：{str(e)}",
+            [],
+        )
+        return False
+
+
 def today_taipei() -> date:
     return datetime.now(TAIPEI_TZ).date()
 
@@ -3435,11 +3505,16 @@ async def line_webhook(
                 last_pipe = raw_state.rfind("|")
                 if last_pipe >= 0:
                     payload_str = raw_state[:last_pipe]
+                    suggested_name = raw_state[last_pipe + 1:]
                 else:
                     payload_str = raw_state
+                    suggested_name = ""
                 pending = parse_add_schedule_pending("add_schedule:" + payload_str)
                 dest_name = user_text.strip()[:20] or "目的地"
                 pending["dest_label"] = dest_name
+                # 確保經緯度不遺失：如果原本有座標，絕對保留
+                if pending.get("dest_lat") is None or pending.get("dest_lng") is None:
+                    print(f"[add_schedule_name_dest] WARNING: dest_lat={pending.get('dest_lat')}, dest_lng={pending.get('dest_lng')} - coordinates may be lost")
                 # 寫入歷史目的地紀錄（含座標）
                 if dest_name and dest_name != "目的地":
                     upsert_destination(
