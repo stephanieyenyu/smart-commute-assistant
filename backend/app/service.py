@@ -53,9 +53,10 @@ MODE_LABELS = {
 
 
 def combine_date_hhmm(target_date: date, hhmm: str) -> datetime:
+    """建立帶台北時區的 datetime，確保傳給 Google Maps API 的時間正確。"""
     hhmm_normalized = hhmm.replace("：", ":")
     t = datetime.strptime(hhmm_normalized, "%H:%M").time()
-    return datetime.combine(target_date, t)
+    return datetime.combine(target_date, t, tzinfo=TAIPEI_TZ)
 
 
 def _now_taipei_naive() -> datetime:
