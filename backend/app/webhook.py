@@ -49,6 +49,7 @@ from app.crud import (
     get_schedule_template,
     get_schedule_templates,
     get_destination_by_label,
+    get_recent_destinations,
     get_household_id_for_user,
     get_users_for_household,
     ensure_personal_household,
@@ -385,6 +386,7 @@ REMINDER_SETTING_QUICK_REPLIES = with_done_button([
 ])
 
 SCHEDULE_QUICK_REPLIES = with_done_button([
+    {"type": "message", "label": "新增常用排程", "text": "新增常用排程"},
     {"type": "message", "label": "管理單一排程", "text": "管理單一排程"},
     {"type": "message", "label": "查看排程設定", "text": "查看排程設定"},
 ])
@@ -1260,6 +1262,29 @@ def _parse_pending_for_schedule_form(pf: str) -> tuple[dict, int | None]:
         payload_str = raw_state[:last_pipe] if last_pipe >= 0 else raw_state
         return parse_add_schedule_pending("add_schedule:" + payload_str), None
     return parse_add_schedule_pending(pf), None
+
+
+def build_destination_history_quick_replies(db, user_id: int) -> list[dict]:
+    """
+    建立目的地歷史快選 Quick Reply 列表。
+    前幾個是歷史目的地（postback 直接套用），最後一個是地圖定位按鈕。
+    LINE Quick Reply 上限 13 個，歷史最多取 5 個。
+    """
+    recent = get_recent_destinations(db, user_id, limit=5)
+    items: list[dict] = []
+    for dest in recent:
+        label = dest.label or "目的地"
+        # 顯示名稱截短到 20 字（LINE Quick Reply label 上限）
+        display = label[:20]
+        items.append({
+            "type": "postback",
+            "label": display,
+            "data": f"action=select_dest_history&dest_id={dest.id}",
+            "displayText": f"選擇：{display}",
+        })
+    # 最後一個：重新地圖定位
+    items.append({"type": "location", "label": "📍 重新地圖定位"})
+    return items
 
 
 def build_add_schedule_flex(
@@ -2295,11 +2320,22 @@ async def line_webhook(
                             set_pending_field(db, user.id, f"edit_schedule_pick_destination:{_edit_template_id}:{base_payload}")
                         else:
                             set_pending_field(db, user.id, "add_schedule_pick_destination:" + base_payload)
-                        await reply_with_quick_reply(
-                            reply_token,
-                            "請傳送目的地位置 🎯\n點下方按鈕開啟 LINE 地圖，或直接輸入地址。",
-                            [{"type": "location", "label": "📍 開啟地圖選位置"}],
-                        )
+                        # 建立歷史目的地 Quick Reply（含地圖定位按鈕）
+                        dest_qr = build_destination_history_quick_replies(db, user.id)
+                        if len(dest_qr) > 1:
+                            # 有歷史紀錄：顯示歷史 + 地圖按鈕
+                            await reply_with_quick_reply(
+                                reply_token,
+                                "請選擇歷史目的地，或點「📍 重新地圖定位」重新選點：",
+                                dest_qr,
+                            )
+                        else:
+                            # 無歷史紀錄：直接給地圖按鈕
+                            await reply_with_quick_reply(
+                                reply_token,
+                                "請傳送目的地位置 🎯\n點下方按鈕開啟 LINE 地圖，或直接輸入地址。",
+                                [{"type": "location", "label": "📍 開啟地圖選位置"}],
+                            )
                     else:
                         if _edit_template_id is not None:
                             set_pending_field(db, user.id, f"edit_schedule_pick_origin:{_edit_template_id}:{base_payload}")
@@ -2375,8 +2411,19 @@ async def line_webhook(
                             SCHEDULE_CONFLICT_QUICK_REPLIES,
                         )
                         continue
-                    # 儲存排程
-                    destination = get_destination_by_label(db, user.id, dest_label)
+                    # 儲存排程，同時 upsert 目的地到歷史紀錄
+                    # 若有座標就寫入，讓歷史快選能顯示
+                    dest_lat_val = pending.get("dest_lat")
+                    dest_lng_val = pending.get("dest_lng")
+                    if dest_label and dest_label != "目的地":
+                        destination = upsert_destination(
+                            db, user.id, dest_label,
+                            address=None,
+                            lat=dest_lat_val,
+                            lng=dest_lng_val,
+                        )
+                    else:
+                        destination = get_destination_by_label(db, user.id, dest_label)
                     day_text = "、".join(WEEKDAY_NAMES[d] for d in sorted(pending["days"]))
                     if _edit_tid is not None:
                         # 編輯模式：更新既有排程
@@ -2424,6 +2471,44 @@ async def line_webhook(
                 if postback_action == "cancel_schedule":
                     set_pending_field(db, user.id, None)
                     await reply_with_quick_reply(reply_token, "已取消新增排程。", SCHEDULE_QUICK_REPLIES)
+                    continue
+
+                # 從歷史目的地快選
+                if postback_action == "select_dest_history":
+                    profile = get_profile(db, user.id)
+                    pf = profile.pending_field or ""
+                    pending, _edit_tid = _parse_pending_for_schedule_form(pf)
+                    if not pending:
+                        await reply_with_quick_reply(reply_token, "目前沒有正在新增的排程，請先點選「新增常用排程」。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    try:
+                        dest_id = int((postback_parts.get("dest_id") or [""])[0])
+                    except (ValueError, TypeError):
+                        dest_id = None
+                    if dest_id is None:
+                        await reply_with_quick_reply(reply_token, "無法讀取目的地，請重新選擇。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    from app.crud import get_destination_by_id
+                    dest = get_destination_by_id(db, user.id, dest_id)
+                    if dest is None or dest.is_deleted:
+                        await reply_with_quick_reply(reply_token, "找不到該目的地，請重新選擇或重新定位。", SCHEDULE_QUICK_REPLIES)
+                        continue
+                    # 套用歷史目的地到 pending
+                    pending["dest_label"] = dest.label
+                    pending["dest_lat"] = dest.lat
+                    pending["dest_lng"] = dest.lng
+                    base_payload = build_add_schedule_pending(**pending)[len("add_schedule:"):]
+                    if _edit_tid is not None:
+                        set_pending_field(db, user.id, f"edit_schedule:{_edit_tid}:{base_payload}")
+                    else:
+                        set_pending_field(db, user.id, "add_schedule:" + base_payload)
+                    fresh_profile = get_profile(db, user.id)
+                    await reply_flex_with_quick_reply(
+                        reply_token,
+                        f"📅 已選擇目的地：{dest.label}",
+                        build_add_schedule_flex(fresh_profile, **pending),
+                        [],
+                    )
                     continue
 
                 if postback_action in {"template_toggle_weekday", "template_preset", "template_save"}:
@@ -3190,7 +3275,6 @@ async def line_webhook(
             if get_profile(db, user.id).pending_field and get_profile(db, user.id).pending_field.startswith("add_schedule_name_dest:"):
                 profile = get_profile(db, user.id)
                 raw_state = profile.pending_field[len("add_schedule_name_dest:"):]
-                # 格式：<payload>|<suggested_name>，最後一個 | 之後是建議名稱
                 last_pipe = raw_state.rfind("|")
                 if last_pipe >= 0:
                     payload_str = raw_state[:last_pipe]
@@ -3199,6 +3283,14 @@ async def line_webhook(
                 pending = parse_add_schedule_pending("add_schedule:" + payload_str)
                 dest_name = user_text.strip()[:20] or "目的地"
                 pending["dest_label"] = dest_name
+                # 寫入歷史目的地紀錄（含座標）
+                if dest_name and dest_name != "目的地":
+                    upsert_destination(
+                        db, user.id, dest_name,
+                        address=None,
+                        lat=pending.get("dest_lat"),
+                        lng=pending.get("dest_lng"),
+                    )
                 new_pending_str = build_add_schedule_pending(**pending)
                 set_pending_field(db, user.id, new_pending_str)
                 await push_add_schedule_flex(line_user_id, profile, pending)
