@@ -36,9 +36,10 @@ _TRANSIT_CACHE = {}
 _BUS_CACHE = {}
 _METRO_CACHE = {}
 
-TRANSIT_CACHE_SECONDS = 180
-BUS_CACHE_SECONDS = 60
-METRO_CACHE_SECONDS = 180
+# Weather: 30 min, Transit (Google): 5 min, Bus realtime: 90 sec, Metro: 5 min
+TRANSIT_CACHE_SECONDS = 300   # Google Maps transit — 5 min
+BUS_CACHE_SECONDS = 90        # TDX bus ETA — 90 sec (realtime)
+METRO_CACHE_SECONDS = 300     # Metro station lookup — 5 min
 
 MODE_LABELS = {
     "google_transit": "目前以 Google 大眾運輸估算為主",

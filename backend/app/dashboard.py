@@ -36,6 +36,42 @@ router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 WEBSOCKET_REFRESH_SECONDS = 30
 
+# Per-user refresh events: webhook can signal immediate WS push
+_user_refresh_events: dict[int, asyncio.Event] = {}
+_household_refresh_events: dict[str, asyncio.Event] = {}
+
+
+def _get_user_event(user_id: int) -> asyncio.Event:
+    if user_id not in _user_refresh_events:
+        _user_refresh_events[user_id] = asyncio.Event()
+    return _user_refresh_events[user_id]
+
+
+def _get_household_event(household_id: str) -> asyncio.Event:
+    if household_id not in _household_refresh_events:
+        _household_refresh_events[household_id] = asyncio.Event()
+    return _household_refresh_events[household_id]
+
+
+def notify_dashboard_refresh(user_id: int):
+    """Call from webhook to immediately push updated state to Dashboard WS."""
+    try:
+        event = _user_refresh_events.get(user_id)
+        if event:
+            event.set()
+    except Exception as e:
+        print(f"[dashboard-notify] user_id={user_id} error={e}")
+
+
+def notify_household_dashboard_refresh(household_id: str):
+    """Call from webhook to immediately push updated state to household Dashboard WS."""
+    try:
+        event = _household_refresh_events.get(household_id)
+        if event:
+            event.set()
+    except Exception as e:
+        print(f"[dashboard-notify] household_id={household_id} error={e}")
+
 # API Key verification for sensitive operations
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -318,18 +354,26 @@ async def api_undelete_schedule(
 async def dashboard_ws(websocket: WebSocket, user_id: int):
     await websocket.accept()
     print(f"[dashboard-ws] connected user_id={user_id}")
+    event = _get_user_event(user_id)
     try:
         while True:
             try:
                 payload = await get_dashboard_status_payload(user_id)
                 await websocket.send_json(payload)
-                await asyncio.sleep(WEBSOCKET_REFRESH_SECONDS)
+                event.clear()
+                # Wait for either refresh interval or immediate notify signal
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=WEBSOCKET_REFRESH_SECONDS)
+                    print(f"[dashboard-ws] immediate refresh triggered user_id={user_id}")
+                except asyncio.TimeoutError:
+                    pass
             except Exception as e:
                 print(f"[dashboard-ws] send error user_id={user_id} error={e}")
                 break
     except WebSocketDisconnect:
         print(f"[dashboard-ws] disconnected user_id={user_id}")
     finally:
+        _user_refresh_events.pop(user_id, None)
         try:
             await websocket.close()
         except Exception:
@@ -340,18 +384,26 @@ async def dashboard_ws(websocket: WebSocket, user_id: int):
 async def household_dashboard_ws(websocket: WebSocket, household_id: str):
     await websocket.accept()
     print(f"[dashboard-ws] connected household_id={household_id}")
+    event = _get_household_event(household_id)
     try:
         while True:
             try:
                 payload = await get_household_dashboard_status_payload(household_id)
                 await websocket.send_json(payload)
-                await asyncio.sleep(payload.get("refresh_seconds") or WEBSOCKET_REFRESH_SECONDS)
+                event.clear()
+                refresh_secs = payload.get("refresh_seconds") or WEBSOCKET_REFRESH_SECONDS
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=refresh_secs)
+                    print(f"[dashboard-ws] immediate refresh triggered household_id={household_id}")
+                except asyncio.TimeoutError:
+                    pass
             except Exception as e:
                 print(f"[dashboard-ws] send error household_id={household_id} error={e}")
                 break
     except WebSocketDisconnect:
         print(f"[dashboard-ws] household disconnected household_id={household_id}")
     finally:
+        _household_refresh_events.pop(household_id, None)
         try:
             await websocket.close()
         except Exception:
