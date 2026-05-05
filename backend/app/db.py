@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import DATABASE_URL
+import os
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
