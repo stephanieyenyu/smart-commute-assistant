@@ -454,6 +454,24 @@ def get_user_destinations(db: Session, user_id: int) -> list[CommuteDestination]
     return db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).filter(CommuteDestination.is_deleted.is_(False)).order_by(CommuteDestination.id.asc()).all()
 
 
+def get_recent_destinations(db: Session, user_id: int, limit: int = 5) -> list[CommuteDestination]:
+    """
+    取得用戶最近使用的目的地（有座標的優先，按 updated_at 降序）。
+    用於 pick_location 的歷史快選 Quick Reply。
+    """
+    return (
+        db.query(CommuteDestination)
+        .filter(
+            CommuteDestination.user_id == user_id,
+            CommuteDestination.is_deleted.is_(False),
+            CommuteDestination.label.isnot(None),
+        )
+        .order_by(CommuteDestination.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 def get_destination_by_label(db: Session, user_id: int, label: str | None) -> CommuteDestination | None:
     normalized = (label or "").strip()
     if not normalized:
