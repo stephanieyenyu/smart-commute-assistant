@@ -1206,7 +1206,7 @@ def parse_add_schedule_pending(value: str | None) -> dict:
         "dest_label": parts[4] or "",
         "dest_lat": _float(parts[5]),
         "dest_lng": _float(parts[6]),
-        "days": _days(parts[7]) if parts[7] else [1, 2, 3, 4, 5],
+        "days": _days(parts[7]) if parts[7] else [0, 1, 2, 3, 4],
     }
 
 
@@ -1222,7 +1222,7 @@ def build_add_schedule_pending(
 ) -> str:
     """建立 add_schedule: 前綴的 pending_field 字串。"""
     if days is None:
-        days = [1, 2, 3, 4, 5]
+        days = [0, 1, 2, 3, 4]
     days_str = ",".join(str(d) for d in sorted(days))
     parts = [
         time or "09:00",
@@ -1253,7 +1253,7 @@ def build_add_schedule_flex(
     動態顯示出發地、目的地座標與選取的星期。
     """
     if days is None:
-        days = [1, 2, 3, 4, 5]
+        days = [0, 1, 2, 3, 4]
     active_days = set(days)
 
     # 出發地顯示文字
@@ -1277,12 +1277,14 @@ def build_add_schedule_flex(
 
     def day_button(day: int, label: str) -> dict:
         active = day in active_days
+        action_text = f"{'取消' if active else '勾選'}{label}"
         return {
             "type": "button",
             "action": {
                 "type": "postback",
                 "label": label,
                 "data": f"action=toggle_day&day={day}",
+                "displayText": action_text,
             },
             "style": "primary",
             "color": "#1DB446" if active else "#AAAAAA",
@@ -1466,13 +1468,13 @@ def build_add_schedule_flex(
                             "margin": "md",
                             "spacing": "sm",
                             "contents": [
-                                day_button(1, "一"),
-                                day_button(2, "二"),
-                                day_button(3, "三"),
-                                day_button(4, "四"),
-                                day_button(5, "五"),
-                                day_button(6, "六"),
-                                day_button(0, "日"),
+                                day_button(0, "一"),
+                                day_button(1, "二"),
+                                day_button(2, "三"),
+                                day_button(3, "四"),
+                                day_button(4, "五"),
+                                day_button(5, "六"),
+                                day_button(6, "日"),
                             ],
                         },
                     ],
@@ -1524,7 +1526,7 @@ async def push_add_schedule_flex(line_user_id: str, profile, pending: dict) -> N
         dest_label=pending.get("dest_label", ""),
         dest_lat=pending.get("dest_lat"),
         dest_lng=pending.get("dest_lng"),
-        days=pending.get("days", [1, 2, 3, 4, 5]),
+        days=pending.get("days", [0, 1, 2, 3, 4]),
     )
     message = {
         "type": "flex",
@@ -2142,18 +2144,22 @@ async def line_webhook(
                         day = -1
                     if not 0 <= day <= 6:
                         continue
-                    days = set(pending.get("days", [1, 2, 3, 4, 5]))
+                    days = set(pending.get("days", [0, 1, 2, 3, 4]))
+                    # WEEKDAY_NAMES: 0=週一,1=週二,...,5=週六,6=週日
+                    day_name_map = {0: "週一", 1: "週二", 2: "週三", 3: "週四", 4: "週五", 5: "週六", 6: "週日"}
                     if day in days:
                         days.remove(day)
+                        action_text = f"已取消 {day_name_map[day]}"
                     else:
                         days.add(day)
+                        action_text = f"已勾選 {day_name_map[day]}"
                     pending["days"] = sorted(days)
+                    # 只暫存狀態，不推新卡片，用文字回饋讓用戶知道操作結果
                     set_pending_field(db, user.id, build_add_schedule_pending(**pending))
-                    # 重新推播更新後的卡片
-                    await reply_flex_with_quick_reply(
+                    selected_names = "、".join(day_name_map[d] for d in sorted(days)) if days else "（尚未選擇）"
+                    await reply_with_quick_reply(
                         reply_token,
-                        "📅 新增通勤排程（已更新星期）",
-                        build_add_schedule_flex(profile, **pending),
+                        f"{action_text}\n目前已選：{selected_names}\n\n確認後請點卡片上的「✅ 確認並儲存排程」。",
                         [],
                     )
                     continue
@@ -3052,16 +3058,16 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["add_schedule_template"]:
                 profile = get_profile(db, user.id)
-                # 初始化暫存狀態（預設平日 1-5，時間 09:00）
+                # 初始化暫存狀態（預設平日 週一~週五 = [0,1,2,3,4]，時間 09:00）
                 pending_str = build_add_schedule_pending(
                     time="09:00",
-                    days=[1, 2, 3, 4, 5],
+                    days=[0, 1, 2, 3, 4],
                 )
                 set_pending_field(db, user.id, pending_str)
                 flex_contents = build_add_schedule_flex(
                     profile,
                     time="09:00",
-                    days=[1, 2, 3, 4, 5],
+                    days=[0, 1, 2, 3, 4],
                 )
                 await reply_flex_with_quick_reply(
                     reply_token,
