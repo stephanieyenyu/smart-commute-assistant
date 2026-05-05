@@ -274,7 +274,6 @@ async def dashboard_departure_check(user_id: int, payload: dict | None = Body(de
 async def api_undelete_destination(
     user_id: int,
     destination_id: int,
-    db: SessionLocal = None,
     api_key: str = Security(verify_api_key),
 ):
     """Restore a soft-deleted destination. Requires API Key."""
@@ -297,7 +296,6 @@ async def api_undelete_destination(
 async def api_undelete_schedule(
     user_id: int,
     template_id: int,
-    db: SessionLocal = None,
     api_key: str = Security(verify_api_key),
 ):
     """Restore a soft-deleted schedule template. Requires API Key."""
