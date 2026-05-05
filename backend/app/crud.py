@@ -502,6 +502,19 @@ def upsert_destination(
     return destination
 
 
+def undelete_destination(db: Session, user_id: int, destination_id: int) -> bool:
+    dest = db.query(CommuteDestination).filter(
+        CommuteDestination.user_id == user_id,
+        CommuteDestination.id == destination_id,
+    ).first()
+    if dest is None:
+        return False
+    dest.is_deleted = False
+    db.commit()
+    db.refresh(dest)
+    return True
+
+
 def get_schedule_template(db: Session, user_id: int, template_id: int) -> CommuteScheduleTemplate | None:
     return db.query(CommuteScheduleTemplate).filter(
         CommuteScheduleTemplate.user_id == user_id,
