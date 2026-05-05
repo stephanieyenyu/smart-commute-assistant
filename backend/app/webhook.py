@@ -513,12 +513,49 @@ COMMAND_ALIASES = {
 }
 
 CANONICAL_PROMPT_GROUPS = {
-    "通勤": ["今日通勤建議", "明日通勤建議", "優先選擇通勤時間短", "今天搭公車", "今天搭捷運", "今天搭公車轉捷運", "查看今天交通方式"],
-    "時間": ["固定調整", "臨時調整", "修改今天到達時間", "修改明天到達時間", "明天幾點出門"],
-    "提醒": ["查看提醒設定", "開啟自動提醒", "關閉自動提醒"],
-    "排程": ["查看排程設定", "新增常用排程", "管理單一排程", "刪除排程 1", "編輯排程 1"],
-    "看板管理": ["取得Dashboard連結", "取得家庭Dashboard連結", "家庭成員管理", "移除家庭成員", "建立家庭", "取得家庭邀請碼", "加入家庭 邀請碼", "設定我的名稱 名稱", "電腦Dashboard設定"],
-    "基本設定": ["查看設定", "今日通勤建議", "明日通勤建議", "重新設定"],
+    "📍 通勤建議": [
+        "今日通勤建議",
+        "明日通勤建議",
+        "明天幾點出門",
+    ],
+    "🚌 交通方式": [
+        "今天搭公車",
+        "今天搭捷運",
+        "今天搭公車轉捷運",
+        "優先選擇通勤時間短",
+        "查看今天交通方式",
+    ],
+    "⏰ 時間調整": [
+        "固定調整",
+        "臨時調整",
+        "修改今天到達時間",
+        "修改明天到達時間",
+    ],
+    "📅 排程管理": [
+        "新增常用排程",
+        "查看排程設定",
+        "管理單一排程",
+        "刪除排程 1",
+        "編輯排程 1",
+    ],
+    "🔔 提醒設定": [
+        "開啟自動提醒",
+        "關閉自動提醒",
+        "今天休息",
+        "明天休息",
+    ],
+    "🖥️ 看板與家庭": [
+        "取得Dashboard連結",
+        "取得家庭Dashboard連結",
+        "建立家庭",
+        "取得家庭邀請碼",
+        "加入家庭 邀請碼",
+        "設定我的名稱 名稱",
+    ],
+    "⚙️ 系統設定": [
+        "查看設定",
+        "重新設定",
+    ],
 }
 
 
@@ -1659,13 +1696,26 @@ def build_command_help_carousel() -> dict:
         bubbles.append({
             "type": "bubble",
             "size": "kilo",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#5E6472",
+                "contents": [
+                    {"type": "text", "text": title, "weight": "bold", "size": "md", "color": "#FFFFFF"},
+                ],
+            },
             "body": {
                 "type": "box",
                 "layout": "vertical",
                 "spacing": "sm",
                 "contents": [
-                    {"type": "text", "text": title, "weight": "bold", "size": "lg"},
-                    {"type": "text", "text": "\n".join(prompts), "size": "sm", "wrap": True, "color": "#555555"},
+                    {
+                        "type": "text",
+                        "text": "\n".join(f"• {p}" for p in prompts),
+                        "size": "sm",
+                        "wrap": True,
+                        "color": "#444444",
+                    }
                 ],
             },
         })
@@ -1913,19 +1963,27 @@ async def save_location_or_address(
     lat: float | None = None,
     lng: float | None = None,
 ):
+    """
+    儲存位置資訊。
+    優先使用傳入的 lat/lng 座標（來自 LINE Location Message）。
+    若無座標才嘗試 geocode 地址字串取得座標。
+    若 geocode 失敗但已有座標，仍正常儲存，不阻擋流程。
+    """
     geocode_result = None
-    try:
-        geocode_result = await geocode_address(raw_address)
-    except Exception as e:
-        print(f"[geocode] error={e}")
-
-    normalized_address = raw_address
     city = infer_city_from_text(raw_address)
     township = None
     place_name = None
+    normalized_address = raw_address or "未命名位置"
+
+    # 只有在缺少座標時才呼叫 geocode（節省 API 用量）
+    if lat is None or lng is None:
+        try:
+            geocode_result = await geocode_address(raw_address)
+        except Exception as e:
+            print(f"[geocode] error={e}")
 
     if geocode_result:
-        normalized_address = geocode_result.get("formatted_address") or raw_address
+        normalized_address = geocode_result.get("formatted_address") or normalized_address
         city = geocode_result.get("city") or city
         township = geocode_result.get("township")
         place_name = geocode_result.get("place_name")
@@ -1933,6 +1991,18 @@ async def save_location_or_address(
             lat = geocode_result.get("lat")
         if lng is None:
             lng = geocode_result.get("lng")
+
+    # 若已有座標但 geocode 未補充城市，嘗試用反向 geocode 補充（非阻擋）
+    if lat is not None and lng is not None and not city:
+        try:
+            reverse_result = await geocode_address(f"{lat},{lng}")
+            if reverse_result:
+                city = reverse_result.get("city") or city
+                township = reverse_result.get("township") or township
+                if not normalized_address or normalized_address == raw_address:
+                    normalized_address = reverse_result.get("formatted_address") or normalized_address
+        except Exception as e:
+            print(f"[geocode-reverse] error={e}")
 
     update_address_and_coords(
         db,
@@ -3111,22 +3181,13 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["reset"]:
-                # Schedule a soft reset to run after 15 minutes. User can cancel within that window,
-                # or confirm to execute immediately.
-                try:
-                    expiry = schedule_soft_reset(db, user.id, delay_minutes=15)
-                except Exception as e:
-                    print(f"[soft_reset] schedule failed for user {user.id}: {e}")
-                    expiry = None
                 set_pending_field(db, user.id, "confirm_reset")
-                expiry_text = "" if not expiry else f"（將於 15 分鐘後執行）"
                 await reply_with_quick_reply(
                     reply_token,
-                    "⚠️ 已排程：即將在 15 分鐘內執行重新設定，按取消可撤回。" + expiry_text,
+                    "⚠️ 確定要清除所有資料並重新設定嗎？\n\n這將刪除您的住家位置、所有排程與通勤紀錄，且無法復原。",
                     [
-                        {"type": "message", "label": "立即執行", "text": "確定重設"},
-                        {"type": "message", "label": "取消 (保留資料)", "text": "取消重設"},
-                        {"type": "message", "label": "前往排程設定", "text": "排程設定"},
+                        {"type": "message", "label": "✅ 確定重設", "text": "確定重設"},
+                        {"type": "message", "label": "❌ 取消", "text": "取消重設"},
                     ],
                 )
                 continue
@@ -3154,24 +3215,13 @@ async def line_webhook(
                 continue
 
             if command_text in {"取消重設", "取消 (保留資料)"} and get_profile(db, user.id).pending_field == "confirm_reset":
-                try:
-                    cancelled = cancel_soft_reset(user.id)
-                    set_pending_field(db, user.id, None)
-                    if cancelled:
-                        await reply_with_quick_reply(
-                            reply_token,
-                            "已取消重新設定，所有資料已保留。",
-                            MAIN_MENU_QUICK_REPLIES,
-                        )
-                    else:
-                        await reply_with_quick_reply(
-                            reply_token,
-                            "目前沒有排程中的重設，或已執行中。若要重新設定請再次按「重新設定」。",
-                            MAIN_MENU_QUICK_REPLIES,
-                        )
-                except Exception as e:
-                    print(f"[soft_reset] cancel failed for user {user.id}: {e}")
-                    await reply_with_quick_reply(reply_token, "取消失敗，請稍後再試。", MAIN_MENU_QUICK_REPLIES)
+                set_pending_field(db, user.id, None)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "已取消，所有資料保留不變。",
+                    MAIN_MENU_QUICK_REPLIES,
+                )
+                continue
                 continue
 
             if command_text in COMMAND_ALIASES["view_settings"]:

@@ -10,6 +10,7 @@ from linebot.v3.messaging import (
     LocationAction,
     MessageAction,
     DatetimePickerAction,
+    PostbackAction,
 )
 import httpx
 
@@ -94,6 +95,7 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
       - type: 'location'      → opens LINE map
       - type: 'message'       → sends a text message
       - type: 'datetimepicker'→ opens time/date picker (requires 'data', 'mode')
+      - type: 'postback'      → sends a postback event (requires 'data', optional 'displayText')
     """
     quick_reply_items = []
     for item in items:
@@ -105,6 +107,12 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
                 label=item["label"],
                 data=item.get("data", "postback"),
                 mode=item.get("mode", "time"),
+            )
+        elif t == "postback":
+            action = PostbackAction(
+                label=item["label"],
+                data=item.get("data", ""),
+                display_text=item.get("displayText"),
             )
         else:  # message
             action = MessageAction(label=item["label"], text=item["text"])
@@ -134,6 +142,15 @@ def _quick_reply_action_payload(item: dict) -> dict:
             "data": item.get("data", "postback"),
             "mode": item.get("mode", "time"),
         }
+    if t == "postback":
+        payload = {
+            "type": "postback",
+            "label": item["label"],
+            "data": item.get("data", ""),
+        }
+        if item.get("displayText"):
+            payload["displayText"] = item["displayText"]
+        return payload
     return {"type": "message", "label": item["label"], "text": item["text"]}
 
 
