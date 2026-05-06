@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>??????</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 16px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-width: 500px;
+            padding: 32px 24px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #999;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .form-group input[type="text"],
+        .form-group input[type="time"],
+        .form-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            font-family: inherit;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input[type="text"]:focus,
+        .form-group input[type="time"]:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .weekday-group {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .weekday-checkbox {
+            display: none;
+        }
+
+        .weekday-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #666;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease;
+            background: white;
+        }
+
+        .weekday-checkbox:checked + .weekday-label {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 32px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:active {
+            transform: scale(0.98);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #666;
+        }
+
+        .btn-secondary:active {
+            background: #e0e0e0;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 16px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(102, 126, 234, 0.2);
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            display: none;
+            padding: 12px;
+            background: #fee;
+            border: 1px solid #fcc;
+            color: #c33;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+
+        .success-message {
+            display: none;
+            padding: 12px;
+            background: #efe;
+            border: 1px solid #cfc;
+            color: #3c3;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>?? ??????</h1>
+            <p>??????????</p>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="success-message" id="successMessage"></div>
+
+        <form id="scheduleForm">
+            <!-- ??? -->
+            <div class="form-group">
+                <label for="originAddress">??? ??</label>
+                <input 
+                    type="text" 
+                    id="originAddress" 
+                    name="originAddress" 
+                    placeholder="?????????" 
+                    value="??"
+                >
+            </div>
+
+            <!-- ??? -->
+            <div class="form-group">
+                <label for="destination">??? ??</label>
+                <select id="destination" name="destination" required>
+                    <option value="">-- ??? --</option>
+                    <option value="??">??</option>
+                    <option value="??">??</option>
+                    <option value="????">????</option>
+                    <option value="???">???</option>
+                </select>
+            </div>
+
+            <!-- ????? -->
+            <div class="form-group">
+                <label for="customDestination">??????? (??)</label>
+                <input 
+                    type="text" 
+                    id="customDestination" 
+                    name="customDestination" 
+                    placeholder="????????"
+                >
+            </div>
+
+            <!-- ?????? -->
+            <div class="form-group">
+                <label for="arrivalTime">?????? ?</label>
+                <input 
+                    type="time" 
+                    id="arrivalTime" 
+                    name="arrivalTime" 
+                    value="09:00"
+                    required
+                >
+            </div>
+
+            <!-- ???? -->
+            <div class="form-group">
+                <label>???? ??</label>
+                <div class="weekday-group">
+                    <input type="checkbox" id="day0" name="weekdays" value="0" class="weekday-checkbox" checked>
+                    <label for="day0" class="weekday-label">?</label>
+
+                    <input type="checkbox" id="day1" name="weekdays" value="1" class="weekday-checkbox" checked>
+                    <label for="day1" class="weekday-label">?</label>
+
+                    <input type="checkbox" id="day2" name="weekdays" value="2" class="weekday-checkbox" checked>
+                    <label for="day2" class="weekday-label">?</label>
+
+                    <input type="checkbox" id="day3" name="weekdays" value="3" class="weekday-checkbox" checked>
+                    <label for="day3" class="weekday-label">?</label>
+
+                    <input type="checkbox" id="day4" name="weekdays" value="4" class="weekday-checkbox" checked>
+                    <label for="day4" class="weekday-label">?</label>
+
+                    <input type="checkbox" id="day5" name="weekdays" value="5" class="weekday-checkbox">
+                    <label for="day5" class="weekday-label">?</label>
+
+                    <input type="checkbox" id="day6" name="weekdays" value="6" class="weekday-checkbox">
+                    <label for="day6" class="weekday-label">?</label>
+
+                    <div style="visibility: hidden;"></div>
+                </div>
+            </div>
+
+            <!-- ??? -->
+            <div class="button-group">
+                <button type="button" class="btn btn-secondary" onclick="handleCancel()">??</button>
+                <button type="submit" class="btn btn-primary" id="submitBtn">????</button>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 12px; color: #667eea; font-size: 14px;">????...</p>
+            </div>
+        </form>
+    </div>
+
+    <script src="https://d.line-messaging.com/liff/d/web-app-sdk/web-app-sdk.js"></script>
+    <script>
+        // LIFF ???
+        async function initLIFF() {
+            try {
+                await liff.init({
+                    liffId: '2009982765-aKb3T2ca'
+                });
+
+                if (!liff.isLoggedIn()) {
+                    liff.login();
+                    return;
+                }
+
+                loadUserData();
+            } catch (error) {
+                console.error('[LIFF Init Error]', error);
+                showError('LIFF ?????????????');
+            }
+        }
+
+        // ??????
+        async function loadUserData() {
+            try {
+                const profile = await liff.getProfile();
+                console.log('[User Profile]', profile);
+            } catch (error) {
+                console.error('[Load User Data Error]', error);
+            }
+        }
+
+        // ????
+        document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const destination = document.getElementById('destination').value.trim() || 
+                               document.getElementById('customDestination').value.trim();
+            const arrivalTime = document.getElementById('arrivalTime').value;
+            const originAddress = document.getElementById('originAddress').value.trim() || '??';
+
+            // ??????
+            if (!destination) {
+                showError('?????????');
+                return;
+            }
+            if (!arrivalTime) {
+                showError('???????');
+                return;
+            }
+
+            // ???????
+            const weekdays = Array.from(document.querySelectorAll('input[name="weekdays"]:checked'))
+                .map(cb => parseInt(cb.value))
+                .sort((a, b) => a - b);
+
+            if (weekdays.length === 0) {
+                showError('???????');
+                return;
+            }
+
+            // ??????
+            showLoading(true);
+
+            try {
+                const profile = await liff.getProfile();
+
+                // ??????
+                const payload = {
+                    userId: profile.userId,
+                    destination: destination,
+                    arrivalTime: arrivalTime,
+                    originAddress: originAddress,
+                    weekdays: weekdays
+                };
+
+                // ???? API
+                const response = await fetch('/api/schedule/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || '????');
+                }
+
+                const result = await response.json();
+                console.log('[Submit Success]', result);
+
+                showSuccess('? ???????');
+                
+                // ?? 1.5 ??????
+                setTimeout(() => {
+                    liff.closeWindow();
+                }, 1500);
+
+            } catch (error) {
+                console.error('[Submit Error]', error);
+                showError(error.message || '???????????');
+            } finally {
+                showLoading(false);
+            }
+        });
+
+        // ????
+        function handleCancel() {
+            if (liff.isAvailable('closeWindow')) {
+                liff.closeWindow();
+            } else {
+                window.close();
+            }
+        }
+
+        // ????
+        function showError(message) {
+            const errorEl = document.getElementById('errorMessage');
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        // ????
+        function showSuccess(message) {
+            const successEl = document.getElementById('successMessage');
+            successEl.textContent = message;
+            successEl.style.display = 'block';
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        // ????
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+            document.getElementById('submitBtn').disabled = show;
+        }
+
+        // ???????? LIFF
+        window.addEventListener('load', initLIFF);
+    </script>
+</body>
+</html>
