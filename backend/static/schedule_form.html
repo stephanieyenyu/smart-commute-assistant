@@ -19,6 +19,23 @@
             color: #333;
         }
 
+        .loading-container {
+            text-align: center;
+            padding: 50px 20px;
+            color: white;
+        }
+
+        .loading-container h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .loading-container small {
+            font-size: 14px;
+            color: #eee;
+            word-break: break-all;
+        }
+
         .container {
             max-width: 500px;
             margin: 0 auto;
@@ -26,6 +43,7 @@
             border-radius: 20px;
             padding: 30px 25px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            display: none; /* 預設隱藏，JS 成功後顯示 */
         }
 
         .header {
@@ -186,12 +204,13 @@
     </style>
 </head>
 <body>
-    <!-- 加入載入提示，確認網頁有被後端送出 -->
-    <h1 id="loadingText" style="text-align: center; padding: 50px 20px; color: #667eea;">
-        ⏳ 載入中，請稍候...
-    </h1>
+    <!-- 載入提示區域：預設顯示，失敗時顯示錯誤，成功時隱藏 -->
+    <div class="loading-container" id="loadingText">
+        <h1>⏳ 載入中，請稍候...</h1>
+    </div>
 
-    <div class="container" id="mainContainer" style="display: none;">
+    <!-- 表單容器：預設隱藏 -->
+    <div class="container" id="mainContainer">
         <div class="header">
             <h1>📅 排程設定</h1>
             <p>設定您的通勤排程</p>
@@ -240,44 +259,59 @@
         <div class="message" id="message"></div>
     </div>
 
+    <!-- LIFF SDK 引入 -->
     <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    
     <script>
         // LIFF 初始化
         let userId = null;
 
-        async function initializeLiff() {
-            try {
-                await liff.init({ liffId: '2009982765-aKb3T2ca' });
-                
-                if (!liff.isLoggedIn()) {
-                    liff.login();
-                    return;
-                }
+        // 頁面載入後立即初始化 LIFF
+        window.addEventListener('load', function() {
+            liff.init({ liffId: '2009982765-aKb3T2ca' })
+                .then(() => {
+                    // 檢查登入狀態
+                    if (!liff.isLoggedIn()) {
+                        liff.login();
+                        return; // 登入後會重新整理，所以這邊直接 return
+                    }
 
-                // 隱藏載入提示，顯示主內容
-                document.getElementById('loadingText').style.display = 'none';
-                document.getElementById('mainContainer').style.display = 'block';
+                    // 初始化成功：隱藏載入提示，顯示表單
+                    document.getElementById('loadingText').style.display = 'none';
+                    document.getElementById('mainContainer').style.display = 'block';
 
-                // 取得用戶 ID
-                const profile = await liff.getProfile();
-                userId = profile.userId;
-                
-                // 從 URL 參數取得可能的預設值
-                const urlParams = new URLSearchParams(window.location.search);
-                const editId = urlParams.get('edit');
-                if (editId) {
-                    document.querySelector('.header h1').textContent = '✏️ 編輯排程';
-                }
-            } catch (error) {
-                console.error('LIFF 初始化失敗:', error);
-                // 顯示錯誤訊息在頁面上
-                document.getElementById('loadingText').innerHTML = 
-                    '❌ LIFF 初始化失敗<br><small>' + error + '</small>';
-                // 同時用 alert 彈出
-                alert("LIFF 發生錯誤：" + error);
-                showMessage('LIFF 初始化失敗，請重新整理頁面', 'error');
-            }
-        }
+                    // 取得使用者 ID
+                    liff.getProfile().then(profile => {
+                        userId = profile.userId;
+                        
+                        // 從 URL 參數取得可能的預設值
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const editId = urlParams.get('edit');
+                        if (editId) {
+                            document.querySelector('.header h1').textContent = '✏️ 編輯排程';
+                        }
+                    }).catch(err => {
+                        console.error('Get Profile Error:', err);
+                    });
+
+                })
+                .catch((err) => {
+                    // 初始化失敗：顯示錯誤訊息在頁面上並彈出 alert
+                    console.error('LIFF Init Error:', err);
+                    
+                    const errorMsg = "LIFF 發生錯誤：" + err;
+                    const loadingTextEl = document.getElementById('loadingText');
+                    
+                    // 替換載入中的文字為具體錯誤訊息
+                    loadingTextEl.innerHTML = `
+                        <h1>❌ LIFF 初始化失敗</h1>
+                        <small>${err}</small>
+                    `;
+                    
+                    // 彈出警告視窗
+                    alert(errorMsg);
+                });
+        });
 
         // 星期選擇邏輯
         const weekdayButtons = document.querySelectorAll('.weekday-btn');
@@ -335,7 +369,7 @@
             e.preventDefault();
             
             if (!userId) {
-                showMessage('用戶未登入，請重新整理頁面', 'error');
+                showMessage('使用者未登入，請重新整理頁面', 'error');
                 return;
             }
 
@@ -409,14 +443,6 @@
             const messageEl = document.getElementById('message');
             messageEl.style.display = 'none';
         }
-
-        // 初始化（加入錯誤捕捉）
-        initializeLiff().catch(err => {
-            console.error('LIFF 初始化失敗:', err);
-            alert("LIFF 發生錯誤：" + err);
-            document.getElementById('loadingText').innerHTML = 
-                '❌ LIFF 初始化失敗<br><small>' + err + '</small>';
-        });
     </script>
 </body>
 </html>
