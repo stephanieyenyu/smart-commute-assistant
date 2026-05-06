@@ -1,9 +1,10 @@
 import asyncio
+import os
 from datetime import date
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
 from app.db import SessionLocal
@@ -24,6 +25,11 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
+# 取得目前檔案的絕對路徑，用於定位 static 資料夾
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "..", "static")
+SCHEDULE_FORM_PATH = os.path.join(STATIC_DIR, "schedule_form.html")
+
 
 class ScheduleSubmitRequest(BaseModel):
     """LIFF 排程表單提交資料"""
@@ -41,11 +47,20 @@ async def get_schedule_form(request: Request):
     Route: GET /liff/schedule
     """
     try:
-        with open("backend/static/schedule_form.html", "r", encoding="utf-8") as f:
-            html_content = f.read()
-        return HTMLResponse(content=html_content, status_code=200)
+        # 使用絕對路徑確保在 Render 環境下能找到檔案
+        print(f"[LIFF] Loading HTML from: {SCHEDULE_FORM_PATH}")
+        if not os.path.exists(SCHEDULE_FORM_PATH):
+            print(f"[LIFF] ERROR: File not found at {SCHEDULE_FORM_PATH}")
+            raise HTTPException(status_code=404, detail="表單頁面不存在")
+        
+        # 使用 FileResponse 直接回傳 HTML 檔案
+        return FileResponse(
+            path=SCHEDULE_FORM_PATH,
+            media_type="text/html; charset=utf-8",
+            filename="schedule_form.html"
+        )
     except FileNotFoundError:
-        print(f"[LIFF Schedule Form] File not found: backend/static/schedule_form.html")
+        print(f"[LIFF Schedule Form] File not found: {SCHEDULE_FORM_PATH}")
         raise HTTPException(status_code=404, detail="表單頁面不存在")
     except Exception as e:
         print(f"[LIFF Schedule Form] Error: {e}")
