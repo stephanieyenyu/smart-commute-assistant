@@ -3749,12 +3749,6 @@ async def line_webhook(
                     SCHEDULE_QUICK_REPLIES,
                 )
                 continue
-                    reply_token,
-                    f"📝 編輯排程：{template.destination_label} {template.target_arrival_time}",
-                    flex_contents,
-                    [],
-                )
-                continue
 
             copy_schedule_value = extract_command_value(user_text, COMMAND_ALIASES["copy_schedule_template"])
             if copy_schedule_value:
