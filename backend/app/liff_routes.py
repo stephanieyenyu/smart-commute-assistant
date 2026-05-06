@@ -3,6 +3,7 @@ from datetime import date
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from app.db import SessionLocal
@@ -25,66 +26,66 @@ TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 
 class ScheduleSubmitRequest(BaseModel):
-    """LIFF ?????????"""
+    """LIFF 排程表單提交資料"""
     userId: str
     destination: str
-    arrivalTime: str  # HH:MM ??
-    originAddress: str  # ?????
-    weekdays: list[int]  # [0, 1, 2, 3, 4] ???????
+    arrivalTime: str  # HH:MM 格式
+    originAddress: str | None = None  # 出發地地址，可選
+    weekdays: list[int]  # [0, 1, 2, 3, 4] 星期列表
 
 
-@router.get("/schedule")
+@router.get("/schedule", response_class=HTMLResponse)
 async def get_schedule_form(request: Request):
     """
-    ?? LIFF ??????? HTML ??
+    回傳 LIFF 排程表單 HTML 頁面
     Route: GET /liff/schedule
     """
     try:
         with open("backend/static/schedule_form.html", "r", encoding="utf-8") as f:
             html_content = f.read()
-        return {
-            "html": html_content
-        }
+        return HTMLResponse(content=html_content, status_code=200)
+    except FileNotFoundError:
+        print(f"[LIFF Schedule Form] File not found: backend/static/schedule_form.html")
+        raise HTTPException(status_code=404, detail="表單頁面不存在")
     except Exception as e:
         print(f"[LIFF Schedule Form] Error: {e}")
-        raise HTTPException(status_code=500, detail="??????")
+        raise HTTPException(status_code=500, detail="無法載入表單頁面")
 
 
 @api_router.post("/schedule/submit")
 async def submit_schedule(data: ScheduleSubmitRequest):
     """
-    ?? LIFF ???????
+    接收 LIFF 表單提交資料
     Route: POST /api/schedule/submit
     
-    ?? Request Body:
+    Request Body:
     {
         "userId": "U1234567890...",
-        "destination": "??",
+        "destination": "公司",
         "arrivalTime": "09:00",
-        "originAddress": "??",
+        "originAddress": "台北市信義區...",
         "weekdays": [0, 1, 2, 3, 4]
     }
     """
     db = SessionLocal()
     try:
-        # 1. ????? User??? LINE user ID?
+        # 1. 取得或建立 User（使用 LINE user ID）
         user = get_or_create_user(db, line_user_id=data.userId)
         get_or_create_profile(db, user.id)
 
         print(f"[LIFF Submit] user_id={user.id} destination={data.destination} arrival={data.arrivalTime}")
 
-        # 2. ????????
+        # 2. 處理目的地
         destination = upsert_destination(
             db=db,
             user_id=user.id,
             label=data.destination,
-            address=data.originAddress,  # ???????????
+            address=data.originAddress,  # 如果沒有提供出發地，使用 None
             lat=None,
             lng=None,
         )
 
-        # 3. ??????
-        today = date.today()
+        # 3. 建立排程模板
         template = create_schedule_template(
             db=db,
             user_id=user.id,
@@ -97,33 +98,33 @@ async def submit_schedule(data: ScheduleSubmitRequest):
 
         print(f"[LIFF Submit] template_id={template.id} created successfully")
 
-        # 4. ????????????
+        # 4. 清除今天的提醒狀態（強制重新計算）
         try:
             clear_today_reminder_state_for_user(user.id)
         except Exception as e:
             print(f"[LIFF Submit] Clear cache error: {e}")
 
-        # 5. ?? LINE Messaging API ????????
+        # 5. 透過 LINE Messaging API 推播確認訊息
         try:
             line_user_id = user.line_user_id
             confirmation_text = (
-                f"? ???????\n\n"
-                f"?? ????{data.destination}\n"
-                f"? ?????{data.arrivalTime}\n"
-                f"?? ?????{_format_weekdays(data.weekdays)}\n\n"
-                f"?????????????????"
+                f"✅ 排程設定成功\n\n"
+                f"🏢 目的地：{data.destination}\n"
+                f"⏰ 抵達時間：{data.arrivalTime}\n"
+                f"📆 啟用日：{_format_weekdays(data.weekdays)}\n\n"
+                f"已為您設定完成，屆時會主動提醒您出門！"
             )
             
-            # ??????????
+            # 使用非同步推送，不阻塞回應
             asyncio.create_task(push_text(line_user_id, confirmation_text))
             
         except Exception as e:
             print(f"[LIFF Submit] Push notification error: {e}")
-            # ????????????????
+            # 即使推播失敗，排程已成功儲存，不影響主流程
 
         return {
             "ok": True,
-            "message": "??????",
+            "message": "排程設定成功",
             "template_id": template.id,
         }
 
@@ -134,23 +135,30 @@ async def submit_schedule(data: ScheduleSubmitRequest):
         print(f"[LIFF Submit] Unexpected error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="???????????")
+        raise HTTPException(status_code=500, detail="伺服器內部錯誤，請稍後再試")
     finally:
         db.close()
 
 
 def _format_weekdays(weekdays: list[int]) -> str:
     """
-    ??????????????
-    0=?, 1=?, ..., 6=?
+    將星期列表格式化為可讀字串
+    0=週一, 1=週二, ..., 6=週日
     """
-    weekday_names = ["?", "?", "?", "?", "?", "?", "?"]
-    if set(weekdays) == set(range(7)):
-        return "??"
-    if set(weekdays) == {0, 1, 2, 3, 4}:
-        return "???????"
-    if set(weekdays) == {5, 6}:
-        return "???????"
+    weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
     
+    # 特殊情況：每天都選
+    if set(weekdays) == set(range(7)):
+        return "每天"
+    
+    # 平日（週一至週五）
+    if set(weekdays) == {0, 1, 2, 3, 4}:
+        return "平日（週一至週五）"
+    
+    # 週末（週六、週日）
+    if set(weekdays) == {5, 6}:
+        return "週末（週六、週日）"
+    
+    # 自訂
     names = [weekday_names[d] for d in sorted(weekdays)]
-    return "?".join(names)
+    return "、".join(names)
