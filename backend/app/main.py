@@ -3,6 +3,7 @@
 from app.db import engine
 from app.dashboard import router as dashboard_router
 from app.webhook import router as webhook_router
+from app.liff_routes import router as liff_router, api_router as liff_api_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
 from app.schema_guard import ensure_runtime_schema
 
@@ -22,6 +23,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Smart Commute Assistant", lifespan=lifespan)
 app.include_router(dashboard_router)
 app.include_router(webhook_router)
+app.include_router(liff_router)
+app.include_router(liff_api_router)
 
 
 

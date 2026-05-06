@@ -866,7 +866,12 @@ def schedule_management_text(db, user_id: int) -> str:
         f"{idx}. {template.target_arrival_time} 到{template.destination_label}（{schedule_label(template.active_weekdays)}）"
         for idx, template in enumerate(templates, start=1)
     ]
-    return "可單獨管理以下排程：\n" + "\n".join(lines) + "\n\n可輸入：\n- 刪除排程 2\n- 編輯排程 2"
+    return (
+        "可單獨管理以下排程：\n"
+        + "\n".join(lines)
+        + "\n\n可輸入：\n- 刪除排程 2\n- 編輯排程 2"
+        + "\n\n🔗 或點選連結直接開啟表單：https://liff.line.me/2009982765-aKb3T2ca"
+    )
 
 
 def resolve_template_from_display_index(db, user_id: int, display_index_text: str):
@@ -1440,6 +1445,78 @@ def find_matching_destination(db, user_id: int, lat: float, lng: float, address:
         if address and dest.address and address.strip() == dest.address.strip():
             return dest
     return None
+
+
+# ===========================================================
+# LIFF 排程表單引導
+# ===========================================================
+
+def build_liff_schedule_flex() -> dict:
+    """
+    建立引導用戶開啟 LIFF 排程表單的 Flex Message
+    """
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "📅 排程設定",
+                    "weight": "bold",
+                    "size": "xl",
+                    "color": "#111111",
+                }
+            ],
+            "paddingBottom": "sm",
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "使用網頁表單設定您的通勤排程，支援多組排程與自訂星期。",
+                    "wrap": True,
+                    "size": "sm",
+                    "color": "#666666",
+                }
+            ],
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "color": "#667eea",
+                    "action": {
+                        "type": "uri",
+                        "label": "📝 開啟排程表單",
+                        "uri": "https://liff.line.me/2009982765-aKb3T2ca",
+                    },
+                }
+            ],
+        },
+    }
+
+
+async def reply_liff_schedule_prompt(reply_token: str, quick_replies: list[dict] | None = None) -> None:
+    """
+    回傳引導用戶開啟 LIFF 的訊息
+    """
+    alt_text = "請點擊下方按鈕開啟排程設定表單"
+    await reply_flex_with_quick_reply(
+        reply_token,
+        alt_text,
+        build_liff_schedule_flex(),
+        quick_replies or SCHEDULE_QUICK_REPLIES,
+    )
 
 
 def build_add_schedule_flex(
@@ -3586,24 +3663,8 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["add_schedule_template"]:
-                profile = get_profile(db, user.id)
-                # 初始化暫存狀態（預設平日 週一~週五 = [0,1,2,3,4]，時間 09:00）
-                pending_str = build_add_schedule_pending(
-                    time="09:00",
-                    days=[0, 1, 2, 3, 4],
-                )
-                set_pending_field(db, user.id, pending_str)
-                flex_contents = build_add_schedule_flex(
-                    profile,
-                    time="09:00",
-                    days=[0, 1, 2, 3, 4],
-                )
-                await reply_flex_with_quick_reply(
-                    reply_token,
-                    "📅 新增通勤排程",
-                    flex_contents,
-                    [],
-                )
+                # 引導用戶開啟 LIFF 排程表單
+                await reply_liff_schedule_prompt(reply_token, SCHEDULE_QUICK_REPLIES)
                 continue
 
             if command_text in COMMAND_ALIASES["manage_schedule_template"]:
@@ -3630,36 +3691,62 @@ async def line_webhook(
                 if template is None:
                     await reply_with_quick_reply(reply_token, "找不到這筆排程，請確認排程編號。", SCHEDULE_QUICK_REPLIES)
                     continue
-                profile = get_profile(db, user.id)
-                # 用現有排程資料初始化 Flex 表單
-                from app.commute_schedule import template_weekdays as _tw
-                existing_days = _tw(template)
-                pending_str = build_add_schedule_pending(
-                    time=template.target_arrival_time or "09:00",
-                    origin_label=template.origin_address or "",
-                    origin_lat=template.origin_lat,
-                    origin_lng=template.origin_lng,
-                    dest_label=template.destination_label or "",
-                    dest_lat=getattr(template, "dest_lat", None),
-                    dest_lng=getattr(template, "dest_lng", None),
-                    days=existing_days,
-                )
-                # 用 edit_schedule:<template_id>:<payload> 區分編輯模式
-                set_pending_field(db, user.id, f"edit_schedule:{template.id}:{pending_str[len('add_schedule:'):]}")
-                flex_contents = build_add_schedule_flex(
-                    profile,
-                    time=template.target_arrival_time or "09:00",
-                    origin_label=template.origin_address or "",
-                    origin_lat=template.origin_lat,
-                    origin_lng=template.origin_lng,
-                    dest_label=template.destination_label or "",
-                    days=existing_days,
-                )
+                # 引導用戶到 LIFF 表單進行編輯，帶上模板 ID 參數
+                edit_url = f"https://liff.line.me/2009982765-aKb3T2ca?edit={template.id}"
+                edit_flex = {
+                    "type": "bubble",
+                    "size": "mega",
+                    "header": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "✏️ 編輯排程",
+                                "weight": "bold",
+                                "size": "xl",
+                                "color": "#111111",
+                            }
+                        ],
+                        "paddingBottom": "sm",
+                    },
+                    "body": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "spacing": "md",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": f"編輯排程：{template.target_arrival_time} 到{template.destination_label}",
+                                "wrap": True,
+                                "size": "sm",
+                                "color": "#666666",
+                            }
+                        ],
+                    },
+                    "footer": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "spacing": "sm",
+                        "contents": [
+                            {
+                                "type": "button",
+                                "style": "primary",
+                                "color": "#667eea",
+                                "action": {
+                                    "type": "uri",
+                                    "label": "📝 開啟編輯表單",
+                                    "uri": edit_url,
+                                },
+                            }
+                        ],
+                    },
+                }
                 await reply_flex_with_quick_reply(
                     reply_token,
-                    f"📝 編輯排程：{template.destination_label} {template.target_arrival_time}",
-                    flex_contents,
-                    [],
+                    f"請點擊下方按鈕編輯排程：{template.target_arrival_time} 到{template.destination_label}",
+                    edit_flex,
+                    SCHEDULE_QUICK_REPLIES,
                 )
                 continue
 
