@@ -268,6 +268,17 @@
 
         // 頁面載入後立即初始化 LIFF
         window.addEventListener('load', function() {
+            // 檢查 liff SDK 是否載入
+            if (typeof liff === 'undefined') {
+                const errorMsg = "LIFF SDK 未載入，請檢查網路連線";
+                document.getElementById('loadingText').innerHTML = `
+                    <h1>❌ LIFF SDK 載入失敗</h1>
+                    <small>${errorMsg}</small>
+                `;
+                alert("LIFF 錯誤: " + errorMsg);
+                return;
+            }
+
             liff.init({ liffId: '2009982765-aKb3T2ca' })
                 .then(() => {
                     // 檢查登入狀態
