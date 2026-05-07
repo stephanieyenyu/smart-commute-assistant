@@ -22,6 +22,7 @@ from app.crud import (
     get_transport_mode_override,
     save_frozen_reminder,
 )
+from app.models import CommuteSchedule
 
 DEFAULT_COMMUTE_MINUTES = 56
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -629,9 +630,24 @@ async def _compute_today_plan(
         target_date = datetime.now(TAIPEI_TZ).date()
 
     profile = get_profile(db, user_id)
-    next_step = get_next_setup_step(profile)
-    if next_step is not None:
-        return {"ok": False, "reason": "setup_incomplete", "next_step": next_step}
+
+    # 從 CommuteSchedule 補充座標（LIFF 設定後 profile 可能尚未有座標）
+    schedule = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user_id).first()
+    if schedule:
+        if not profile.home_address and schedule.origin_address:
+            profile.home_address = schedule.origin_address
+            profile.home_place_name = schedule.origin_name
+        if not profile.office_address and schedule.dest_address:
+            profile.office_address = schedule.dest_address
+            profile.office_place_name = schedule.dest_name
+
+    # 如果 profile 沒有設定 preferred_arrival_time，從 schedule 取得
+    if not profile.preferred_arrival_time and schedule and schedule.time:
+        profile.preferred_arrival_time = schedule.time
+
+    # 必須有出發地和目的地才能計算
+    if not profile.home_address or not profile.office_address or not profile.preferred_arrival_time:
+        return {"ok": False, "reason": "setup_incomplete", "next_step": "schedule"}
 
     effective_arrival_time = profile.preferred_arrival_time
     override = get_override_for_date(db, user_id, target_date)
