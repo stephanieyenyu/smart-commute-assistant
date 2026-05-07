@@ -193,8 +193,11 @@ def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
 # ─────────────────────────────────────────────────────────
 
 def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> CommuteSchedule:
-    """由 LIFF POST /api/schedule 呼叫，upsert 使用者的通勤排程。
-    data 欄位：userId, originName, originAddress, destName, destAddress, time, days
+    """由 LIFF POST /api/schedule/submit 呼叫，upsert 使用者的通勤排程。
+    data 欄位（內部格式）：
+      originName, originAddress, originLat, originLng,
+      destName, destAddress, destLat, destLng,
+      time, days, reminderEnabled
     """
     user = get_or_create_user(db, line_user_id)
     get_or_create_profile(db, user.id)
@@ -204,29 +207,43 @@ def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> Commu
         schedule = CommuteSchedule(user_id=user.id)
         db.add(schedule)
 
-    schedule.origin_name = data.get("originName")
+    schedule.origin_name    = data.get("originName")
     schedule.origin_address = data.get("originAddress")
-    schedule.dest_name = data.get("destName")
-    schedule.dest_address = data.get("destAddress")
-    schedule.time = data.get("time")
-    schedule.days = data.get("days")  # JSON array [0,1,2,3,4] etc.
+    schedule.origin_lat     = data.get("originLat")
+    schedule.origin_lng     = data.get("originLng")
+    schedule.dest_name      = data.get("destName")
+    schedule.dest_address   = data.get("destAddress")
+    schedule.dest_lat       = data.get("destLat")
+    schedule.dest_lng       = data.get("destLng")
+    schedule.time           = data.get("time")
+    schedule.days           = data.get("days")
     schedule.reminder_enabled = data.get("reminderEnabled", True)
 
     db.commit()
     db.refresh(schedule)
 
-    # 同步更新 CommuteProfile 以維持向下相容
+    # 同步更新 CommuteProfile（讓 service.py 的通勤計算能直接用座標）
     profile = get_profile(db, user.id)
-    profile.preferred_arrival_time = data.get("time")
     if data.get("originAddress"):
-        profile.home_address = data.get("originAddress")
+        profile.home_address    = data.get("originAddress")
         profile.home_place_name = data.get("originName")
+    if data.get("originLat") is not None:
+        profile.home_lat = data.get("originLat")
+    if data.get("originLng") is not None:
+        profile.home_lng = data.get("originLng")
     if data.get("destAddress"):
-        profile.office_address = data.get("destAddress")
+        profile.office_address    = data.get("destAddress")
         profile.office_place_name = data.get("destName")
+    if data.get("destLat") is not None:
+        profile.office_lat = data.get("destLat")
+    if data.get("destLng") is not None:
+        profile.office_lng = data.get("destLng")
+    if data.get("time"):
+        profile.preferred_arrival_time = data.get("time")
     db.commit()
 
     return schedule
+
 
 
 def get_commute_schedule(db: Session, line_user_id: str) -> CommuteSchedule | None:
