@@ -11,6 +11,8 @@ from app.db import Base, engine, SessionLocal
 from app.webhook import router as webhook_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
 from app.crud import upsert_commute_schedule, get_commute_schedule
+from app.google_maps import geocode_address
+
 
 Base.metadata.create_all(bind=engine)
 
@@ -68,20 +70,52 @@ class ScheduleSubmitPayload(BaseModel):
 
 @app.post("/api/schedule/submit")
 async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
-    """LIFF 前端送出通勤排程設定。"""
+    """LIFF 前端送出通勤排程設定。
+    若前端未提供座標（地址直接輸入情況），後端自動 geocode 補充。
+    """
     try:
+        origin_lat = payload.originLat
+        origin_lng = payload.originLng
+        dest_lat   = payload.destLat
+        dest_lng   = payload.destLng
+
+        # 出發地：若無座標，嘗試 geocode
+        if (origin_lat is None or origin_lng is None) and payload.originAddress:
+            try:
+                geo = await geocode_address(payload.originAddress)
+                if geo:
+                    origin_lat = geo.get("lat") or origin_lat
+                    origin_lng = geo.get("lng") or origin_lng
+                    # 若前端給的是地址字串，補充格式化地址
+                    if not payload.originName and geo.get("place_name"):
+                        payload.originName = geo.get("place_name")
+            except Exception as geo_err:
+                print(f"[geocode origin] error={geo_err}")
+
+        # 目的地：若無座標，嘗試 geocode
+        if (dest_lat is None or dest_lng is None) and payload.destinationAddress:
+            try:
+                geo = await geocode_address(payload.destinationAddress)
+                if geo:
+                    dest_lat = geo.get("lat") or dest_lat
+                    dest_lng = geo.get("lng") or dest_lng
+                    if not payload.destinationName and geo.get("place_name"):
+                        payload.destinationName = geo.get("place_name")
+            except Exception as geo_err:
+                print(f"[geocode dest] error={geo_err}")
+
         # 將前端欄位名稱轉換為內部格式
         data = {
-            "originName":    payload.originName,
-            "originAddress": payload.originAddress,
-            "originLat":     payload.originLat,
-            "originLng":     payload.originLng,
-            "destName":      payload.destinationName,
-            "destAddress":   payload.destinationAddress,
-            "destLat":       payload.destLat,
-            "destLng":       payload.destLng,
-            "time":          payload.arrivalTime,
-            "days":          payload.weekdays,
+            "originName":      payload.originName,
+            "originAddress":   payload.originAddress,
+            "originLat":       origin_lat,
+            "originLng":       origin_lng,
+            "destName":        payload.destinationName,
+            "destAddress":     payload.destinationAddress,
+            "destLat":         dest_lat,
+            "destLng":         dest_lng,
+            "time":            payload.arrivalTime,
+            "days":            payload.weekdays,
             "reminderEnabled": payload.reminderEnabled,
         }
         schedule = upsert_commute_schedule(db, payload.userId, data)
@@ -92,8 +126,12 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
                 "userId":            payload.userId,
                 "originName":        schedule.origin_name,
                 "originAddress":     schedule.origin_address,
+                "originLat":         schedule.origin_lat,
+                "originLng":         schedule.origin_lng,
                 "destinationName":   schedule.dest_name,
                 "destinationAddress":schedule.dest_address,
+                "destLat":           schedule.dest_lat,
+                "destLng":           schedule.dest_lng,
                 "arrivalTime":       schedule.time,
                 "weekdays":          schedule.days,
                 "reminderEnabled":   schedule.reminder_enabled,
