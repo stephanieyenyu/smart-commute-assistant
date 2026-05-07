@@ -98,7 +98,7 @@ class CommuteSchedule(Base):
     # 排程時間（HH:MM 格式）
     time = Column(String, nullable=True)
 
-    # 提醒星期（JSON 陣列，0=週日，1=週一，...，6=週六）
+    # 提醒星期（JSON 陣列，0=週一，1=週二，...，6=週日）
     days = Column(JSON, nullable=True)
 
     # 提醒開關

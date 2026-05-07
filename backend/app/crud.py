@@ -255,7 +255,7 @@ def get_commute_schedule(db: Session, line_user_id: str) -> CommuteSchedule | No
 
 
 def get_all_schedules_for_day(db: Session, day_of_week: int) -> list[CommuteSchedule]:
-    """取得今天需要提醒的所有排程（day_of_week: 0=週日, 1=週一, ..., 6=週六）。"""
+    """取得今天需要提醒的所有排程（day_of_week: 0=週一, 1=週二, ..., 6=週日）。"""
     all_schedules = db.query(CommuteSchedule).filter(
         CommuteSchedule.reminder_enabled == True,
         CommuteSchedule.time.isnot(None),

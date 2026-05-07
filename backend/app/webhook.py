@@ -66,6 +66,7 @@ COMMUTE_RESULT_QR = [
 
 SETTINGS_QR = [
     {"type": "uri",     "label": "📝 設定通勤路線",  "uri": LIFF_URL},
+    {"type": "uri",     "label": "📅 一週排程設定",  "uri": LIFF_URL},
     {"type": "message", "label": "🔔 開啟自動提醒",  "text": "開啟自動提醒"},
     {"type": "message", "label": "🔕 關閉自動提醒",  "text": "關閉自動提醒"},
     {"type": "message", "label": "📋 查看提醒設定",  "text": "查看提醒設定"},
@@ -119,6 +120,10 @@ TOPIC_CARD_ALIASES = {
     "通勤路線": "設定通勤路線",
     "編輯排程": "設定通勤路線",
     "修改排程": "設定通勤路線",
+    "一週排程設定": "設定通勤路線",
+    "一周排程設定": "設定通勤路線",
+    "一週排程": "設定通勤路線",
+    "一周排程": "設定通勤路線",
     "通勤建議": "通勤建議",
     "交通建議": "通勤建議",
     "交通方式": "交通方式",
@@ -133,7 +138,7 @@ def format_profile_text(schedule, profile, today_mode=None):
         origin = schedule.origin_name or schedule.origin_address or "尚未設定"
         dest   = schedule.dest_name   or schedule.dest_address   or "尚未設定"
         t      = schedule.time        or "尚未設定"
-        days_map = {0:"日", 1:"一", 2:"二", 3:"三", 4:"四", 5:"五", 6:"六"}
+        days_map = {0:"一", 1:"二", 2:"三", 3:"四", 4:"五", 5:"六", 6:"日"}
         days_str = "、".join(f"週{days_map[d]}" for d in sorted(schedule.days or []))
         reminder = "開啟" if schedule.reminder_enabled else "關閉"
     else:
@@ -219,11 +224,13 @@ def _build_help_cards_by_title() -> dict[str, dict]:
         "設定通勤路線": bubble("#4a90d9", "🗺️", "設定通勤路線",
             [
                 ("開啟設定頁面", "點選下方按鈕開啟 LIFF 網頁完成設定"),
+                ("一週排程設定", "設定每週固定提醒日，週三週五會正確顯示為週三週五"),
                 ("編輯排程", "開啟設定頁面調整已儲存的通勤路線、到達時間與提醒日"),
                 ("查看目前設定", "傳送「查看設定」查看已儲存的通勤資訊"),
             ],
             [
                 uri_btn("📝 開啟設定頁面", liff_url),
+                uri_btn("📅 一週排程設定", liff_url),
                 uri_btn("✏️ 編輯排程", liff_url),
                 btn("📊 查看設定", "查看設定"),
             ]

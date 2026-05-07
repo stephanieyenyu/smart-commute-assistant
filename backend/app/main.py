@@ -62,7 +62,7 @@ class ScheduleSubmitPayload(BaseModel):
     destLat: Optional[float] = None
     destLng: Optional[float] = None
     arrivalTime: Optional[str] = None       # HH:MM 格式
-    weekdays: Optional[List[int]] = None    # 0=週日, 1=週一, ..., 6=週六
+    weekdays: Optional[List[int]] = None    # 0=週一, 1=週二, ..., 6=週日
     reminderEnabled: Optional[bool] = True
 
 
