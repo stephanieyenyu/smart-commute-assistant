@@ -86,19 +86,24 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
             await reply_text(reply_token, texts[0])
 
 
-async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: list[dict]) -> None:
+async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dict | list[dict]) -> None:
     """
-    發送 Flex Message Carousel。
-    flex_contents: list of Flex Bubble dicts（每個 dict 為一張卡片）。
+    發送 Flex Message。
+    flex_contents 可為單張 Flex Bubble dict，或多張 Bubble dict 組成的 Carousel。
     """
-    carousel = {
-        "type": "carousel",
-        "contents": flex_contents,
-    }
+    if isinstance(flex_contents, dict):
+        container_payload = flex_contents
+    elif len(flex_contents) == 1:
+        container_payload = flex_contents[0]
+    else:
+        container_payload = {
+            "type": "carousel",
+            "contents": flex_contents,
+        }
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
-            flex_container = FlexContainer.from_dict(carousel)
+            flex_container = FlexContainer.from_dict(container_payload)
             await line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
