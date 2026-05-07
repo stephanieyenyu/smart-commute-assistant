@@ -207,17 +207,25 @@ def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> Commu
         schedule = CommuteSchedule(user_id=user.id)
         db.add(schedule)
 
-    schedule.origin_name    = data.get("originName")
-    schedule.origin_address = data.get("originAddress")
-    schedule.origin_lat     = data.get("originLat")
-    schedule.origin_lng     = data.get("originLng")
-    schedule.dest_name      = data.get("destName")
-    schedule.dest_address   = data.get("destAddress")
-    schedule.dest_lat       = data.get("destLat")
-    schedule.dest_lng       = data.get("destLng")
-    schedule.time           = data.get("time")
-    schedule.days           = data.get("days")
-    schedule.reminder_enabled = data.get("reminderEnabled", True)
+    partial = bool(data.get("partial"))
+
+    def apply_if_present(attr: str, key: str, default=None):
+        if partial and data.get(key) is None:
+            return
+        setattr(schedule, attr, data.get(key, default))
+
+    apply_if_present("origin_name", "originName")
+    apply_if_present("origin_address", "originAddress")
+    apply_if_present("origin_lat", "originLat")
+    apply_if_present("origin_lng", "originLng")
+    apply_if_present("dest_name", "destName")
+    apply_if_present("dest_address", "destAddress")
+    apply_if_present("dest_lat", "destLat")
+    apply_if_present("dest_lng", "destLng")
+    apply_if_present("time", "time")
+    apply_if_present("days", "days")
+    if not partial or data.get("reminderEnabled") is not None:
+        schedule.reminder_enabled = data.get("reminderEnabled", True)
 
     db.commit()
     db.refresh(schedule)

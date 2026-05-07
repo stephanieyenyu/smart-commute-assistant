@@ -141,15 +141,20 @@ class Phase1StabilityTests(unittest.TestCase):
         webhook_py = self.read_repo_file("backend/app/webhook.py")
         line_client_py = self.read_repo_file("backend/app/line_client.py")
 
-        self.assertIn("TOPIC_CARD_TITLES = (\"設定通勤路線\", \"通勤建議\", \"交通方式\", \"系統設定\")", webhook_py)
+        self.assertIn("TOPIC_CARD_TITLES = (\"設定通勤路線\", \"通勤建議\", \"交通方式\", \"看板\", \"系統設定\")", webhook_py)
         self.assertIn('"設定通勤路線": "設定通勤路線"', webhook_py)
-        self.assertIn('"編輯排程": "設定通勤路線"', webhook_py)
-        self.assertIn('"一週排程設定": "設定通勤路線"', webhook_py)
+        self.assertIn('"看板": "看板"', webhook_py)
+        self.assertIn('"add_schedule"', webhook_py)
+        self.assertIn('"weekly_schedule"', webhook_py)
+        self.assertIn('"edit_schedule"', webhook_py)
         self.assertIn("def build_topic_help_card", webhook_py)
         self.assertIn("topic_title = topic_title_for_command(command_text)", webhook_py)
         self.assertIn("await reply_flex_message(reply_token, topic_title, topic_card)", webhook_py)
-        self.assertIn('uri_btn("📅 一週排程設定", liff_url)', webhook_py)
-        self.assertIn('uri_btn("✏️ 編輯排程", liff_url)', webhook_py)
+        self.assertIn('uri_btn("➕ 新增排程設定", create_url)', webhook_py)
+        self.assertIn('btn("📅 一週排程設定", "一週排程設定")', webhook_py)
+        self.assertIn('btn("✏️ 編輯排程", "編輯排程")', webhook_py)
+        self.assertIn('btn("📺 個人看板連結", "個人看板連結", "primary")', webhook_py)
+        self.assertIn("build_dashboard_url(request, line_user_id, \"personal\")", webhook_py)
 
         self.assertIn("flex_contents: dict | list[dict]", line_client_py)
         self.assertIn("container_payload = flex_contents", line_client_py)
@@ -162,12 +167,29 @@ class Phase1StabilityTests(unittest.TestCase):
         models_py = self.read_repo_file("backend/app/models.py")
         crud_py = self.read_repo_file("backend/app/crud.py")
         scheduler_py = self.read_repo_file("backend/app/reminder_scheduler.py")
+        schedule_summary_py = self.read_repo_file("backend/app/schedule_summary.py")
 
-        self.assertIn('days_map = {0:"一", 1:"二", 2:"三", 3:"四", 4:"五", 5:"六", 6:"日"}', webhook_py)
+        self.assertIn("format_commute_setting_text(schedule, profile, mode_label)", webhook_py)
+        self.assertIn('WEEKDAY_LABELS = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")', schedule_summary_py)
         self.assertIn("0=週一, 1=週二, ..., 6=週日", main_py)
+        self.assertIn('payload.mode == "create"', main_py)
+        self.assertIn("已保留既有排程，未覆蓋舊資料", main_py)
         self.assertIn("0=週一，1=週二，...，6=週日", models_py)
         self.assertIn("0=週一, 1=週二, ..., 6=週日", crud_py)
         self.assertIn("day_of_week = now_dt.weekday()", scheduler_py)
+
+    def test_dashboard_routes_and_shared_schedule_summary_are_wired(self):
+        main_py = self.read_repo_file("backend/app/main.py")
+        dashboard_view_py = self.read_repo_file("backend/app/dashboard_view.py")
+        schedule_summary_py = self.read_repo_file("backend/app/schedule_summary.py")
+
+        self.assertIn('@app.get("/dashboard", response_class=HTMLResponse)', main_py)
+        self.assertIn('@app.get("/api/dashboard/status")', main_py)
+        self.assertIn("build_schedule_status_payload(schedule, profile, mode_label)", main_py)
+        self.assertIn("setInterval(refresh, refreshMs)", dashboard_view_py)
+        self.assertIn("AbortController", dashboard_view_py)
+        self.assertIn("format_weekly_schedule_text", schedule_summary_py)
+        self.assertIn("format_commute_setting_text", schedule_summary_py)
 
 
 if __name__ == "__main__":

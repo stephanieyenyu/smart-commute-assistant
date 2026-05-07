@@ -1,5 +1,7 @@
 import json
+import os
 from datetime import date, datetime, timedelta
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -30,6 +32,13 @@ from app.service import (
     get_metro_snapshot,
 )
 from app.reminder_scheduler import clear_today_reminder_state_for_user
+from app.schedule_summary import (
+    format_commute_setting_text,
+    format_weekdays,
+    format_weekly_schedule_text,
+    schedule_arrival_time,
+    schedule_destination,
+)
 
 router = APIRouter()
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -54,6 +63,7 @@ MAIN_MENU_QR = [
     {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
     {"type": "message", "label": "🚌 今天搭公車",   "text": "今天搭公車"},
     {"type": "message", "label": "🚇 今天搭捷運",   "text": "今天搭捷運"},
+    {"type": "message", "label": "📺 看板",         "text": "看板"},
     {"type": "message", "label": "⚙️ 系統設定",     "text": "系統設定"},
 ]
 
@@ -65,8 +75,9 @@ COMMUTE_RESULT_QR = [
 ]
 
 SETTINGS_QR = [
-    {"type": "uri",     "label": "📝 設定通勤路線",  "uri": LIFF_URL},
-    {"type": "uri",     "label": "📅 一週排程設定",  "uri": LIFF_URL},
+    {"type": "uri",     "label": "➕ 新增排程設定",  "uri": f"{LIFF_URL}?mode=create"},
+    {"type": "message", "label": "📅 一週排程設定",  "text": "一週排程設定"},
+    {"type": "message", "label": "✏️ 編輯排程",      "text": "編輯排程"},
     {"type": "message", "label": "🔔 開啟自動提醒",  "text": "開啟自動提醒"},
     {"type": "message", "label": "🔕 關閉自動提醒",  "text": "關閉自動提醒"},
     {"type": "message", "label": "📋 查看提醒設定",  "text": "查看提醒設定"},
@@ -111,58 +122,60 @@ COMMAND_ALIASES = {
     "enable_reminder":      {"開啟自動提醒"},
     "disable_reminder":     {"關閉自動提醒"},
     "view_reminder_setting":{"查看提醒設定"},
+    "add_schedule":         {"新增排程設定", "新增排程"},
+    "weekly_schedule":      {"一週排程設定", "一周排程設定", "一週排程", "一周排程", "查看一週排程設定"},
+    "edit_schedule":        {"編輯排程", "修改排程"},
+    "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結"},
+    "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結"},
 }
 
-TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "系統設定")
+TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "看板", "系統設定")
 
 TOPIC_CARD_ALIASES = {
     "設定通勤路線": "設定通勤路線",
     "通勤路線": "設定通勤路線",
-    "編輯排程": "設定通勤路線",
-    "修改排程": "設定通勤路線",
-    "一週排程設定": "設定通勤路線",
-    "一周排程設定": "設定通勤路線",
-    "一週排程": "設定通勤路線",
-    "一周排程": "設定通勤路線",
     "通勤建議": "通勤建議",
     "交通建議": "通勤建議",
     "交通方式": "交通方式",
     "通勤方式": "交通方式",
+    "看板": "看板",
+    "看板管理": "看板",
+    "Dashboard": "看板",
+    "dashboard": "看板",
     "系統設定": "系統設定",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def format_profile_text(schedule, profile, today_mode=None):
-    if schedule:
-        origin = schedule.origin_name or schedule.origin_address or "尚未設定"
-        dest   = schedule.dest_name   or schedule.dest_address   or "尚未設定"
-        t      = schedule.time        or "尚未設定"
-        days_map = {0:"一", 1:"二", 2:"三", 3:"四", 4:"五", 5:"六", 6:"日"}
-        days_str = "、".join(f"週{days_map[d]}" for d in sorted(schedule.days or []))
-        reminder = "開啟" if schedule.reminder_enabled else "關閉"
-    else:
-        origin = getattr(profile, "home_place_name", None) or getattr(profile, "home_address", None) or "尚未設定"
-        dest   = getattr(profile, "office_place_name", None) or getattr(profile, "office_address", None) or "尚未設定"
-        t      = getattr(profile, "preferred_arrival_time", None) or "尚未設定"
-        days_str = "尚未設定"
-        reminder = "開啟" if getattr(profile, "reminder_enabled", True) else "關閉"
-
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
-    return (
-        "📋 目前通勤設定：\n"
-        f"🏠 出發地：{origin}\n"
-        f"🏢 目的地：{dest}\n"
-        f"⏰ 到達時間：{t}\n"
-        f"📅 提醒星期：{days_str}\n"
-        f"📢 自動提醒：{reminder}\n"
-        f"🚇 今天交通：{mode_label}"
-    )
+    return format_commute_setting_text(schedule, profile, mode_label)
+
+
+def build_liff_url(mode: str | None = None, **params) -> str:
+    query = {key: value for key, value in params.items() if value is not None}
+    if mode:
+        query["mode"] = mode
+    if not query:
+        return LIFF_URL
+    return f"{LIFF_URL}?{urlencode(query)}"
+
+
+def public_base_url(request: Request) -> str:
+    configured = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    return str(request.base_url).rstrip("/")
+
+
+def build_dashboard_url(request: Request, line_user_id: str, view: str = "personal") -> str:
+    query = urlencode({"userId": line_user_id, "view": view})
+    return f"{public_base_url(request)}/dashboard?{query}"
 
 
 def _build_help_cards_by_title() -> dict[str, dict]:
     """Build reusable topic bubbles for 指令說明 and single-topic replies."""
-    liff_url = LIFF_URL
+    create_url = build_liff_url("create")
 
     def btn(label: str, text: str, style: str = "secondary") -> dict:
         return {
@@ -223,15 +236,15 @@ def _build_help_cards_by_title() -> dict[str, dict]:
     return {
         "設定通勤路線": bubble("#4a90d9", "🗺️", "設定通勤路線",
             [
-                ("開啟設定頁面", "點選下方按鈕開啟 LIFF 網頁完成設定"),
-                ("一週排程設定", "設定每週固定提醒日，週三週五會正確顯示為週三週五"),
-                ("編輯排程", "開啟設定頁面調整已儲存的通勤路線、到達時間與提醒日"),
+                ("新增排程設定", "新增一組通勤排程；新增流程不會直接覆蓋舊排程"),
+                ("一週排程設定", "查看目前一整週的啟用日、到達時間與目的地，無關表單填寫"),
+                ("編輯排程", "先選擇要修改的排程，再進行部分修改"),
                 ("查看目前設定", "傳送「查看設定」查看已儲存的通勤資訊"),
             ],
             [
-                uri_btn("📝 開啟設定頁面", liff_url),
-                uri_btn("📅 一週排程設定", liff_url),
-                uri_btn("✏️ 編輯排程", liff_url),
+                uri_btn("➕ 新增排程設定", create_url),
+                btn("📅 一週排程設定", "一週排程設定"),
+                btn("✏️ 編輯排程", "編輯排程"),
                 btn("📊 查看設定", "查看設定"),
             ]
         ),
@@ -258,6 +271,18 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 btn("🚌 今天搭公車", "今天搭公車"),
                 btn("🚇 今天搭捷運", "今天搭捷運"),
                 btn("🚄 最短時間優先", "優先選擇通勤時間短"),
+            ]
+        ),
+        "看板": bubble("#0f766e", "📺", "看板",
+            [
+                ("個人看板連結", "開啟只顯示自己通勤資訊的即時看板"),
+                ("家庭看板連結", "開啟家庭檢視看板，方便共用螢幕查看"),
+                ("一週排程設定", "看板和 LINE 文字會使用同一份排程資料"),
+            ],
+            [
+                btn("📺 個人看板連結", "個人看板連結", "primary"),
+                btn("🏠 家庭看板連結", "家庭看板連結"),
+                btn("📅 一週排程設定", "一週排程設定"),
             ]
         ),
         "系統設定": bubble("#e67e22", "⚙️", "系統設定",
@@ -370,6 +395,65 @@ async def line_webhook(
             command_text = normalize(user_text)
             today_date    = today_taipei()
             tomorrow_date = today_date + timedelta(days=1)
+
+            if command_text in COMMAND_ALIASES["add_schedule"]:
+                await reply_with_quick_reply(
+                    reply_token,
+                    "新增排程設定會建立新的通勤排程，不會直接覆蓋既有排程。",
+                    [{"type": "uri", "label": "➕ 新增排程設定", "uri": build_liff_url("create")}],
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["weekly_schedule"]:
+                schedule = user.schedule
+                await reply_with_quick_reply(
+                    reply_token,
+                    format_weekly_schedule_text(schedule),
+                    MAIN_MENU_QR,
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["edit_schedule"]:
+                schedule = user.schedule
+                if not schedule:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "目前尚未建立排程。請先新增一組通勤排程。",
+                        [{"type": "uri", "label": "➕ 新增排程設定", "uri": build_liff_url("create")}],
+                    )
+                    continue
+                edit_url = build_liff_url("edit", scheduleId=schedule.id)
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請選擇要編輯的排程：\n"
+                    f"{schedule.id}. {schedule_arrival_time(schedule)} 到{schedule_destination(schedule)}"
+                    f"（{format_weekdays(schedule.days)}）\n\n"
+                    "進入編輯後可只修改時間、地點、提醒星期或提醒開關。",
+                    [{"type": "uri", "label": "✏️ 編輯目前排程", "uri": edit_url}],
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["personal_dashboard_link"]:
+                dashboard_url = build_dashboard_url(request, line_user_id, "personal")
+                await reply_with_quick_reply(
+                    reply_token,
+                    "個人看板連結：\n"
+                    f"{dashboard_url}\n\n"
+                    "看板會和 LINE 的目前設定使用同一份排程資料。",
+                    [{"type": "uri", "label": "📺 開啟個人看板", "uri": dashboard_url}],
+                )
+                continue
+
+            if command_text in COMMAND_ALIASES["family_dashboard_link"]:
+                dashboard_url = build_dashboard_url(request, line_user_id, "family")
+                await reply_with_quick_reply(
+                    reply_token,
+                    "家庭看板連結：\n"
+                    f"{dashboard_url}\n\n"
+                    "家庭看板使用同一份排程摘要資料，適合放在共用螢幕查看。",
+                    [{"type": "uri", "label": "🏠 開啟家庭看板", "uri": dashboard_url}],
+                )
+                continue
 
             topic_title = topic_title_for_command(command_text)
             if topic_title:
