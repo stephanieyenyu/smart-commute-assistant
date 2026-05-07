@@ -137,6 +137,23 @@ class Phase1StabilityTests(unittest.TestCase):
 
         self.assertEqual(result, stale_eta)
 
+    def test_line_topic_texts_reply_with_single_flex_cards(self):
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        line_client_py = self.read_repo_file("backend/app/line_client.py")
+
+        self.assertIn("TOPIC_CARD_TITLES = (\"設定通勤路線\", \"通勤建議\", \"交通方式\", \"系統設定\")", webhook_py)
+        self.assertIn('"設定通勤路線": "設定通勤路線"', webhook_py)
+        self.assertIn('"編輯排程": "設定通勤路線"', webhook_py)
+        self.assertIn("def build_topic_help_card", webhook_py)
+        self.assertIn("topic_title = topic_title_for_command(command_text)", webhook_py)
+        self.assertIn("await reply_flex_message(reply_token, topic_title, topic_card)", webhook_py)
+        self.assertIn('uri_btn("✏️ 編輯排程", liff_url)', webhook_py)
+
+        self.assertIn("flex_contents: dict | list[dict]", line_client_py)
+        self.assertIn("container_payload = flex_contents", line_client_py)
+        self.assertIn("container_payload = {", line_client_py)
+        self.assertIn('"type": "carousel"', line_client_py)
+
 
 if __name__ == "__main__":
     unittest.main()

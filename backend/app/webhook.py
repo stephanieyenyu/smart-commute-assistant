@@ -100,7 +100,7 @@ COMMAND_ALIASES = {
     "edit_today_arrival":   {"修改今天到公司時間", "今天改到公司時間", "設定到公司時間"},
     "edit_tomorrow_arrival":{"修改明天到公司時間"},
     "reset":                {"重新設定"},
-    "system_settings":      {"系統設定"},
+    "system_settings":      {"系統設定", "系統設定選單", "設定選單"},
     "help":                 {"指令說明", "說明", "help", "Help"},
     "set_mode_auto":        {"今天自動判斷", "今天交通自動"},
     "set_mode_shortest":    {"優先選擇通勤時間短", "今天最短時間"},
@@ -110,6 +110,20 @@ COMMAND_ALIASES = {
     "enable_reminder":      {"開啟自動提醒"},
     "disable_reminder":     {"關閉自動提醒"},
     "view_reminder_setting":{"查看提醒設定"},
+}
+
+TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "系統設定")
+
+TOPIC_CARD_ALIASES = {
+    "設定通勤路線": "設定通勤路線",
+    "通勤路線": "設定通勤路線",
+    "編輯排程": "設定通勤路線",
+    "修改排程": "設定通勤路線",
+    "通勤建議": "通勤建議",
+    "交通建議": "通勤建議",
+    "交通方式": "交通方式",
+    "通勤方式": "交通方式",
+    "系統設定": "系統設定",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -141,8 +155,8 @@ def format_profile_text(schedule, profile, today_mode=None):
     )
 
 
-def build_help_flex():
-    """Build Flex Message Carousel for 指令說明 — each bubble has footer action buttons."""
+def _build_help_cards_by_title() -> dict[str, dict]:
+    """Build reusable topic bubbles for 指令說明 and single-topic replies."""
     liff_url = LIFF_URL
 
     def btn(label: str, text: str, style: str = "secondary") -> dict:
@@ -201,18 +215,20 @@ def build_help_flex():
             }
         }
 
-    cards = [
-        bubble("#4a90d9", "🗺️", "設定通勤路線",
+    return {
+        "設定通勤路線": bubble("#4a90d9", "🗺️", "設定通勤路線",
             [
                 ("開啟設定頁面", "點選下方按鈕開啟 LIFF 網頁完成設定"),
+                ("編輯排程", "開啟設定頁面調整已儲存的通勤路線、到達時間與提醒日"),
                 ("查看目前設定", "傳送「查看設定」查看已儲存的通勤資訊"),
             ],
             [
                 uri_btn("📝 開啟設定頁面", liff_url),
+                uri_btn("✏️ 編輯排程", liff_url),
                 btn("📊 查看設定", "查看設定"),
             ]
         ),
-        bubble("#7b68ee", "🚆", "通勤建議",
+        "通勤建議": bubble("#7b68ee", "🚆", "通勤建議",
             [
                 ("今天通勤建議", "查看今天最佳通勤方式與建議出發時間"),
                 ("明天幾點出門", "預估明天需要幾點出發"),
@@ -224,7 +240,7 @@ def build_help_flex():
                 btn("✏️ 修改今天時間", "修改今天到公司時間"),
             ]
         ),
-        bubble("#27ae60", "🚌", "交通方式",
+        "交通方式": bubble("#27ae60", "🚌", "交通方式",
             [
                 ("今天搭公車", "強制切換為公車優先模式"),
                 ("今天搭捷運", "強制切換為捷運優先模式"),
@@ -237,20 +253,33 @@ def build_help_flex():
                 btn("🚄 最短時間優先", "優先選擇通勤時間短"),
             ]
         ),
-        bubble("#e67e22", "⚙️", "系統設定",
+        "系統設定": bubble("#e67e22", "⚙️", "系統設定",
             [
-                ("系統設定", "顯示完整設定選單"),
+                ("系統設定選單", "顯示完整設定選單"),
                 ("開啟/關閉自動提醒", "控制每日自動出發提醒"),
                 ("查看提醒設定", "查看目前提醒開關狀態"),
             ],
             [
-                btn("⚙️ 系統設定", "系統設定", "primary"),
+                btn("⚙️ 系統設定選單", "系統設定選單", "primary"),
                 btn("🔔 開啟自動提醒", "開啟自動提醒"),
                 btn("🔕 關閉自動提醒", "關閉自動提醒"),
             ]
         ),
-    ]
-    return cards
+    }
+
+
+def build_help_flex() -> list[dict]:
+    """Build Flex Message Carousel for 指令說明 — each bubble has footer action buttons."""
+    cards_by_title = _build_help_cards_by_title()
+    return [cards_by_title[title] for title in TOPIC_CARD_TITLES]
+
+
+def build_topic_help_card(topic_title: str) -> dict | None:
+    return _build_help_cards_by_title().get(topic_title)
+
+
+def topic_title_for_command(command_text: str) -> str | None:
+    return TOPIC_CARD_ALIASES.get(command_text)
 
 
 # ── Webhook Router ────────────────────────────────────────────────────────────
@@ -334,6 +363,13 @@ async def line_webhook(
             command_text = normalize(user_text)
             today_date    = today_taipei()
             tomorrow_date = today_date + timedelta(days=1)
+
+            topic_title = topic_title_for_command(command_text)
+            if topic_title:
+                topic_card = build_topic_help_card(topic_title)
+                if topic_card:
+                    await reply_flex_message(reply_token, topic_title, topic_card)
+                    continue
 
             # ── 系統設定 ──────────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["system_settings"]:

@@ -43,6 +43,9 @@ def load_service_module():
             "get_transport_mode_override": None,
             "save_frozen_reminder": None,
         },
+        "app.models": {
+            "CommuteSchedule": type("CommuteSchedule", (), {}),
+        },
     }
 
     for name, attrs in stubs.items():
