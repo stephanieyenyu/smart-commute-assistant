@@ -123,10 +123,10 @@ async def check_and_send_departure_reminders():
     try:
         now_dt   = now_taipei()
         today    = now_dt.date()
-        # Python: weekday() 0=週一...6=週日；LINE days: 0=週日...6=週六
-        # 轉換：weekday → LINE days
-        py_weekday = now_dt.weekday()  # 0=Mon, 6=Sun
-        day_of_week = (py_weekday + 1) % 7  # 0=Sun,1=Mon,...,6=Sat
+        # 前端 weekdays 慣例：0=週一, 1=週二, ..., 5=週六, 6=週日
+        # Python weekday() 慣例：0=週一, 1=週二, ..., 5=週六, 6=週日
+        # → 兩者一致，直接使用 weekday() 即可，不需要轉換
+        day_of_week = now_dt.weekday()  # 0=Mon, 1=Tue, ..., 6=Sun
 
         now_hhmmss = now_dt.strftime("%H:%M:%S")
         now_sec    = now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second

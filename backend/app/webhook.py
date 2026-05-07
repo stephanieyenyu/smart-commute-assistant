@@ -142,59 +142,113 @@ def format_profile_text(schedule, profile, today_mode=None):
 
 
 def build_help_flex():
-    """Build Flex Message Carousel for 指令說明."""
-    def bubble(header_color, icon, title, rows):
+    """Build Flex Message Carousel for 指令說明 — each bubble has footer action buttons."""
+    liff_url = LIFF_URL
+
+    def btn(label: str, text: str, style: str = "secondary") -> dict:
+        return {
+            "type": "button",
+            "action": {"type": "message", "label": label, "text": text},
+            "style": style,
+            "height": "sm",
+            "margin": "xs",
+        }
+
+    def uri_btn(label: str, uri: str) -> dict:
+        return {
+            "type": "button",
+            "action": {"type": "uri", "label": label, "uri": uri},
+            "style": "primary",
+            "height": "sm",
+            "margin": "xs",
+        }
+
+    def bubble(header_color: str, icon: str, title: str, rows: list, footer_btns: list) -> dict:
         body_contents = [
-            {"type": "text", "text": title, "weight": "bold", "size": "lg", "color": "#1a1a2e"},
+            {"type": "text", "text": title, "weight": "bold",
+             "size": "lg", "color": "#1a1a2e", "margin": "none"},
         ]
         for label, desc in rows:
             body_contents.append({
                 "type": "box", "layout": "vertical", "margin": "md",
                 "contents": [
-                    {"type": "text", "text": label, "weight": "bold", "size": "sm", "color": "#4a90d9"},
-                    {"type": "text", "text": desc,  "size": "xs",  "color": "#666666", "wrap": True},
+                    {"type": "text", "text": label, "weight": "bold",
+                     "size": "sm", "color": header_color},
+                    {"type": "text", "text": desc, "size": "xs",
+                     "color": "#666666", "wrap": True},
                 ]
             })
         return {
             "type": "bubble",
+            "size": "kilo",
             "header": {
                 "type": "box", "layout": "vertical",
-                "backgroundColor": header_color, "paddingAll": "16px",
+                "backgroundColor": header_color, "paddingAll": "14px",
                 "contents": [
-                    {"type": "text", "text": icon + " " + title,
-                     "weight": "bold", "size": "xl", "color": "#ffffff"},
+                    {"type": "text", "text": f"{icon} {title}",
+                     "weight": "bold", "size": "lg", "color": "#ffffff"},
                 ]
             },
             "body": {
-                "type": "box", "layout": "vertical", "paddingAll": "16px",
-                "spacing": "sm", "contents": body_contents,
+                "type": "box", "layout": "vertical",
+                "paddingAll": "14px", "spacing": "sm",
+                "contents": body_contents,
+            },
+            "footer": {
+                "type": "box", "layout": "vertical",
+                "spacing": "xs", "paddingAll": "10px",
+                "contents": footer_btns,
             }
         }
 
     cards = [
-        bubble("#4a90d9", "🗺️", "設定通勤路線", [
-            ("開啟設定頁面", "點選選單「設定通勤路線」或傳送「系統設定」開啟 LIFF 頁面"),
-            ("重新設定", "傳送「重新設定」可清除所有設定"),
-        ]),
-        bubble("#7b68ee", "🚆", "通勤建議", [
-            ("今天通勤建議", "查看今天最佳通勤方式與建議出發時間"),
-            ("明天幾點出門", "預估明天需要幾點出發"),
-            ("修改今天到公司時間", "臨時更改今天的到達時間"),
-            ("修改明天到公司時間", "提前設定明天的到達時間"),
-        ]),
-        bubble("#27ae60", "🚌", "交通方式", [
-            ("今天搭公車", "強制切換為公車優先模式"),
-            ("今天搭捷運", "強制切換為捷運優先模式"),
-            ("優先選擇通勤時間短", "選擇 Google 推薦最短時間"),
-            ("今天自動判斷", "恢復自動判斷最佳交通方式"),
-        ]),
-        bubble("#e67e22", "⚙️", "系統設定", [
-            ("系統設定", "顯示設定選單（開啟LIFF、提醒開關等）"),
-            ("查看設定", "查看目前的通勤設定內容"),
-            ("開啟自動提醒", "啟用每日自動出發提醒"),
-            ("關閉自動提醒", "停用每日自動出發提醒"),
-            ("查看提醒設定", "查看目前提醒狀態"),
-        ]),
+        bubble("#4a90d9", "🗺️", "設定通勤路線",
+            [
+                ("開啟設定頁面", "點選下方按鈕開啟 LIFF 網頁完成設定"),
+                ("查看目前設定", "傳送「查看設定」查看已儲存的通勤資訊"),
+            ],
+            [
+                uri_btn("📝 開啟設定頁面", liff_url),
+                btn("📊 查看設定", "查看設定"),
+            ]
+        ),
+        bubble("#7b68ee", "🚆", "通勤建議",
+            [
+                ("今天通勤建議", "查看今天最佳通勤方式與建議出發時間"),
+                ("明天幾點出門", "預估明天需要幾點出發"),
+                ("修改今天到公司時間", "臨時更改今天的到達時間"),
+            ],
+            [
+                btn("🚆 今天通勤建議", "今天通勤建議", "primary"),
+                btn("⏰ 明天幾點出門", "明天幾點出門"),
+                btn("✏️ 修改今天時間", "修改今天到公司時間"),
+            ]
+        ),
+        bubble("#27ae60", "🚌", "交通方式",
+            [
+                ("今天搭公車", "強制切換為公車優先模式"),
+                ("今天搭捷運", "強制切換為捷運優先模式"),
+                ("最短時間優先", "Google 推薦最短路徑"),
+                ("今天自動判斷", "恢復自動判斷最佳交通"),
+            ],
+            [
+                btn("🚌 今天搭公車", "今天搭公車"),
+                btn("🚇 今天搭捷運", "今天搭捷運"),
+                btn("🚄 最短時間優先", "優先選擇通勤時間短"),
+            ]
+        ),
+        bubble("#e67e22", "⚙️", "系統設定",
+            [
+                ("系統設定", "顯示完整設定選單"),
+                ("開啟/關閉自動提醒", "控制每日自動出發提醒"),
+                ("查看提醒設定", "查看目前提醒開關狀態"),
+            ],
+            [
+                btn("⚙️ 系統設定", "系統設定", "primary"),
+                btn("🔔 開啟自動提醒", "開啟自動提醒"),
+                btn("🔕 關閉自動提醒", "關閉自動提醒"),
+            ]
+        ),
     ]
     return cards
 
