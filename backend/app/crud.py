@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from sqlalchemy.orm import Session
 
-from app.models import User, CommuteProfile, CommuteOverride
+from app.models import User, CommuteProfile, CommuteOverride, CommuteSchedule
 
 
 def _clear_override_reminder_fields(override: CommuteOverride):
@@ -10,6 +10,10 @@ def _clear_override_reminder_fields(override: CommuteOverride):
     override.frozen_reminder_text = None
     override.reminder_prepared_at = None
 
+
+# ─────────────────────────────────────────────────────────
+# User helpers
+# ─────────────────────────────────────────────────────────
 
 def get_or_create_user(db: Session, line_user_id: str) -> User:
     user = db.query(User).filter(User.line_user_id == line_user_id).first()
@@ -22,12 +26,22 @@ def get_or_create_user(db: Session, line_user_id: str) -> User:
     db.refresh(user)
     return user
 
+
+def get_user_by_line_id(db: Session, line_user_id: str) -> User | None:
+    return db.query(User).filter(User.line_user_id == line_user_id).first()
+
+
 def get_user_by_id(db: Session, user_id: int) -> User | None:
     return db.query(User).filter(User.id == user_id).first()
+
 
 def get_all_profiles(db: Session):
     return db.query(CommuteProfile).all()
 
+
+# ─────────────────────────────────────────────────────────
+# CommuteProfile helpers
+# ─────────────────────────────────────────────────────────
 
 def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
     profile = db.query(CommuteProfile).filter(CommuteProfile.user_id == user_id).first()
@@ -36,7 +50,7 @@ def get_or_create_profile(db: Session, user_id: int) -> CommuteProfile:
 
     profile = CommuteProfile(
         user_id=user_id,
-        pending_field="home_location",
+        pending_field=None,
         reminder_enabled=True,
     )
     db.add(profile)
@@ -111,16 +125,9 @@ def update_address_and_coords(
 
 
 def get_next_setup_step(profile: CommuteProfile) -> str | None:
-    home_ready = bool(profile.home_address) and profile.home_lat is not None and profile.home_lng is not None
-    office_ready = bool(profile.office_address) and profile.office_lat is not None and profile.office_lng is not None
-    arrival_ready = bool(profile.preferred_arrival_time)
-
-    if not home_ready:
-        return "home_location"
-    if not office_ready:
-        return "office_location"
-    if not arrival_ready:
-        return "preferred_arrival_time"
+    """已改為 LIFF 設定流程，所以不再強制要求 profile 欄位完整。
+    若 CommuteSchedule 已設定，視為設定完成，回傳 None。
+    此函式保留為向下相容，但邏輯已鬆綁。"""
     return None
 
 
@@ -157,13 +164,92 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
 
     profile.preferred_mode = None
     profile.preferred_arrival_time = None
-    profile.pending_field = "home_location"
+    profile.pending_field = None
     profile.reminder_enabled = True
 
     db.commit()
     db.refresh(profile)
     return profile
 
+
+def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
+    profile = get_profile(db, user_id)
+    profile.reminder_enabled = enabled
+    db.commit()
+    db.refresh(profile)
+
+    # 同步更新 CommuteSchedule 的 reminder_enabled
+    schedule = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user_id).first()
+    if schedule:
+        schedule.reminder_enabled = enabled
+        db.commit()
+        db.refresh(schedule)
+
+    return profile
+
+
+# ─────────────────────────────────────────────────────────
+# CommuteSchedule helpers (新統一排程系統)
+# ─────────────────────────────────────────────────────────
+
+def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> CommuteSchedule:
+    """由 LIFF POST /api/schedule 呼叫，upsert 使用者的通勤排程。
+    data 欄位：userId, originName, originAddress, destName, destAddress, time, days
+    """
+    user = get_or_create_user(db, line_user_id)
+    get_or_create_profile(db, user.id)
+
+    schedule = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user.id).first()
+    if not schedule:
+        schedule = CommuteSchedule(user_id=user.id)
+        db.add(schedule)
+
+    schedule.origin_name = data.get("originName")
+    schedule.origin_address = data.get("originAddress")
+    schedule.dest_name = data.get("destName")
+    schedule.dest_address = data.get("destAddress")
+    schedule.time = data.get("time")
+    schedule.days = data.get("days")  # JSON array [0,1,2,3,4] etc.
+    schedule.reminder_enabled = data.get("reminderEnabled", True)
+
+    db.commit()
+    db.refresh(schedule)
+
+    # 同步更新 CommuteProfile 以維持向下相容
+    profile = get_profile(db, user.id)
+    profile.preferred_arrival_time = data.get("time")
+    if data.get("originAddress"):
+        profile.home_address = data.get("originAddress")
+        profile.home_place_name = data.get("originName")
+    if data.get("destAddress"):
+        profile.office_address = data.get("destAddress")
+        profile.office_place_name = data.get("destName")
+    db.commit()
+
+    return schedule
+
+
+def get_commute_schedule(db: Session, line_user_id: str) -> CommuteSchedule | None:
+    """讀取使用者的通勤排程（供 GET /api/schedule 使用）。"""
+    user = db.query(User).filter(User.line_user_id == line_user_id).first()
+    if not user:
+        return None
+    return db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user.id).first()
+
+
+def get_all_schedules_for_day(db: Session, day_of_week: int) -> list[CommuteSchedule]:
+    """取得今天需要提醒的所有排程（day_of_week: 0=週日, 1=週一, ..., 6=週六）。"""
+    all_schedules = db.query(CommuteSchedule).filter(
+        CommuteSchedule.reminder_enabled == True,
+        CommuteSchedule.time.isnot(None),
+        CommuteSchedule.days.isnot(None),
+    ).all()
+    return [s for s in all_schedules if day_of_week in (s.days or [])]
+
+
+# ─────────────────────────────────────────────────────────
+# CommuteOverride helpers (每日排程狀態記錄)
+# ─────────────────────────────────────────────────────────
 
 def get_override_for_date(db: Session, user_id: int, target_date):
     return db.query(CommuteOverride).filter(
@@ -210,14 +296,6 @@ def get_transport_mode_override(db: Session, user_id: int, target_date):
     if not override:
         return None
     return override.transport_mode_override
-
-
-def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
-    profile = get_profile(db, user_id)
-    profile.reminder_enabled = enabled
-    db.commit()
-    db.refresh(profile)
-    return profile
 
 
 def save_frozen_reminder(

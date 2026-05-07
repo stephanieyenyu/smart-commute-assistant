@@ -6,6 +6,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -24,6 +25,7 @@ class User(Base):
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
+    schedule = relationship("CommuteSchedule", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 
 class CommuteProfile(Base):
@@ -71,7 +73,45 @@ class CommuteProfile(Base):
     user = relationship("User", back_populates="profile")
 
 
+class CommuteSchedule(Base):
+    """
+    統一排程設定：記錄使用者的固定通勤排程。
+    由 LIFF 前端寫入，後端排程器讀取並觸發提醒。
+    """
+    __tablename__ = "commute_schedules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, index=True, nullable=False)
+
+    # 出發地資訊
+    origin_name = Column(String, nullable=True)
+    origin_address = Column(String, nullable=True)
+    origin_lat = Column(Float, nullable=True)
+    origin_lng = Column(Float, nullable=True)
+
+    # 目的地資訊
+    dest_name = Column(String, nullable=True)
+    dest_address = Column(String, nullable=True)
+    dest_lat = Column(Float, nullable=True)
+    dest_lng = Column(Float, nullable=True)
+
+    # 排程時間（HH:MM 格式）
+    time = Column(String, nullable=True)
+
+    # 提醒星期（JSON 陣列，0=週日，1=週一，...，6=週六）
+    days = Column(JSON, nullable=True)
+
+    # 提醒開關
+    reminder_enabled = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="schedule")
+
+
 class CommuteOverride(Base):
+    """每日排程狀態記錄：記錄今天的提醒是否已發送、凍結的提醒內容等。"""
     __tablename__ = "commute_overrides"
     __table_args__ = (
         UniqueConstraint("user_id", "target_date", name="uq_commute_overrides_user_date"),
@@ -106,21 +146,21 @@ class CommuteLog(Base):
     date = Column(Date, nullable=False, index=True)
     day_of_week = Column(Integer, nullable=True)
     is_holiday = Column(Boolean, nullable=True)
-    
+
     target_arrival_time = Column(String, nullable=True)
     suggested_departure_time = Column(String, nullable=True)
     actual_departure_time = Column(String, nullable=True)
-    
+
     suggested_transport = Column(String, nullable=True)
     actual_transport = Column(String, nullable=True)
-    
+
     weather_condition = Column(String, nullable=True)
     rain_prob = Column(Integer, nullable=True)
     temp = Column(Float, nullable=True)
-    
+
     gmaps_traffic_duration = Column(Integer, nullable=True)
     tdx_bus_eta = Column(Integer, nullable=True)
-    
+
     actual_arrival_time = Column(String, nullable=True)
     is_late = Column(Boolean, nullable=True)
 
