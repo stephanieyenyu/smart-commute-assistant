@@ -1,20 +1,26 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import Base, engine, SessionLocal
 from app.webhook import router as webhook_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
-from app.crud import upsert_commute_schedule, get_commute_schedule
+from app.crud import upsert_commute_schedule, get_commute_schedule, get_transport_mode_override
 from app.google_maps import geocode_address
+from app.dashboard_view import render_dashboard_html
+from app.models import User
+from app.schedule_summary import build_schedule_status_payload
 
 
 Base.metadata.create_all(bind=engine)
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 
 def get_db():
@@ -64,6 +70,8 @@ class ScheduleSubmitPayload(BaseModel):
     arrivalTime: Optional[str] = None       # HH:MM 格式
     weekdays: Optional[List[int]] = None    # 0=週一, 1=週二, ..., 6=週日
     reminderEnabled: Optional[bool] = True
+    mode: Optional[str] = None              # create/edit，由 LIFF query 或表單帶入
+    scheduleId: Optional[int] = None        # edit 時指定要修改的排程
 
 
 # ── POST /api/schedule/submit ─────────────────────────────────────────────────
@@ -74,6 +82,24 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
     若前端未提供座標（地址直接輸入情況），後端自動 geocode 補充。
     """
     try:
+        existing_schedule = get_commute_schedule(db, payload.userId)
+        if payload.mode == "create" and existing_schedule is not None and payload.scheduleId is None:
+            return {
+                "ok": False,
+                "message": "目前後端仍是單一排程模式，已保留既有排程，未覆蓋舊資料。",
+                "data": {
+                    "userId":            payload.userId,
+                    "scheduleId":        existing_schedule.id,
+                    "originName":        existing_schedule.origin_name,
+                    "originAddress":     existing_schedule.origin_address,
+                    "destinationName":   existing_schedule.dest_name,
+                    "destinationAddress":existing_schedule.dest_address,
+                    "arrivalTime":       existing_schedule.time,
+                    "weekdays":          existing_schedule.days,
+                    "reminderEnabled":   existing_schedule.reminder_enabled,
+                }
+            }
+
         origin_lat = payload.originLat
         origin_lng = payload.originLng
         dest_lat   = payload.destLat
@@ -117,6 +143,9 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
             "time":            payload.arrivalTime,
             "days":            payload.weekdays,
             "reminderEnabled": payload.reminderEnabled,
+            "mode":            payload.mode,
+            "scheduleId":      payload.scheduleId,
+            "partial":         payload.mode == "edit",
         }
         schedule = upsert_commute_schedule(db, payload.userId, data)
         return {
@@ -166,6 +195,53 @@ async def get_schedule(userId: str = Query(...), db: Session = Depends(get_db)):
         "arrivalTime":       schedule.time,
         "weekdays":          schedule.days,
         "reminderEnabled":   schedule.reminder_enabled,
+    }
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+TRANSPORT_MODE_NAME_MAP = {
+    None: "自動判斷",
+    "auto": "自動判斷",
+    "shortest": "最短時間優先 (Google)",
+    "bus": "公車優先",
+    "metro": "捷運優先",
+    "bus_to_metro": "公車轉捷運",
+}
+
+
+def get_user_for_dashboard(db: Session, line_user_id: str):
+    return db.query(User).filter(User.line_user_id == line_user_id).first()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page():
+    return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/api/dashboard/status")
+async def dashboard_status(
+    userId: str = Query(...),
+    view: str = Query("personal"),
+    db: Session = Depends(get_db),
+):
+    user = get_user_for_dashboard(db, userId)
+    schedule = get_commute_schedule(db, userId)
+    profile = user.profile if user else None
+    today_mode = get_transport_mode_override(db, user.id, datetime.now(TAIPEI_TZ).date()) if user else None
+    mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
+    schedule_payload = build_schedule_status_payload(schedule, profile, mode_label)
+    family_view = view == "family"
+    return {
+        "ok": True,
+        "title": "家庭通勤看板" if family_view else "個人通勤看板",
+        "view": "family" if family_view else "personal",
+        "viewLabel": "家庭看板" if family_view else "個人看板",
+        "generatedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "refreshSeconds": 30,
+        "schedule": schedule_payload,
+        "lineText": schedule_payload["lineText"],
+        "weeklyText": schedule_payload["weeklyText"],
     }
 
 
