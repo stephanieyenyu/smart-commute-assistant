@@ -117,7 +117,10 @@ async def check_and_send_departure_reminders():
     統一排程系統：
     1. 讀取今天需要提醒的 CommuteSchedule（依 days 過濾）
     2. 依排程時間（schedule.time）計算提醒時間
-    3. 時間到則發送出發提醒推播（台灣時間 Asia/Taipei）
+    3. 時間到則：
+       a. 發送 LINE push 提醒（文字 + Quick Reply）
+       b. 設定 alert_status = "pending" 並透過 WebSocket 觸發語音提醒
+    （台灣時間 Asia/Taipei）
     """
     db = SessionLocal()
     try:
@@ -174,13 +177,26 @@ async def check_and_send_departure_reminders():
                     print(f"[reminder] skipped stale user_id={user.id}")
                     continue
 
-                # 時間到：發送推播
+                # 時間到：發送提醒
                 if now_sec >= departure_sec:
+                    # 1) 發送 LINE push 提醒（文字 + Quick Reply）
                     await push_with_quick_reply(
                         user.line_user_id,
                         override.frozen_reminder_text,
                         REMINDER_QUICK_REPLIES,
                     )
+
+                    # 2) 觸發 Web Dashboard 語音提醒（WebSocket + alert_status）
+                    try:
+                        from app.dashboard_ws import trigger_voice_alert
+                        await trigger_voice_alert(
+                            line_user_id=user.line_user_id,
+                            reminder_text=override.frozen_reminder_text,
+                            departure_time=override.frozen_departure_time,
+                        )
+                    except Exception as ws_err:
+                        print(f"[reminder] voice_alert error user_id={user.id}: {ws_err}")
+
                     mark_reminder_sent(db=db, user_id=user.id, target_date=today,
                                        plan_key=override.frozen_plan_key, sent_at=now_dt)
                     print(f"[reminder] sent user_id={user.id} at {now_hhmmss}")

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>智慧通勤助理 — 家庭看板</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--card:#21262d;--accent:#4a90d9;--green:#27ae60;--red:#e74c3c;--yellow:#f39c12;--text:#e6edf3;--muted:#8b949e;--border:#30363d}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Segoe UI",system-ui,sans-serif;min-height:100vh}
+.topbar{background:linear-gradient(135deg,#1a237e,var(--accent));padding:12px 20px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(74,144,217,.3)}
+.topbar h1{font-size:1.1rem;font-weight:700}
+.status-dot{width:10px;height:10px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.clock-bar{text-align:center;padding:8px;font-size:.85rem;color:var(--muted);border-bottom:1px solid var(--border)}
+#clock{color:var(--text);font-weight:600}
+.container{max-width:900px;margin:0 auto;padding:16px}
+.section-title{font-size:.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px}
+.member-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.avatar{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#7b68ee);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0}
+.member-name{font-weight:700;font-size:1rem}
+.member-sub{font-size:.75rem;color:var(--muted);margin-top:2px}
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.info-row:last-child{border-bottom:none}
+.info-label{color:var(--muted)}
+.info-value{font-weight:600}
+.countdown{font-size:1.8rem;font-weight:800;color:var(--accent);text-align:center;padding:8px 0;letter-spacing:2px}
+.countdown.urgent{color:var(--red);animation:pulse .8s infinite}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.7rem;font-weight:700}
+.badge-active{background:rgba(39,174,96,.15);color:var(--green);border:1px solid var(--green)}
+.badge-inactive{background:rgba(139,148,158,.1);color:var(--muted);border:1px solid var(--border)}
+.badge-urgent{background:rgba(231,76,60,.15);color:var(--red);border:1px solid var(--red)}
+#alert-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;align-items:center;justify-content:center}
+#alert-modal.show{display:flex}
+.alert-box{background:var(--surface);border:2px solid var(--red);border-radius:16px;padding:32px;max-width:400px;width:90%;text-align:center}
+.alert-box h2{color:var(--red);font-size:1.4rem;margin-bottom:12px}
+.alert-box p{color:var(--muted);font-size:.9rem;margin-bottom:20px}
+.alert-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:12px 28px;font-size:1rem;font-weight:700;cursor:pointer;width:100%}
+#sleep-screen{display:none;position:fixed;inset:0;background:#000;z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:16px}
+#sleep-screen.show{display:flex}
+#sleep-clock{font-size:4rem;font-weight:800;color:#333}
+.sleep-msg{color:#222;font-size:.9rem}
+.ws-badge{font-size:.65rem;padding:2px 8px;border-radius:12px;background:rgba(39,174,96,.1);color:var(--green);border:1px solid var(--green)}
+.ws-badge.off{background:rgba(231,76,60,.1);color:var(--red);border-color:var(--red)}
+.setup-prompt{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;text-align:center;margin-top:40px}
+.setup-prompt h3{font-size:1.1rem;margin-bottom:8px}
+.setup-prompt p{color:var(--muted);font-size:.85rem;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🚆 智慧通勤看板</h1>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="ws-badge" class="ws-badge off">WS 離線</span>
+    <div class="status-dot"></div>
+  </div>
+</div>
+<div class="clock-bar">
+  現在時間：<span id="clock">--:--:--</span>
+  &nbsp;|&nbsp;
+  <span id="update-mode" style="color:var(--yellow)">初始化中</span>
+</div>
+
+<div id="sleep-screen">
+  <div id="sleep-clock">--:--</div>
+  <div class="sleep-msg">休息模式 — 距下次排程前 5 小時自動喚醒</div>
+</div>
+
+<div id="alert-modal">
+  <div class="alert-box">
+    <h2>🔔 出發時間到了！</h2>
+    <p id="alert-text">請準備出門</p>
+    <p id="alert-dep" style="color:var(--red);font-size:1.2rem;font-weight:800;margin-bottom:16px"></p>
+    <button class="alert-btn" onclick="ackAlert()">✅ 已知道，準備出門</button>
+  </div>
+</div>
+
+<div class="container"><div id="app"><div style="text-align:center;padding:40px;color:var(--muted)">載入中…</div></div></div>
+
+<script>
+const P=new URLSearchParams(location.search);
+const FAMILY_ID=P.get("family");
+const USER_ID=P.get("userId")||P.get("user");
+const BASE=location.origin;
+let ws=null,updateTimer=null,sleepTimer=null,wakeTimer=null,isSleeping=false,lastDepSec=null,alertUid=null;
+
+// Clock
+function pz(n){return String(n).padStart(2,"0")}
+function tick(){
+  const n=new Date();
+  document.getElementById("clock").textContent=pz(n.getHours())+":"+pz(n.getMinutes())+":"+pz(n.getSeconds());
+  if(isSleeping)document.getElementById("sleep-clock").textContent=pz(n.getHours())+":"+pz(n.getMinutes());
+}
+setInterval(tick,1000);tick();
+
+// WebSocket
+function connectWS(uid){
+  if(!uid)return;
+  const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(proto+"://"+location.host+"/ws/dashboard/"+uid);
+  const badge=document.getElementById("ws-badge");
+  ws.onopen=()=>{badge.textContent="WS 連線";badge.className="ws-badge"};
+  ws.onclose=()=>{badge.textContent="WS 離線";badge.className="ws-badge off";setTimeout(()=>connectWS(uid),5000)};
+  ws.onmessage=e=>{
+    try{const m=JSON.parse(e.data);
+      if(m.type==="voice_alert")showAlert(m,uid);
+      if(m.type==="ping")ws.send(JSON.stringify({type:"pong"}));
+    }catch(_){}
+  };
+}
+
+// Alert / Voice
+function showAlert(m,uid){
+  alertUid=uid;
+  document.getElementById("alert-text").textContent=m.text||"請準備出門！";
+  document.getElementById("alert-dep").textContent=m.departure_time?"出門時間："+m.departure_time:"";
+  document.getElementById("alert-modal").classList.add("show");
+  speak(m.text||"出發時間到了，請準備出門！");
+  clearTimeout(sleepTimer);
+  sleepTimer=setTimeout(enterSleep,3600000);
+}
+function speak(t){
+  if(!window.speechSynthesis)return;
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(t);
+  u.lang="zh-TW";u.rate=0.95;speechSynthesis.speak(u);
+}
+async function ackAlert(){
+  document.getElementById("alert-modal").classList.remove("show");
+  speechSynthesis&&speechSynthesis.cancel();
+  const uid=alertUid||USER_ID;
+  if(!uid)return;
+  try{
+    if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"ack"}));
+    else await fetch(BASE+"/api/alert/acknowledge/"+uid,{method:"POST"});
+  }catch(_){}
+}
+
+// Sleep / Wake
+function enterSleep(){
+  isSleeping=true;
+  document.getElementById("sleep-screen").classList.add("show");
+  document.getElementById("update-mode").textContent="休息模式 💤";
+  clearInterval(updateTimer);
+  scheduleWake();
+}
+function exitSleep(){
+  isSleeping=false;
+  document.getElementById("sleep-screen").classList.remove("show");
+  loadData();
+}
+async function scheduleWake(){
+  clearTimeout(wakeTimer);
+  wakeTimer=setTimeout(async()=>{
+    try{
+      if(USER_ID){
+        const r=await fetch(BASE+"/api/commute-status?userId="+USER_ID);
+        const d=await r.json();
+        if(d.schedule&&d.schedule.arrival_time){
+          const now=new Date(),ns=now.getHours()*3600+now.getMinutes()*60;
+          const a=d.schedule.arrival_time.split(":");
+          const as=+a[0]*3600+ +a[1]*60;
+          if(as-ns<=18000&&as-ns>0){exitSleep();return;}
+        }
+      }
+    }catch(_){}
+    scheduleWake();
+  },300000);
+}
+
+// Update interval
+function getInterval(depSec){
+  if(depSec===null)return 60000;
+  const now=new Date(),ns=now.getHours()*3600+now.getMinutes()*60+now.getSeconds();
+  const diff=depSec-ns;
+  if(diff<=3600&&diff>-120){
+    document.getElementById("update-mode").textContent="⚡ 高精度 (1s)";
+    return 1000;
+  }
+  document.getElementById("update-mode").textContent="一般模式 (60s)";
+  return 60000;
+}
+
+// Countdown
+function countdown(depSec){
+  const now=new Date(),ns=now.getHours()*3600+now.getMinutes()*60+now.getSeconds();
+  const d=depSec-ns;
+  if(d<-120)return{t:"已出發",u:false};
+  if(d<0)return{t:"🚨 出發！",u:true};
+  const h=Math.floor(d/3600),m=Math.floor((d%3600)/60),s=d%60;
+  if(h>0)return{t:h+"h "+pz(m)+"m",u:false};
+  return{t:pz(m)+":"+pz(s),u:m<5};
+}
+
+// Render member card
+function renderMember(m,i){
+  const sc=m.schedule,ov=m.today_override;
+  const name=m.nickname||("成員 "+(i+1));
+  const emojis=["🏠","👨‍💼","👩‍💼","🧑‍💼","👦","👧"];
+  let cdHtml="",depSec=null;
+  if(ov&&ov.departure_time){
+    const p=ov.departure_time.split(":");
+    depSec=+p[0]*3600+ +p[1]*60;
+    if(lastDepSec===null)lastDepSec=depSec;
+    const cd=countdown(depSec);
+    cdHtml=`<div class="countdown${cd.u?" urgent":""}">${cd.t}</div>`;
+  }
+  const alerting=ov&&ov.alert_status==="pending";
+  const badge=m.is_active_today
+    ?(alerting?'<span class="badge badge-urgent">🔔 提醒中</span>':'<span class="badge badge-active">今日通勤</span>')
+    :'<span class="badge badge-inactive">今日休息</span>';
+  return `<div class="card">
+<div class="member-header">
+  <div class="avatar">${emojis[i%6]}</div>
+  <div><div class="member-name">${name} ${badge}</div>
+  <div class="member-sub">${sc?sc.origin_name||sc.origin_address||"未設定出發地":"尚未設定排程"}</div></div>
+</div>
+${cdHtml}
+${sc?`
+<div class="info-row"><span class="info-label">🏢 目的地</span><span class="info-value">${sc.dest_name||sc.dest_address||"未設定"}</span></div>
+<div class="info-row"><span class="info-label">⏰ 抵達時間</span><span class="info-value" style="color:var(--accent)">${sc.arrival_time||"未設定"}</span></div>
+<div class="info-row"><span class="info-label">📅 排程星期</span><span class="info-value">${sc.weekdays_str||"未設定"}</span></div>
+${ov&&ov.departure_time?`<div class="info-row"><span class="info-label">🚀 建議出門</span><span class="info-value" style="color:var(--green)">${ov.departure_time}</span></div>`:""}
+`:`<div style="text-align:center;color:var(--muted);padding:16px;font-size:.85rem">尚未設定排程</div>`}
+</div>`;
+}
+
+// Load & render
+async function loadData(){
+  const app=document.getElementById("app");
+  lastDepSec=null;
+  try{
+    if(FAMILY_ID){
+      const r=await fetch(BASE+"/api/family/dashboard/"+FAMILY_ID);
+      const d=await r.json();
+      if(!d.ok){app.innerHTML='<div class="setup-prompt"><h3>找不到家庭群組</h3></div>';return;}
+      let html=`<div class="section-title">👨‍👩‍👧 ${d.group_name} — 今日通勤序列</div>`;
+      if(!d.members||!d.members.length){html+='<div class="setup-prompt"><h3>群組尚無成員</h3></div>';}
+      else{
+        const sorted=[...d.members.filter(m=>m.is_active_today),...d.members.filter(m=>!m.is_active_today)];
+        sorted.forEach((m,i)=>{html+=renderMember(m,i);});
+      }
+      app.innerHTML=html;
+    } else if(USER_ID){
+      const r=await fetch(BASE+"/api/commute-status?userId="+USER_ID);
+      const d=await r.json();
+      if(!d.hasData){app.innerHTML='<div class="setup-prompt"><h3>尚未設定排程</h3><p>請先在 LINE 完成通勤路線設定</p></div>';return;}
+      const fake={nickname:"我",is_active_today:true,schedule:d.schedule,today_override:d.override};
+      app.innerHTML='<div class="section-title">📋 個人通勤狀態</div>'+renderMember(fake,0);
+      // Check alert
+      if(d.override&&d.override.alert_status==="pending"){
+        showAlert({text:null,departure_time:d.override.departure_time},USER_ID);
+      }
+    } else {
+      app.innerHTML='<div class="setup-prompt"><h3>歡迎使用智慧通勤看板</h3><p>請在網址加上 <code>?userId=LINE_ID</code> 或 <code>?family=群組ID</code></p></div>';
+      return;
+    }
+  }catch(e){
+    app.innerHTML=`<div class="setup-prompt"><h3>⚠️ 無法取得資料</h3><p>${e.message}</p></div>`;
+  }
+  clearInterval(updateTimer);
+  updateTimer=setInterval(loadData,getInterval(lastDepSec));
+}
+
+// Init
+if(USER_ID)connectWS(USER_ID);
+loadData();
+</script>
+</body>
+</html>

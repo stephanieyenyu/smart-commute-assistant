@@ -26,6 +26,7 @@ class User(Base):
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
     schedule = relationship("CommuteSchedule", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    family_memberships = relationship("FamilyMember", back_populates="user", cascade="all, delete-orphan")
 
 
 class CommuteProfile(Base):
@@ -132,6 +133,9 @@ class CommuteOverride(Base):
     last_sent_plan_key = Column(String, nullable=True)
     last_sent_at = Column(DateTime(timezone=True), nullable=True)
 
+    # 語音提醒狀態：None | "pending" | "triggered" | "acknowledged"
+    alert_status = Column(String, nullable=True, default=None)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -174,3 +178,34 @@ class ApiHealthLog(Base):
     latency_ms = Column(Integer, nullable=True)
     status_code = Column(Integer, nullable=True)
     error_message = Column(String, nullable=True)
+
+
+# ─────────────────────────────────────────────────────────
+# 家庭群組模組
+# ─────────────────────────────────────────────────────────
+
+class FamilyGroup(Base):
+    """家庭群組：可包含多位成員，共享家庭看板。"""
+    __tablename__ = "family_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    # 邀請用的唯一 token（UUID hex）
+    invite_token = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    members = relationship("FamilyMember", back_populates="group", cascade="all, delete-orphan")
+
+
+class FamilyMember(Base):
+    """家庭群組成員：將 User 與 FamilyGroup 關聯，並記錄成員暱稱。"""
+    __tablename__ = "family_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("family_groups.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    nickname = Column(String, nullable=True)
+    joined_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    group = relationship("FamilyGroup", back_populates="members")
+    user = relationship("User", back_populates="family_memberships")
