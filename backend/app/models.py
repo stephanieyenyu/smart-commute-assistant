@@ -16,16 +16,44 @@ from sqlalchemy.sql import func
 from app.db import Base
 
 
+class Household(Base):
+    """家庭群組，用 invite_code 讓多位 LINE 使用者綁到同一個家庭看板。"""
+    __tablename__ = "households"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invite_code = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    members = relationship("User", back_populates="household")
+
+
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     line_user_id = Column(String, unique=True, index=True, nullable=False)
+    display_name = Column(String, nullable=True)
+    household_id = Column(Integer, ForeignKey("households.id"), index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
-    schedule = relationship("CommuteSchedule", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    schedules = relationship(
+        "CommuteSchedule",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="CommuteSchedule.id",
+    )
+    household = relationship("Household", back_populates="members")
+
+    @property
+    def schedule(self):
+        """Backward-compatible primary schedule for legacy command paths."""
+        active_schedules = [s for s in self.schedules if getattr(s, "is_active", True)]
+        enabled = [s for s in active_schedules if getattr(s, "reminder_enabled", True)]
+        return (enabled or active_schedules or self.schedules or [None])[0]
 
 
 class CommuteProfile(Base):
@@ -79,9 +107,12 @@ class CommuteSchedule(Base):
     由 LIFF 前端寫入，後端排程器讀取並觸發提醒。
     """
     __tablename__ = "commute_schedules"
+    __table_args__ = (
+        UniqueConstraint("user_id", "dest_name", name="uq_commute_schedules_user_destination"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
 
     # 出發地資訊
     origin_name = Column(String, nullable=True)
@@ -103,22 +134,24 @@ class CommuteSchedule(Base):
 
     # 提醒開關
     reminder_enabled = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    user = relationship("User", back_populates="schedule")
+    user = relationship("User", back_populates="schedules")
 
 
 class CommuteOverride(Base):
     """每日排程狀態記錄：記錄今天的提醒是否已發送、凍結的提醒內容等。"""
     __tablename__ = "commute_overrides"
     __table_args__ = (
-        UniqueConstraint("user_id", "target_date", name="uq_commute_overrides_user_date"),
+        UniqueConstraint("user_id", "target_date", "schedule_id", name="uq_commute_overrides_user_date_schedule"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    schedule_id = Column(Integer, ForeignKey("commute_schedules.id"), index=True, nullable=True)
     target_date = Column(Date, index=True, nullable=False)
 
     target_arrival_time = Column(String, nullable=True)
@@ -136,6 +169,7 @@ class CommuteOverride(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="overrides")
+    schedule = relationship("CommuteSchedule")
 
 
 class CommuteLog(Base):

@@ -4,13 +4,16 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.db import SessionLocal
-from app.line_client import push_text, push_with_quick_reply
-from app.models import CommuteOverride, User
+from app.line_client import (
+    build_tts_audio_url,
+    estimate_tts_duration_ms,
+    push_audio_message,
+    push_with_quick_reply,
+)
+from app.models import CommuteOverride, CommuteSchedule
 from app.crud import (
     get_all_schedules_for_day,
-    get_next_setup_step,
     get_override_for_date,
-    get_profile,
     mark_reminder_sent,
     clear_today_reminder_state_db,
     get_user_by_id,
@@ -24,6 +27,7 @@ PREPARE_RETRY_SECONDS = 300
 BUS_RECOMPUTE_SECONDS = 60
 METRO_RECOMPUTE_SECONDS = 300
 STALE_REMINDER_GRACE_SECONDS = 120
+REMINDER_LEAD_SECONDS = 15 * 60
 
 REMINDER_QUICK_REPLIES = [
     {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
@@ -63,13 +67,13 @@ def _refresh_interval_for_mode(mode: str | None) -> int | None:
     return None
 
 
-async def ensure_today_reminders_prepared(db, today, active_user_ids: list[int]):
+async def ensure_today_reminders_prepared(db, today, schedules_today: list[CommuteSchedule]):
     """確保今天需要提醒的用戶的提醒內容已準備好。"""
     now_dt = now_taipei()
-    for user_id in active_user_ids:
+    for schedule in schedules_today:
+        user_id = schedule.user_id
         try:
-            profile = get_profile(db, user_id)
-            override = get_override_for_date(db, user_id, today)
+            override = get_override_for_date(db, user_id, today, schedule_id=schedule.id)
             refresh_interval = _refresh_interval_for_mode(
                 override.transport_mode_override if override else None
             )
@@ -98,14 +102,14 @@ async def ensure_today_reminders_prepared(db, today, active_user_ids: list[int])
             if frozen_ready and not should_refresh_dynamic:
                 continue
 
-            cache_key = (user_id, today.isoformat())
+            cache_key = (user_id, f"{today.isoformat()}:{schedule.id}")
             last_attempt = _PREPARE_ATTEMPT_CACHE.get(cache_key)
             if last_attempt and (now_dt - last_attempt).total_seconds() < PREPARE_RETRY_SECONDS:
                 continue
 
             _PREPARE_ATTEMPT_CACHE[cache_key] = now_dt
-            await freeze_today_reminder_payload(db, user_id, today)
-            print(f"[reminder-prepare] prepared user_id={user_id} date={today.isoformat()}")
+            await freeze_today_reminder_payload(db, user_id, today, schedule_id=schedule.id)
+            print(f"[reminder-prepare] prepared user_id={user_id} schedule_id={schedule.id} date={today.isoformat()}")
         except Exception as e:
             import traceback
             print(f"[reminder-prepare] failed user_id={user_id} error={e}")
@@ -133,15 +137,17 @@ async def check_and_send_departure_reminders():
 
         # 取得今天應提醒的排程
         schedules_today = get_all_schedules_for_day(db, day_of_week)
-        active_user_ids = [s.user_id for s in schedules_today]
+        active_user_ids = sorted({s.user_id for s in schedules_today})
+        active_schedule_ids = [s.id for s in schedules_today]
 
         # 確保提醒內容已準備
-        await ensure_today_reminders_prepared(db, today, active_user_ids)
+        await ensure_today_reminders_prepared(db, today, schedules_today)
 
         # 查詢今天已準備好的 override 記錄
         overrides = db.query(CommuteOverride).filter(
             CommuteOverride.target_date == today,
             CommuteOverride.user_id.in_(active_user_ids) if active_user_ids else False,
+            CommuteOverride.schedule_id.in_(active_schedule_ids) if active_schedule_ids else False,
             CommuteOverride.frozen_plan_key.isnot(None),
             CommuteOverride.frozen_departure_time.isnot(None),
             CommuteOverride.frozen_reminder_text.isnot(None),
@@ -153,8 +159,10 @@ async def check_and_send_departure_reminders():
                 if not user:
                     continue
 
-                profile = user.profile or get_profile(db, user.id)
-                schedule = user.schedule
+                schedule = db.query(CommuteSchedule).filter(
+                    CommuteSchedule.id == override.schedule_id,
+                    CommuteSchedule.user_id == user.id,
+                ).first()
                 if not schedule or not schedule.reminder_enabled:
                     continue
 
@@ -162,27 +170,43 @@ async def check_and_send_departure_reminders():
                     continue
 
                 departure_sec = hhmm_to_seconds(override.frozen_departure_time)
+                trigger_sec = max(0, departure_sec - REMINDER_LEAD_SECONDS)
                 print(
                     f"[reminder-check] user_id={user.id} now={now_hhmmss} "
-                    f"departure={override.frozen_departure_time}"
+                    f"schedule_id={override.schedule_id} "
+                    f"trigger={trigger_sec} departure={override.frozen_departure_time}"
                 )
 
                 # 過期：跳過並標記已發送
                 if now_sec > departure_sec + STALE_REMINDER_GRACE_SECONDS:
                     mark_reminder_sent(db=db, user_id=user.id, target_date=today,
-                                       plan_key=override.frozen_plan_key, sent_at=now_dt)
+                                       plan_key=override.frozen_plan_key, sent_at=now_dt,
+                                       schedule_id=override.schedule_id)
                     print(f"[reminder] skipped stale user_id={user.id}")
                     continue
 
-                # 時間到：發送推播
-                if now_sec >= departure_sec:
+                # 建議出門前 15 分鐘：發送文字推播與語音提醒
+                if now_sec >= trigger_sec:
                     await push_with_quick_reply(
                         user.line_user_id,
                         override.frozen_reminder_text,
                         REMINDER_QUICK_REPLIES,
                     )
+                    try:
+                        voice_text = (
+                            f"出門提醒。建議你在 {override.frozen_departure_time} 出門。"
+                            f"{schedule.dest_name or '目的地'} 通勤請預留時間。"
+                        )
+                        await push_audio_message(
+                            user.line_user_id,
+                            build_tts_audio_url(voice_text),
+                            estimate_tts_duration_ms(voice_text),
+                        )
+                    except Exception as voice_error:
+                        print(f"[reminder-voice] failed user_id={user.id} error={voice_error}")
                     mark_reminder_sent(db=db, user_id=user.id, target_date=today,
-                                       plan_key=override.frozen_plan_key, sent_at=now_dt)
+                                       plan_key=override.frozen_plan_key, sent_at=now_dt,
+                                       schedule_id=override.schedule_id)
                     print(f"[reminder] sent user_id={user.id} at {now_hhmmss}")
 
             except Exception as e:

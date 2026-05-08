@@ -16,7 +16,10 @@ from app.crud import (
     get_or_create_user,
     get_or_create_profile,
     get_profile,
+    get_commute_schedules,
     get_override_for_date,
+    ensure_household_for_user,
+    join_household_by_code,
     set_pending_field,
     update_profile_field,
     upsert_override,
@@ -25,6 +28,7 @@ from app.crud import (
     set_reminder_enabled,
 )
 from app.service import (
+    build_transport_detail_lines,
     calculate_departure_time,
     build_today_commute_payload,
     freeze_today_reminder_payload,
@@ -127,6 +131,7 @@ COMMAND_ALIASES = {
     "edit_schedule":        {"編輯排程", "修改排程"},
     "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結"},
     "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結"},
+    "join_household":       {"加入家庭", "加入家庭群組", "綁定家庭"},
 }
 
 TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "看板", "系統設定")
@@ -171,6 +176,99 @@ def public_base_url(request: Request) -> str:
 def build_dashboard_url(request: Request, line_user_id: str, view: str = "personal") -> str:
     query = urlencode({"userId": line_user_id, "view": view})
     return f"{public_base_url(request)}/dashboard?{query}"
+
+
+def parse_household_invite_code(user_text: str) -> str | None:
+    compact = normalize(user_text).upper()
+    for prefix in ("加入家庭", "加入家庭群組", "綁定家庭"):
+        normalized_prefix = normalize(prefix).upper()
+        if compact.startswith(normalized_prefix) and len(compact) > len(normalized_prefix):
+            return compact[len(normalized_prefix):].strip()
+    return None
+
+
+def build_commute_advice_flex(plan: dict) -> dict:
+    weather_info = plan.get("weather_info") or {}
+    route_details = build_transport_detail_lines(plan)[:6]
+    pop = weather_info.get("pop")
+    apparent = weather_info.get("apparent_temperature")
+    temp = weather_info.get("temperature")
+    temp_min = weather_info.get("temperature_min")
+    temp_max = weather_info.get("temperature_max")
+    temp_text = f"{temp}°C" if temp is not None else (
+        f"{temp_min}-{temp_max}°C" if temp_min is not None and temp_max is not None else "無即時資訊"
+    )
+    weather_buffer = plan.get("weather_buffer", 0)
+
+    def row(label: str, value: str) -> dict:
+        return {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "sm",
+            "contents": [
+                {"type": "text", "text": label, "size": "xs", "color": "#64748b"},
+                {"type": "text", "text": value or "無即時資訊", "size": "sm", "color": "#0f172a", "wrap": True},
+            ],
+        }
+
+    detail_contents = [row("完整交通方式", plan.get("transport_line") or plan.get("text") or "請參考文字摘要")]
+    for detail in route_details:
+        detail_contents.append(row("路網細節", detail))
+
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#2563eb",
+            "paddingAll": "16px",
+            "contents": [
+                {"type": "text", "text": "今日交通看板", "weight": "bold", "size": "lg", "color": "#ffffff"},
+                {"type": "text", "text": f"建議 {plan.get('final_departure_time')} 出門", "size": "sm", "color": "#dbeafe"},
+            ],
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "paddingAll": "16px",
+            "contents": [
+                row("目標抵達", plan.get("effective_arrival_time")),
+                row("預估通勤", f"約 {plan.get('baseline_minutes')} 分鐘"),
+                *detail_contents,
+                row("當前天氣狀況", weather_info.get("weather_text") or "未知"),
+                row("降雨機率", f"{pop}%" if pop is not None else "無即時資訊"),
+                row("體感溫度", f"{apparent}°C" if apparent is not None else temp_text),
+                row("緩衝建議", f"雨天/天氣因素已增加 {weather_buffer} 分鐘" if weather_buffer else "目前未增加天氣緩衝"),
+            ],
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "xs",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {"type": "message", "label": "今天搭公車", "text": "今天搭公車"},
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {"type": "message", "label": "今天搭捷運", "text": "今天搭捷運"},
+                },
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "action": {"type": "message", "label": "查看設定", "text": "查看設定"},
+                },
+            ],
+        },
+    }
 
 
 def _build_help_cards_by_title() -> dict[str, dict]:
@@ -396,6 +494,25 @@ async def line_webhook(
             today_date    = today_taipei()
             tomorrow_date = today_date + timedelta(days=1)
 
+            invite_code = parse_household_invite_code(user_text)
+            if invite_code:
+                household = join_household_by_code(db, user, invite_code)
+                if not household:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "找不到這組家庭邀請碼，請確認家人提供的代碼是否正確。",
+                        MAIN_MENU_QR,
+                    )
+                    continue
+                dashboard_url = build_dashboard_url(request, line_user_id, "family")
+                await reply_with_quick_reply(
+                    reply_token,
+                    "✅ 已加入家庭通勤群組。\n"
+                    "現在可以從家庭看板看到所有家人的通勤狀態。",
+                    [{"type": "uri", "label": "🏠 開啟家庭看板", "uri": dashboard_url}],
+                )
+                continue
+
             if command_text in COMMAND_ALIASES["add_schedule"]:
                 await reply_with_quick_reply(
                     reply_token,
@@ -405,31 +522,43 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["weekly_schedule"]:
-                schedule = user.schedule
+                schedules = get_commute_schedules(db, line_user_id)
                 await reply_with_quick_reply(
                     reply_token,
-                    format_weekly_schedule_text(schedule),
+                    format_weekly_schedule_text(schedules),
                     MAIN_MENU_QR,
                 )
                 continue
 
             if command_text in COMMAND_ALIASES["edit_schedule"]:
-                schedule = user.schedule
-                if not schedule:
+                schedules = get_commute_schedules(db, line_user_id)
+                if not schedules:
                     await reply_with_quick_reply(
                         reply_token,
                         "目前尚未建立排程。請先新增一組通勤排程。",
                         [{"type": "uri", "label": "➕ 新增排程設定", "uri": build_liff_url("create")}],
                     )
                     continue
-                edit_url = build_liff_url("edit", scheduleId=schedule.id)
+                schedule_lines = []
+                edit_buttons = []
+                for index, schedule in enumerate(schedules, start=1):
+                    schedule_lines.append(
+                        f"{index}. {schedule_arrival_time(schedule)} 到{schedule_destination(schedule)}"
+                        f"（{format_weekdays(schedule.days)}）"
+                    )
+                    if len(edit_buttons) < 10:
+                        edit_buttons.append({
+                            "type": "uri",
+                            "label": f"✏️ 編輯 {index}",
+                            "uri": build_liff_url("edit", scheduleId=schedule.id),
+                        })
                 await reply_with_quick_reply(
                     reply_token,
                     "請選擇要編輯的排程：\n"
-                    f"{schedule.id}. {schedule_arrival_time(schedule)} 到{schedule_destination(schedule)}"
-                    f"（{format_weekdays(schedule.days)}）\n\n"
+                    + "\n".join(schedule_lines)
+                    + "\n\n"
                     "進入編輯後可只修改時間、地點、提醒星期或提醒開關。",
-                    [{"type": "uri", "label": "✏️ 編輯目前排程", "uri": edit_url}],
+                    edit_buttons,
                 )
                 continue
 
@@ -445,12 +574,16 @@ async def line_webhook(
                 continue
 
             if command_text in COMMAND_ALIASES["family_dashboard_link"]:
+                household = ensure_household_for_user(db, user)
                 dashboard_url = build_dashboard_url(request, line_user_id, "family")
                 await reply_with_quick_reply(
                     reply_token,
+                    "家庭看板已建立。\n"
+                    "邀請家人加入：請家人傳送以下文字給助理：\n"
+                    f"加入家庭 {household.invite_code}\n\n"
                     "家庭看板連結：\n"
                     f"{dashboard_url}\n\n"
-                    "家庭看板使用同一份排程摘要資料，適合放在共用螢幕查看。",
+                    "家人加入後，看板會顯示所有成員的即時通勤狀態。",
                     [{"type": "uri", "label": "🏠 開啟家庭看板", "uri": dashboard_url}],
                 )
                 continue
@@ -480,11 +613,11 @@ async def line_webhook(
             # ── 查看設定 ──────────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["view_settings"]:
                 profile  = get_profile(db, user.id)
-                schedule = user.schedule
+                schedules = get_commute_schedules(db, line_user_id)
                 today_mode = get_transport_mode_override(db, user.id, today_date)
                 await reply_with_quick_reply(
                     reply_token,
-                    format_profile_text(schedule, profile, today_mode),
+                    format_profile_text(schedules, profile, today_mode),
                     MAIN_MENU_QR,
                 )
                 continue
@@ -502,11 +635,13 @@ async def line_webhook(
 
             if command_text in COMMAND_ALIASES["view_reminder_setting"]:
                 profile = get_profile(db, user.id)
-                schedule = user.schedule
-                enabled = (schedule.reminder_enabled if schedule else getattr(profile, "reminder_enabled", True))
+                schedules = get_commute_schedules(db, line_user_id)
+                enabled_count = sum(1 for schedule in schedules if schedule.reminder_enabled)
+                enabled = enabled_count > 0 if schedules else getattr(profile, "reminder_enabled", True)
                 await reply_with_quick_reply(
                     reply_token,
-                    f"目前自動提醒：{'🔔 開啟' if enabled else '🔕 關閉'}",
+                    f"目前自動提醒：{'🔔 開啟' if enabled else '🔕 關閉'}\n"
+                    f"已開啟排程：{enabled_count}/{len(schedules)} 筆",
                     SETTINGS_QR,
                 )
                 continue
@@ -529,8 +664,11 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
                     print(f"[freeze-{mode}] error={e}")
-                await reply_multi_messages_with_quick_reply(
-                    reply_token, [advice.get("text", "已設定。")], COMMUTE_RESULT_QR)
+                if advice.get("ok"):
+                    await reply_flex_message(reply_token, "今日交通看板", build_commute_advice_flex(advice))
+                else:
+                    await reply_multi_messages_with_quick_reply(
+                        reply_token, [advice.get("text", "已設定。")], COMMUTE_RESULT_QR)
 
             if command_text in COMMAND_ALIASES["set_mode_auto"]:
                 await set_mode_and_reply("auto", "好的，今天交通方式切換為：自動判斷。")
@@ -551,8 +689,9 @@ async def line_webhook(
             # ── 今天通勤建議 ──────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["today_commute"]:
                 profile = get_profile(db, user.id)
+                schedules = get_commute_schedules(db, line_user_id)
                 schedule = user.schedule
-                if not schedule or not schedule.origin_address or not schedule.dest_address:
+                if not schedules or not schedule or not schedule.origin_address or not schedule.dest_address:
                     await reply_with_quick_reply(
                         reply_token,
                         "⚠️ 尚未設定通勤路線，請先完成設定。",
@@ -570,7 +709,7 @@ async def line_webhook(
                     await freeze_today_reminder_payload(db=db, user_id=user.id, target_date=today_date, plan=payload)
                 except Exception as e:
                     print(f"[freeze-today-commute] error={e}")
-                await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QR)
+                await reply_flex_message(reply_token, "今日交通看板", build_commute_advice_flex(payload))
                 continue
 
             # ── 明天幾點出門 ──────────────────────────────────────────────
