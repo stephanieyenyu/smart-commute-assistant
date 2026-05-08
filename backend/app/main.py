@@ -70,6 +70,17 @@ def ensure_runtime_schema() -> None:
                     ))
                     conn.execute(text(
                         "ALTER TABLE commute_schedules "
+                        "DROP CONSTRAINT IF EXISTS ix_commute_schedules_user_id"
+                    ))
+                    conn.execute(text(
+                        "DROP INDEX IF EXISTS ix_commute_schedules_user_id"
+                    ))
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_commute_schedules_user_id "
+                        "ON commute_schedules (user_id)"
+                    ))
+                    conn.execute(text(
+                        "ALTER TABLE commute_schedules "
                         "DROP CONSTRAINT IF EXISTS uq_commute_schedules_user_destination"
                     ))
                     conn.execute(text(
