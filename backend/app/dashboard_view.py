@@ -52,10 +52,7 @@ def render_dashboard_html() -> str:
       font-size: 14px;
       text-align: right;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(340px, 0.85fr);
-      gap: 18px;
+    .dashboard-section {
       margin-top: 20px;
     }
     section {
@@ -124,29 +121,6 @@ def render_dashboard_html() -> str:
       font-size: 14px;
       line-height: 1.45;
     }
-    .week {
-      display: grid;
-      gap: 8px;
-    }
-    .day {
-      display: grid;
-      grid-template-columns: 56px minmax(0, 1fr);
-      gap: 12px;
-      align-items: center;
-      min-height: 42px;
-      padding: 9px 12px;
-      background: var(--panel-2);
-      border-radius: 6px;
-      color: var(--muted);
-    }
-    .day.active {
-      color: var(--text);
-      border-left: 4px solid var(--green);
-    }
-    .day-name {
-      font-weight: 700;
-      color: inherit;
-    }
     .schedule-list {
       display: grid;
       gap: 8px;
@@ -172,7 +146,6 @@ def render_dashboard_html() -> str:
       main { width: min(100vw - 20px, 680px); padding-top: 18px; }
       header { display: block; }
       .meta { text-align: left; margin-top: 8px; }
-      .grid { grid-template-columns: 1fr; }
       .item { grid-template-columns: 92px minmax(0, 1fr); }
       .value { font-size: 18px; }
       .member-status { font-size: 23px; }
@@ -194,22 +167,11 @@ def render_dashboard_html() -> str:
 
     <div class="members" id="members"></div>
 
-    <div class="grid">
-      <section class="summary" aria-label="通勤設定摘要">
-        <h2>目前設定</h2>
-        <div class="item"><div class="label">出發地</div><div class="value" id="origin">載入中</div></div>
-        <div class="item"><div class="label">目的地</div><div class="value" id="destination">載入中</div></div>
-        <div class="item"><div class="label">到達時間</div><div class="value" id="arrivalTime">載入中</div></div>
-        <div class="item"><div class="label">提醒星期</div><div class="value" id="weekdayText">載入中</div></div>
-        <div class="item"><div class="label">自動提醒</div><div class="value" id="reminderEnabled">載入中</div></div>
+    <section class="summary dashboard-section" aria-label="今日排程">
+        <h2 id="scheduleTitle">今日排程</h2>
         <div class="item"><div class="label">今天交通</div><div class="value" id="todayTransportMode">載入中</div></div>
         <div class="schedule-list" id="scheduleList"></div>
-      </section>
-      <section aria-label="一週排程">
-        <h2>一週排程</h2>
-        <div class="week" id="weeklySchedule"></div>
-      </section>
-    </div>
+    </section>
   </main>
   <script>
     const params = new URLSearchParams(location.search);
@@ -249,41 +211,24 @@ def render_dashboard_html() -> str:
     function renderSchedules(schedules) {
       const container = document.getElementById("scheduleList");
       container.innerHTML = "";
-      for (const schedule of schedules || []) {
+      const safeSchedules = schedules || [];
+      if (!safeSchedules.length) {
+        const row = document.createElement("div");
+        row.className = "schedule-row";
+        row.textContent = "沒有可顯示的今日或明日排程";
+        container.append(row);
+        return;
+      }
+      for (const schedule of safeSchedules) {
         const row = document.createElement("div");
         row.className = "schedule-row";
         const primary = document.createElement("strong");
         primary.textContent = schedule.arrivalTime || "未設定";
-        const line = document.createTextNode(` 到 ${schedule.destination || "目的地"}`);
+        const line = document.createTextNode(` 從 ${schedule.origin || "出發地"} 到 ${schedule.destination || "目的地"}`);
         const br = document.createElement("br");
         const week = document.createTextNode(schedule.weekdayText || "尚未設定");
         row.append(primary, line, br, week);
         container.append(row);
-      }
-    }
-
-    function renderWeek(rows) {
-      const container = document.getElementById("weeklySchedule");
-      container.innerHTML = "";
-      const safeRows = rows && rows.length ? rows : [
-        { label: "週一", active: false, text: "尚未設定" },
-        { label: "週二", active: false, text: "尚未設定" },
-        { label: "週三", active: false, text: "尚未設定" },
-        { label: "週四", active: false, text: "尚未設定" },
-        { label: "週五", active: false, text: "尚未設定" },
-        { label: "週六", active: false, text: "尚未設定" },
-        { label: "週日", active: false, text: "尚未設定" },
-      ];
-      for (const row of safeRows) {
-        const item = document.createElement("div");
-        item.className = row.active ? "day active" : "day";
-        const name = document.createElement("div");
-        name.className = "day-name";
-        name.textContent = row.label;
-        const value = document.createElement("div");
-        value.textContent = row.text;
-        item.append(name, value);
-        container.append(item);
       }
     }
 
@@ -301,15 +246,10 @@ def render_dashboard_html() -> str:
         const payload = await response.json();
         text("title", payload.title || "通勤提醒看板");
         text("viewLabel", payload.viewLabel || "個人看板");
-        text("origin", payload.schedule.origin);
-        text("destination", payload.schedule.destination);
-        text("arrivalTime", payload.schedule.arrivalTime);
-        text("weekdayText", payload.schedule.weekdayText);
-        text("reminderEnabled", payload.schedule.reminderEnabled ? "開啟" : "關閉");
+        text("scheduleTitle", payload.schedule.displayScheduleTitle || "今日排程");
         text("todayTransportMode", payload.schedule.todayTransportMode);
         renderMembers(payload.members);
-        renderSchedules(payload.schedule.schedules);
-        renderWeek(payload.schedule.weeklySchedule);
+        renderSchedules(payload.schedule.displaySchedules);
         text("updatedAt", `更新：${new Date(payload.generatedAt).toLocaleString("zh-TW", { hour12: false })}`);
         const connection = document.getElementById("connection");
         connection.textContent = "連線正常";

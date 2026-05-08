@@ -35,7 +35,7 @@ from app.service import (
     get_bus_realtime_snapshot,
     get_metro_snapshot,
 )
-from app.reminder_scheduler import clear_today_reminder_state_for_user
+from app.reminder_scheduler import clear_today_reminder_state_for_user, mark_user_departed_for_today
 from app.schedule_summary import (
     format_commute_setting_text,
     format_weekdays,
@@ -130,8 +130,9 @@ COMMAND_ALIASES = {
     "weekly_schedule":      {"一週排程設定", "一周排程設定", "一週排程", "一周排程", "查看一週排程設定"},
     "edit_schedule":        {"編輯排程", "修改排程"},
     "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結"},
-    "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結"},
+    "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結", "家庭看板", "開啟家庭看板"},
     "join_household":       {"加入家庭", "加入家庭群組", "綁定家庭"},
+    "departed":             {"已出門", "我已出門"},
 }
 
 TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "看板", "系統設定")
@@ -493,6 +494,22 @@ async def line_webhook(
             command_text = normalize(user_text)
             today_date    = today_taipei()
             tomorrow_date = today_date + timedelta(days=1)
+
+            if command_text in COMMAND_ALIASES["departed"]:
+                departed_overrides = mark_user_departed_for_today(user.id)
+                if departed_overrides:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "✅ 已記錄您已出門。今天這筆排程會停止後續監控。",
+                        MAIN_MENU_QR,
+                    )
+                else:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "目前沒有等待確認的出門提醒。",
+                        MAIN_MENU_QR,
+                    )
+                continue
 
             invite_code = parse_household_invite_code(user_text)
             if invite_code:
