@@ -40,16 +40,13 @@ class User(Base):
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
-<<<<<<< HEAD
-    schedule = relationship("CommuteSchedule", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    family_memberships = relationship("FamilyMember", back_populates="user", cascade="all, delete-orphan")
-=======
     schedules = relationship(
         "CommuteSchedule",
         back_populates="user",
         cascade="all, delete-orphan",
         order_by="CommuteSchedule.id",
     )
+    family_memberships = relationship("FamilyMember", back_populates="user", cascade="all, delete-orphan")
     household = relationship("Household", back_populates="members")
 
     @property
@@ -58,7 +55,6 @@ class User(Base):
         active_schedules = [s for s in self.schedules if getattr(s, "is_active", True)]
         enabled = [s for s in active_schedules if getattr(s, "reminder_enabled", True)]
         return (enabled or active_schedules or self.schedules or [None])[0]
->>>>>>> 93967a0d3e3c86434f19cc2278ebe4a4fad71eb5
 
 
 class CommuteProfile(Base):

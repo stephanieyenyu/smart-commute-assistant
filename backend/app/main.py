@@ -5,11 +5,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-<<<<<<< HEAD
-from fastapi.staticfiles import StaticFiles
-=======
 from fastapi.responses import HTMLResponse
->>>>>>> 93967a0d3e3c86434f19cc2278ebe4a4fad71eb5
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -26,11 +23,9 @@ from app.crud import (
     get_transport_mode_override,
 )
 from app.google_maps import geocode_address
-<<<<<<< HEAD
+from app.dashboard_view import render_dashboard_html
 from app.dashboard_ws import router as ws_router
 from app.family import router as family_router
-=======
-from app.dashboard_view import render_dashboard_html
 from app.models import User
 from app.schedule_summary import (
     active_schedules_for_date,
@@ -39,7 +34,6 @@ from app.schedule_summary import (
     dashboard_target_schedule,
 )
 from app.service import build_today_commute_payload
->>>>>>> 93967a0d3e3c86434f19cc2278ebe4a4fad71eb5
 
 
 Base.metadata.create_all(bind=engine)
