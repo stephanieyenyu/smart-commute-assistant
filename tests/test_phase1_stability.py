@@ -172,8 +172,10 @@ class Phase1StabilityTests(unittest.TestCase):
         self.assertIn("format_commute_setting_text(schedule, profile, mode_label)", webhook_py)
         self.assertIn('WEEKDAY_LABELS = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")', schedule_summary_py)
         self.assertIn("0=週一, 1=週二, ..., 6=週日", main_py)
-        self.assertIn('payload.mode == "create"', main_py)
-        self.assertIn("已保留既有排程，未覆蓋舊資料", main_py)
+        self.assertIn('"mode":            payload.mode', main_py)
+        self.assertIn("get_commute_schedules(db, userId)", main_py)
+        self.assertIn('UniqueConstraint("user_id", "dest_name"', models_py)
+        self.assertIn("schedule = _find_schedule_by_destination(db, user.id, dest_name)", crud_py)
         self.assertIn("0=週一，1=週二，...，6=週日", models_py)
         self.assertIn("0=週一, 1=週二, ..., 6=週日", crud_py)
         self.assertIn("day_of_week = now_dt.weekday()", scheduler_py)
@@ -185,11 +187,47 @@ class Phase1StabilityTests(unittest.TestCase):
 
         self.assertIn('@app.get("/dashboard", response_class=HTMLResponse)', main_py)
         self.assertIn('@app.get("/api/dashboard/status")', main_py)
-        self.assertIn("build_schedule_status_payload(schedule, profile, mode_label)", main_py)
+        self.assertIn("build_schedule_status_payload(schedules, profile, mode_label)", main_py)
         self.assertIn("setInterval(refresh, refreshMs)", dashboard_view_py)
         self.assertIn("AbortController", dashboard_view_py)
+        self.assertIn("renderMembers(payload.members)", dashboard_view_py)
         self.assertIn("format_weekly_schedule_text", schedule_summary_py)
         self.assertIn("format_commute_setting_text", schedule_summary_py)
+
+    def test_family_dashboard_invites_and_status_colors_are_wired(self):
+        models_py = self.read_repo_file("backend/app/models.py")
+        crud_py = self.read_repo_file("backend/app/crud.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+        schedule_summary_py = self.read_repo_file("backend/app/schedule_summary.py")
+
+        self.assertIn("class Household", models_py)
+        self.assertIn("invite_code = Column(String, unique=True", models_py)
+        self.assertIn("ensure_household_for_user", crud_py)
+        self.assertIn("join_household_by_code", crud_py)
+        self.assertIn("parse_household_invite_code", webhook_py)
+        self.assertIn("加入家庭 {household.invite_code}", webhook_py)
+        self.assertIn('"green": "#22c55e"', schedule_summary_py)
+        self.assertIn('"blue": "#3b82f6"', schedule_summary_py)
+        self.assertIn('"orange": "#f97316"', schedule_summary_py)
+        self.assertIn('"red": "#ef4444"', schedule_summary_py)
+
+    def test_commute_weather_audio_and_reminders_are_wired(self):
+        service_py = self.read_repo_file("backend/app/service.py")
+        weather_py = self.read_repo_file("backend/app/weather.py")
+        reminder_py = self.read_repo_file("backend/app/reminder_scheduler.py")
+        line_client_py = self.read_repo_file("backend/app/line_client.py")
+        webhook_py = self.read_repo_file("backend/app/webhook.py")
+
+        self.assertIn("build_transport_detail_lines(plan)", service_py)
+        self.assertIn('"apparent_temperature"', weather_py)
+        self.assertIn("return 10", weather_py)
+        self.assertIn("REMINDER_LEAD_SECONDS = 15 * 60", reminder_py)
+        self.assertIn("departure_sec - REMINDER_LEAD_SECONDS", reminder_py)
+        self.assertIn("AudioMessage", line_client_py)
+        self.assertIn("build_tts_audio_url", line_client_py)
+        self.assertIn("push_audio_message", reminder_py)
+        self.assertIn("build_commute_advice_flex", webhook_py)
+        self.assertIn("今日交通看板", webhook_py)
 
 
 if __name__ == "__main__":

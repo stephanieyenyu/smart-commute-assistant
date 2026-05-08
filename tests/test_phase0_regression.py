@@ -41,6 +41,7 @@ def load_service_module():
             "get_next_setup_step": None,
             "get_override_for_date": None,
             "get_transport_mode_override": None,
+            "get_commute_schedules_by_user_id": lambda db, user_id: [],
             "save_frozen_reminder": None,
         },
         "app.models": {
