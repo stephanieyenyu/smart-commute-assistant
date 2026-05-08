@@ -17,7 +17,6 @@ from app.crud import (
     get_or_create_profile,
     get_profile,
     get_commute_schedules,
-    get_override_for_date,
     ensure_household_for_user,
     join_household_by_code,
     set_pending_field,
@@ -28,15 +27,13 @@ from app.crud import (
     set_reminder_enabled,
 )
 from app.service import (
-    build_transport_detail_lines,
-    calculate_departure_time,
+    build_commute_display_payload,
     build_today_commute_payload,
     freeze_today_reminder_payload,
-    get_bus_realtime_snapshot,
-    get_metro_snapshot,
 )
 from app.reminder_scheduler import clear_today_reminder_state_for_user, mark_user_departed_for_today
 from app.schedule_summary import (
+    active_schedules_for_date,
     format_commute_setting_text,
     format_weekdays,
     format_weekly_schedule_text,
@@ -179,6 +176,11 @@ def build_dashboard_url(request: Request, line_user_id: str, view: str = "person
     return f"{public_base_url(request)}/dashboard?{query}"
 
 
+def first_schedule_for_date(schedules, target_date: date):
+    matched = active_schedules_for_date(schedules, target_date)
+    return matched[0] if matched else None
+
+
 def parse_household_invite_code(user_text: str) -> str | None:
     compact = normalize(user_text).upper()
     for prefix in ("加入家庭", "加入家庭群組", "綁定家庭"):
@@ -189,17 +191,7 @@ def parse_household_invite_code(user_text: str) -> str | None:
 
 
 def build_commute_advice_flex(plan: dict) -> dict:
-    weather_info = plan.get("weather_info") or {}
-    route_details = build_transport_detail_lines(plan)[:6]
-    pop = weather_info.get("pop")
-    apparent = weather_info.get("apparent_temperature")
-    temp = weather_info.get("temperature")
-    temp_min = weather_info.get("temperature_min")
-    temp_max = weather_info.get("temperature_max")
-    temp_text = f"{temp}°C" if temp is not None else (
-        f"{temp_min}-{temp_max}°C" if temp_min is not None and temp_max is not None else "無即時資訊"
-    )
-    weather_buffer = plan.get("weather_buffer", 0)
+    display = plan.get("display") or build_commute_display_payload(plan)
 
     def row(label: str, value: str) -> dict:
         return {
@@ -212,10 +204,6 @@ def build_commute_advice_flex(plan: dict) -> dict:
             ],
         }
 
-    detail_contents = [row("完整交通方式", plan.get("transport_line") or plan.get("text") or "請參考文字摘要")]
-    for detail in route_details:
-        detail_contents.append(row("路網細節", detail))
-
     return {
         "type": "bubble",
         "size": "mega",
@@ -226,7 +214,7 @@ def build_commute_advice_flex(plan: dict) -> dict:
             "paddingAll": "16px",
             "contents": [
                 {"type": "text", "text": "今日交通看板", "weight": "bold", "size": "lg", "color": "#ffffff"},
-                {"type": "text", "text": f"建議 {plan.get('final_departure_time')} 出門", "size": "sm", "color": "#dbeafe"},
+                {"type": "text", "text": f"建議 {display.get('estimatedDepartureTime')} 出門", "size": "sm", "color": "#dbeafe"},
             ],
         },
         "body": {
@@ -235,13 +223,11 @@ def build_commute_advice_flex(plan: dict) -> dict:
             "spacing": "md",
             "paddingAll": "16px",
             "contents": [
-                row("目標抵達", plan.get("effective_arrival_time")),
-                row("預估通勤", f"約 {plan.get('baseline_minutes')} 分鐘"),
-                *detail_contents,
-                row("當前天氣狀況", weather_info.get("weather_text") or "未知"),
-                row("降雨機率", f"{pop}%" if pop is not None else "無即時資訊"),
-                row("體感溫度", f"{apparent}°C" if apparent is not None else temp_text),
-                row("緩衝建議", f"雨天/天氣因素已增加 {weather_buffer} 分鐘" if weather_buffer else "目前未增加天氣緩衝"),
+                row("預估出門時間", display.get("estimatedDepartureTime")),
+                row("目標抵達時間", display.get("targetArrivalTime")),
+                row("預估通勤時間", display.get("estimatedCommuteTime")),
+                row("完整交通方式", display.get("fullTransport")),
+                row("當前天氣", display.get("currentWeather")),
             ],
         },
         "footer": {
@@ -376,12 +362,10 @@ def _build_help_cards_by_title() -> dict[str, dict]:
             [
                 ("個人看板連結", "開啟只顯示自己通勤資訊的即時看板"),
                 ("家庭看板連結", "開啟家庭檢視看板，方便共用螢幕查看"),
-                ("一週排程設定", "看板和 LINE 文字會使用同一份排程資料"),
             ],
             [
                 btn("📺 個人看板連結", "個人看板連結", "primary"),
                 btn("🏠 家庭看板連結", "家庭看板連結"),
-                btn("📅 一週排程設定", "一週排程設定"),
             ]
         ),
         "系統設定": bubble("#e67e22", "⚙️", "系統設定",
@@ -462,10 +446,15 @@ async def line_webhook(
                 tomorrow_date = today_date + timedelta(days=1)
 
                 if postback_data == "action=set_today_arrival_time" and time_value:
-                    upsert_override(db, user.id, today_date, time_value)
+                    schedules = get_commute_schedules(db, line_user_id)
+                    schedule = first_schedule_for_date(schedules, today_date)
+                    if not schedule:
+                        await reply_with_quick_reply(reply_token, "您今天目前沒有設定排程喔！", MAIN_MENU_QR)
+                        continue
+                    upsert_override(db, user.id, today_date, time_value, schedule_id=schedule.id)
                     clear_today_reminder_state_for_user(user.id)
                     try:
-                        await freeze_today_reminder_payload(db, user.id, today_date)
+                        await freeze_today_reminder_payload(db, user.id, today_date, schedule_id=schedule.id)
                     except Exception as e:
                         print(f"[freeze-postback-today] error={e}")
                     await reply_with_quick_reply(
@@ -473,13 +462,23 @@ async def line_webhook(
                     continue
 
                 if postback_data == "action=set_tomorrow_arrival_time" and time_value:
-                    upsert_override(db, user.id, tomorrow_date, time_value)
-                    profile = get_profile(db, user.id)
-                    departure_time = await calculate_departure_time(profile, tomorrow_date, time_value)
+                    schedules = get_commute_schedules(db, line_user_id)
+                    schedule = first_schedule_for_date(schedules, tomorrow_date)
+                    if not schedule:
+                        await reply_with_quick_reply(reply_token, "您明天目前沒有設定排程喔！", MAIN_MENU_QR)
+                        continue
+                    upsert_override(db, user.id, tomorrow_date, time_value, schedule_id=schedule.id)
+                    payload = await build_today_commute_payload(
+                        db=db,
+                        user_id=user.id,
+                        target_date=tomorrow_date,
+                        schedule_id=schedule.id,
+                    )
                     await reply_with_quick_reply(
                         reply_token,
-                        f"✅ 已儲存明天到公司時間：{time_value}\n明天建議 {departure_time} 出門。",
-                        MAIN_MENU_QR)
+                        f"✅ 已儲存明天到公司時間：{time_value}\n"
+                        f"{payload.get('text') or '無法建立明天通勤建議，請確認設定是否正確。'}",
+                        COMMUTE_RESULT_QR)
                     continue
                 continue
 
@@ -674,15 +673,26 @@ async def line_webhook(
 
             # ── 交通方式設定 ──────────────────────────────────────────────
             async def set_mode_and_reply(mode: str, header: str):
+                schedules = get_commute_schedules(db, line_user_id)
+                schedule = first_schedule_for_date(schedules, today_date)
+                if not schedule:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "您今天目前沒有設定排程喔！",
+                        MAIN_MENU_QR,
+                    )
+                    return
                 upsert_transport_mode_override(db, user.id, today_date, mode)
                 clear_today_reminder_state_for_user(user.id)
-                advice = await build_today_commute_payload(db, user.id, today_date, mode, header)
+                advice = await build_today_commute_payload(
+                    db, user.id, today_date, mode, header, schedule_id=schedule.id
+                )
                 try:
                     await freeze_today_reminder_payload(db, user.id, today_date, plan=advice)
                 except Exception as e:
                     print(f"[freeze-{mode}] error={e}")
                 if advice.get("ok"):
-                    await reply_flex_message(reply_token, "今日交通看板", build_commute_advice_flex(advice))
+                    await reply_with_quick_reply(reply_token, advice["text"], COMMUTE_RESULT_QR)
                 else:
                     await reply_multi_messages_with_quick_reply(
                         reply_token, [advice.get("text", "已設定。")], COMMUTE_RESULT_QR)
@@ -705,10 +715,16 @@ async def line_webhook(
 
             # ── 今天通勤建議 ──────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["today_commute"]:
-                profile = get_profile(db, user.id)
                 schedules = get_commute_schedules(db, line_user_id)
-                schedule = user.schedule
-                if not schedules or not schedule or not schedule.origin_address or not schedule.dest_address:
+                schedule = first_schedule_for_date(schedules, today_date)
+                if not schedule:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "您今天目前沒有設定排程喔！",
+                        MAIN_MENU_QR,
+                    )
+                    continue
+                if not schedule.origin_address or not schedule.dest_address:
                     await reply_with_quick_reply(
                         reply_token,
                         "⚠️ 尚未設定通勤路線，請先完成設定。",
@@ -718,36 +734,47 @@ async def line_webhook(
                 payload = await build_today_commute_payload(
                     db=db, user_id=user.id, target_date=today_date,
                     force_mode_override=None, header="今日通勤建議：",
+                    schedule_id=schedule.id,
                 )
                 if not payload.get("ok"):
-                    await reply_text(reply_token, "今日通勤建議：\n無法建立通勤建議，請確認設定是否正確。")
+                    await reply_text(reply_token, payload.get("text") or "無法建立通勤建議，請確認設定是否正確。")
                     continue
                 try:
                     await freeze_today_reminder_payload(db=db, user_id=user.id, target_date=today_date, plan=payload)
                 except Exception as e:
                     print(f"[freeze-today-commute] error={e}")
-                await reply_flex_message(reply_token, "今日交通看板", build_commute_advice_flex(payload))
+                await reply_with_quick_reply(reply_token, payload["text"], COMMUTE_RESULT_QR)
                 continue
 
             # ── 明天幾點出門 ──────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["tomorrow_departure"]:
-                profile  = get_profile(db, user.id)
-                schedule = user.schedule
-                effective_arrival = getattr(profile, "preferred_arrival_time", None)
-                if schedule and schedule.time:
-                    effective_arrival = schedule.time
-                override = get_override_for_date(db, user.id, tomorrow_date)
-                if override and override.target_arrival_time:
-                    effective_arrival = override.target_arrival_time
-                if not effective_arrival:
+                schedules = get_commute_schedules(db, line_user_id)
+                schedule = first_schedule_for_date(schedules, tomorrow_date)
+                if not schedule:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "您明天目前沒有設定排程喔！",
+                        MAIN_MENU_QR,
+                    )
+                    continue
+                if not schedule.time:
                     await reply_with_quick_reply(
                         reply_token, "⚠️ 尚未設定到達時間，請先完成設定。",
                         [{"type": "uri", "label": "📝 設定通勤路線", "uri": LIFF_URL}])
                     continue
-                departure_time = await calculate_departure_time(profile, tomorrow_date, effective_arrival)
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=tomorrow_date,
+                    force_mode_override=None,
+                    header="明日通勤建議：",
+                    schedule_id=schedule.id,
+                )
                 await reply_with_quick_reply(
-                    reply_token, f"明天建議 {departure_time} 出門（到達時間：{effective_arrival}）。",
-                    MAIN_MENU_QR)
+                    reply_token,
+                    payload.get("text") or "無法建立明天通勤建議，請確認設定是否正確。",
+                    COMMUTE_RESULT_QR,
+                )
                 continue
 
             # ── 修改今天到公司時間 ────────────────────────────────────────
@@ -769,7 +796,12 @@ async def line_webhook(
                     h, m = int(time_parts[0]), int(time_parts[1])
                     if 0 <= h <= 23 and 0 <= m <= 59:
                         time_val = f"{h:02d}:{m:02d}"
-                        upsert_override(db, user.id, today_date, time_val)
+                        schedules = get_commute_schedules(db, line_user_id)
+                        schedule = first_schedule_for_date(schedules, today_date)
+                        if not schedule:
+                            await reply_with_quick_reply(reply_token, "您今天目前沒有設定排程喔！", MAIN_MENU_QR)
+                            continue
+                        upsert_override(db, user.id, today_date, time_val, schedule_id=schedule.id)
                         clear_today_reminder_state_for_user(user.id)
                         await reply_with_quick_reply(
                             reply_token, f"✅ 已儲存今天到公司時間：{time_val}", MAIN_MENU_QR)

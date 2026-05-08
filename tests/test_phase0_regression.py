@@ -123,12 +123,12 @@ class Phase0RegressionTests(unittest.TestCase):
         commute_text = self.service._format_today_commute_text(plan, header="好的，今天切換為：捷運優先。")
         reminder_text = self.service._build_reminder_payload_from_plan(plan)["text"]
 
-        commute_transport = next(line for line in commute_text.splitlines() if line.startswith("通勤方式："))
+        commute_transport = next(line for line in commute_text.splitlines() if line.startswith("完整交通方式："))
         reminder_transport = next(line for line in reminder_text.splitlines() if line.startswith("📍 通勤方式："))
-        commute_detail = commute_transport.removeprefix("通勤方式：")
+        commute_detail = commute_transport.removeprefix("完整交通方式：")
         reminder_detail = reminder_transport.removeprefix("📍 通勤方式：")
 
-        self.assertEqual(commute_detail, reminder_detail)
+        self.assertIn(reminder_detail, commute_detail)
         self.assertIn("請搭乘 淡水信義線", commute_detail)
         self.assertIn("於『明德』上車", commute_detail)
         self.assertIn("在『芝山』下車", commute_detail)

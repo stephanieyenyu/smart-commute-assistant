@@ -88,6 +88,10 @@ def render_dashboard_html() -> str:
       line-height: 1.35;
       overflow-wrap: anywhere;
     }
+    .countdown {
+      font-weight: 850;
+      color: #facc15;
+    }
     .members {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -167,9 +171,18 @@ def render_dashboard_html() -> str:
 
     <div class="members" id="members"></div>
 
+    <section class="summary dashboard-section" aria-label="今天交通">
+        <h2>今天交通</h2>
+        <div class="item"><div class="label">預估出門時間</div><div class="value" id="estimatedDepartureTime">載入中</div></div>
+        <div class="item"><div class="label">出門倒數</div><div class="value countdown" id="departureCountdown">載入中</div></div>
+        <div class="item"><div class="label">目標抵達時間</div><div class="value" id="targetArrivalTime">載入中</div></div>
+        <div class="item"><div class="label">預估通勤時間</div><div class="value" id="estimatedCommuteTime">載入中</div></div>
+        <div class="item"><div class="label">完整交通方式</div><div class="value" id="fullTransport">載入中</div></div>
+        <div class="item"><div class="label">當前天氣</div><div class="value" id="currentWeather">載入中</div></div>
+    </section>
+
     <section class="summary dashboard-section" aria-label="今日排程">
         <h2 id="scheduleTitle">今日排程</h2>
-        <div class="item"><div class="label">今天交通</div><div class="value" id="todayTransportMode">載入中</div></div>
         <div class="schedule-list" id="scheduleList"></div>
     </section>
   </main>
@@ -178,6 +191,7 @@ def render_dashboard_html() -> str:
     const userId = params.get("userId") || "";
     const view = params.get("view") || "personal";
     const refreshMs = 30000;
+    let countdownTimer = null;
     const text = (id, value) => { document.getElementById(id).textContent = value || "尚未設定"; };
 
     function renderMembers(members) {
@@ -232,6 +246,46 @@ def render_dashboard_html() -> str:
       }
     }
 
+    function startDepartureCountdown(commute) {
+      if (countdownTimer) clearInterval(countdownTimer);
+      const timeText = commute && commute.estimatedDepartureTime;
+      const dateText = commute && commute.targetDate;
+      if (!timeText || !dateText) {
+        text("departureCountdown", "尚未取得出門時間");
+        return;
+      }
+      const target = new Date(`${dateText}T${timeText}:00+08:00`);
+      const render = () => {
+        const diffMs = target.getTime() - Date.now();
+        if (!Number.isFinite(diffMs)) {
+          text("departureCountdown", "時間格式錯誤");
+          return;
+        }
+        if (diffMs <= 0) {
+          text("departureCountdown", "已到預估出門時間");
+          return;
+        }
+        const totalSeconds = Math.floor(diffMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const minuteText = `${minutes}`.padStart(2, "0");
+        const secondText = `${seconds}`.padStart(2, "0");
+        text("departureCountdown", `${hours}:${minuteText}:${secondText}`);
+      };
+      render();
+      countdownTimer = setInterval(render, 1000);
+    }
+
+    function renderCommute(commute) {
+      text("estimatedDepartureTime", commute && commute.estimatedDepartureTime);
+      text("targetArrivalTime", commute && commute.targetArrivalTime);
+      text("estimatedCommuteTime", commute && commute.estimatedCommuteTime);
+      text("fullTransport", commute && commute.fullTransport);
+      text("currentWeather", commute && commute.currentWeather);
+      startDepartureCountdown(commute);
+    }
+
     async function refresh() {
       if (!userId) {
         text("connection", "缺少 userId");
@@ -247,9 +301,9 @@ def render_dashboard_html() -> str:
         text("title", payload.title || "通勤提醒看板");
         text("viewLabel", payload.viewLabel || "個人看板");
         text("scheduleTitle", payload.schedule.displayScheduleTitle || "今日排程");
-        text("todayTransportMode", payload.schedule.todayTransportMode);
         renderMembers(payload.members);
         renderSchedules(payload.schedule.displaySchedules);
+        renderCommute(payload.commute);
         text("updatedAt", `更新：${new Date(payload.generatedAt).toLocaleString("zh-TW", { hour12: false })}`);
         const connection = document.getElementById("connection");
         connection.textContent = "連線正常";

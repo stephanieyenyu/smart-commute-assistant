@@ -16,6 +16,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute("ALTER TABLE commute_schedules DROP CONSTRAINT IF EXISTS uq_commute_schedules_user_destination")
+        op.execute("DROP INDEX IF EXISTS uq_commute_schedules_user_destination")
     op.add_column("commute_overrides", sa.Column("monitor_one_hour_sent_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("commute_overrides", sa.Column("monitor_five_min_sent_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("commute_overrides", sa.Column("departure_question_sent_at", sa.DateTime(timezone=True), nullable=True))

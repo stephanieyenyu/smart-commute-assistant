@@ -4,6 +4,7 @@ import math
 import re
 import time
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from app.address_utils import extract_city_from_text
@@ -40,6 +41,44 @@ MODE_LABELS = {
     "metro": "建議改搭捷運",
     "bus_to_metro": "今天搭公車轉捷運",
 }
+
+
+def _normalize_schedule_days(days) -> list[int]:
+    normalized = []
+    for day in days or []:
+        try:
+            value = int(day)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 6 and value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def _active_schedules_for_date(schedules, target_date: date, require_time: bool = True) -> list:
+    target_weekday = target_date.weekday()
+    matched = []
+    for schedule in schedules or []:
+        if not getattr(schedule, "is_active", True):
+            continue
+        if target_weekday not in _normalize_schedule_days(getattr(schedule, "days", None)):
+            continue
+        if require_time and not getattr(schedule, "time", None):
+            continue
+        matched.append(schedule)
+    return sorted(matched, key=lambda schedule: getattr(schedule, "time", "") or "")
+
+
+def _profile_snapshot(profile):
+    fields = (
+        "home_address", "home_lat", "home_lng", "home_city", "home_township", "home_place_name",
+        "office_address", "office_lat", "office_lng", "office_city", "office_township", "office_place_name",
+        "selected_bus_stop_id", "selected_bus_stop_name", "selected_bus_stop_lat", "selected_bus_stop_lng",
+        "selected_metro_station_id", "selected_metro_station_name", "selected_metro_station_lat", "selected_metro_station_lng",
+        "last_computed_walk_to_bus_stop_min", "last_computed_walk_to_metro_min", "walk_to_bus_stop_min",
+        "preferred_arrival_time", "preferred_mode", "reminder_enabled",
+    )
+    return SimpleNamespace(**{field: getattr(profile, field, None) for field in fields})
 
 
 def combine_date_hhmm(target_date: date, hhmm: str) -> datetime:
@@ -631,28 +670,44 @@ async def _compute_today_plan(
     if target_date is None:
         target_date = datetime.now(TAIPEI_TZ).date()
 
-    profile = get_profile(db, user_id)
+    profile = _profile_snapshot(get_profile(db, user_id))
 
     # 從今天啟用的 CommuteSchedule 補充座標（LIFF 設定後 profile 可能尚未有座標）
     schedules = get_commute_schedules_by_user_id(db, user_id)
-    today_weekday = target_date.weekday()
     if schedule_id is not None:
         schedule = next((s for s in schedules if s.id == schedule_id), None)
+        if schedule and not _active_schedules_for_date([schedule], target_date):
+            schedule = None
     else:
-        schedule = next(
-            (s for s in schedules if today_weekday in (s.days or []) and s.time),
-            schedules[0] if schedules else None,
-        )
+        date_schedules = _active_schedules_for_date(schedules, target_date)
+        schedule = date_schedules[0] if date_schedules else None
+    if not schedule:
+        today = datetime.now(TAIPEI_TZ).date()
+        if target_date == today:
+            text = "您今天目前沒有設定排程喔！"
+        elif target_date == today + timedelta(days=1):
+            text = "您明天目前沒有設定排程喔！"
+        else:
+            text = f"{target_date.isoformat()} 目前沒有設定排程喔！"
+        return {"ok": False, "reason": "no_schedule_for_date", "text": text}
     if schedule:
-        if not profile.home_address and schedule.origin_address:
+        if schedule.origin_address:
             profile.home_address = schedule.origin_address
             profile.home_place_name = schedule.origin_name
-        if not profile.office_address and schedule.dest_address:
+        if schedule.origin_lat is not None:
+            profile.home_lat = schedule.origin_lat
+        if schedule.origin_lng is not None:
+            profile.home_lng = schedule.origin_lng
+        if schedule.dest_address:
             profile.office_address = schedule.dest_address
             profile.office_place_name = schedule.dest_name
+        if schedule.dest_lat is not None:
+            profile.office_lat = schedule.dest_lat
+        if schedule.dest_lng is not None:
+            profile.office_lng = schedule.dest_lng
 
-    # 如果 profile 沒有設定 preferred_arrival_time，從 schedule 取得
-    if not profile.preferred_arrival_time and schedule and schedule.time:
+    # 使用本次選中的排程時間，避免多排程時拿到其他目的地的 profile 舊值。
+    if schedule and schedule.time:
         profile.preferred_arrival_time = schedule.time
 
     # 必須有出發地和目的地才能計算
@@ -979,50 +1034,54 @@ def build_transport_detail_lines(plan: dict) -> list[str]:
     return lines
 
 
-def _format_today_commute_text(plan: dict, header: str = "今日通勤建議：") -> str:
-    weather_info = plan["weather_info"]
-    weather_buffer = plan["weather_buffer"]
-    baseline_minutes = plan["baseline_minutes"]
-
-    # Line 1: 目標抵達
-    arrival_line = f"目標抵達：{plan['effective_arrival_time']}"
-
-    # Line 2: 建議出門（含緩衝說明）
-    departure_note = ""
-    if weather_buffer > 0:
-        wx = weather_info.get("weather_text", "")
-        if "雨" in wx or "雷" in wx:
-            departure_note = f"（已包含雨天 {weather_buffer} 分鐘緩衝）"
-        else:
-            departure_note = f"（已包含天氣緩衝 {weather_buffer} 分鐘）"
-    departure_line = f"建議出門：{plan['final_departure_time']}{departure_note}"
-
-    # Line 3: 通勤時間
-    commute_line = f"通勤時間：約 {baseline_minutes} 分鐘"
-
-    # Line 4: 交通方式 (Moved up for visibility)
-    transport_line = f"通勤方式：{_get_transport_line(plan)}"
-    transport_details = build_transport_detail_lines(plan)[:3]
-
-    # Line 5: 天氣
-    wx_text = weather_info.get("weather_text", "未知")
+def _format_weather_summary(weather_info: dict) -> str:
+    wx_text = weather_info.get("weather_text") or "未知"
     temp_min = weather_info.get("temperature_min")
     temp_max = weather_info.get("temperature_max")
     temp = weather_info.get("temperature")
     pop = weather_info.get("pop")
     apparent_temperature = weather_info.get("apparent_temperature")
 
-    if temp is not None:
-        temp_str = f"，{temp}°C"
+    if temp is not None and apparent_temperature is not None:
+        temp_text = f"溫度 {temp}°C，體感 {apparent_temperature}°C"
+    elif apparent_temperature is not None:
+        temp_text = f"體感 {apparent_temperature}°C"
+    elif temp is not None:
+        temp_text = f"溫度 {temp}°C"
     elif temp_min is not None and temp_max is not None:
-        temp_str = f"，{temp_min}-{temp_max}°C"
+        temp_text = f"溫度 {temp_min}-{temp_max}°C"
     else:
-        temp_str = ""
-    pop_str = f"。降雨機率 {pop}%" if pop is not None else ""
-    apparent_str = f"。體感溫度 {apparent_temperature}°C" if apparent_temperature is not None else ""
-    weather_line = f"今日天氣：{wx_text}{temp_str}{pop_str}{apparent_str}"
+        temp_text = "溫度無即時資訊"
 
-    return "\n".join([header, arrival_line, departure_line, transport_line, *transport_details, commute_line, weather_line])
+    pop_text = f"降雨機率 {pop}%" if pop is not None else "降雨機率無即時資訊"
+    return f"{wx_text}，{pop_text}，{temp_text}"
+
+
+def build_commute_display_payload(plan: dict) -> dict:
+    transport_parts = [_get_transport_line(plan)]
+    transport_parts.extend(build_transport_detail_lines(plan))
+    full_transport = "；".join(part for part in transport_parts if part)
+    display = {
+        "targetDate": plan["target_date"].isoformat(),
+        "estimatedDepartureTime": plan["final_departure_time"],
+        "targetArrivalTime": plan["effective_arrival_time"],
+        "estimatedCommuteTime": f"約 {plan['baseline_minutes']} 分鐘",
+        "estimatedCommuteMinutes": plan["baseline_minutes"],
+        "fullTransport": full_transport,
+        "currentWeather": _format_weather_summary(plan["weather_info"]),
+    }
+    display["text"] = "\n".join([
+        f"預估出門時間：{display['estimatedDepartureTime']}",
+        f"目標抵達時間：{display['targetArrivalTime']}",
+        f"預估通勤時間：{display['estimatedCommuteTime']}",
+        f"完整交通方式：{display['fullTransport']}",
+        f"當前天氣：{display['currentWeather']}",
+    ])
+    return display
+
+
+def _format_today_commute_text(plan: dict, header: str = "今日通勤建議：") -> str:
+    return build_commute_display_payload(plan)["text"]
 
 
 def _build_reminder_payload_from_plan(plan: dict) -> dict:
@@ -1096,7 +1155,8 @@ async def build_today_commute_payload(
     if not plan.get("ok"):
         return plan
 
-    plan["text"] = _format_today_commute_text(plan, header=header)
+    plan["display"] = build_commute_display_payload(plan)
+    plan["text"] = plan["display"]["text"]
     return plan
 
 
