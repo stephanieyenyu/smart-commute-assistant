@@ -107,9 +107,6 @@ class CommuteSchedule(Base):
     由 LIFF 前端寫入，後端排程器讀取並觸發提醒。
     """
     __tablename__ = "commute_schedules"
-    __table_args__ = (
-        UniqueConstraint("user_id", "dest_name", name="uq_commute_schedules_user_destination"),
-    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)

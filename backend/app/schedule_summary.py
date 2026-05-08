@@ -107,34 +107,54 @@ def _hhmm_to_minutes(hhmm: str | None) -> int | None:
         return None
 
 
+def active_schedules_for_date(schedules, target_date, require_time: bool = True) -> list:
+    target_weekday = target_date.weekday()
+    matched = []
+    for schedule in coerce_schedules(schedules):
+        if not getattr(schedule, "is_active", True):
+            continue
+        if target_weekday not in normalize_days(getattr(schedule, "days", None)):
+            continue
+        if require_time and not getattr(schedule, "time", None):
+            continue
+        matched.append(schedule)
+    return sorted(matched, key=lambda schedule: schedule_arrival_time(schedule))
+
+
+def dashboard_target_schedule(schedules, now_dt: datetime | None = None):
+    now_dt = now_dt or datetime.now()
+    now_minutes = now_dt.hour * 60 + now_dt.minute
+    today_candidates = []
+    for schedule in active_schedules_for_date(schedules, now_dt.date()):
+        arrival_minutes = _hhmm_to_minutes(getattr(schedule, "time", None))
+        if arrival_minutes is None or arrival_minutes >= now_minutes:
+            today_candidates.append(schedule)
+    if today_candidates:
+        return now_dt.date(), sorted(today_candidates, key=lambda schedule: schedule_arrival_time(schedule))[0]
+
+    tomorrow = (now_dt + timedelta(days=1)).date()
+    tomorrow_candidates = active_schedules_for_date(schedules, tomorrow)
+    if tomorrow_candidates:
+        return tomorrow, tomorrow_candidates[0]
+    return None, None
+
+
 def dashboard_display_schedule_rows(schedules, now_dt: datetime | None = None) -> tuple[str, list[dict]]:
     now_dt = now_dt or datetime.now()
-    schedule_list = [
-        schedule for schedule in coerce_schedules(schedules)
-        if getattr(schedule, "is_active", True)
-    ]
-    now_minutes = now_dt.hour * 60 + now_dt.minute
-    today_index = now_dt.weekday()
-    tomorrow_index = (today_index + 1) % 7
-
-    today_rows = []
-    for schedule in schedule_list:
-        if today_index not in normalize_days(getattr(schedule, "days", None)):
-            continue
-        arrival_minutes = _hhmm_to_minutes(getattr(schedule, "time", None))
-        if arrival_minutes is not None and arrival_minutes < now_minutes:
-            continue
-        today_rows.append(schedule)
-
-    if today_rows:
-        selected = sorted(today_rows, key=lambda schedule: schedule_arrival_time(schedule))
-        title = "今日排程"
-    else:
+    target_date, _ = dashboard_target_schedule(schedules, now_dt=now_dt)
+    if target_date == now_dt.date():
+        selected = active_schedules_for_date(schedules, target_date)
+        now_minutes = now_dt.hour * 60 + now_dt.minute
         selected = [
-            schedule for schedule in schedule_list
-            if tomorrow_index in normalize_days(getattr(schedule, "days", None))
+            schedule for schedule in selected
+            if (_hhmm_to_minutes(getattr(schedule, "time", None)) or now_minutes) >= now_minutes
         ]
-        selected.sort(key=lambda schedule: schedule_arrival_time(schedule))
+        title = "今日排程"
+    elif target_date:
+        selected = active_schedules_for_date(schedules, target_date)
+        title = "明日排程"
+    else:
+        selected = []
         title = "明日排程"
 
     rows = []

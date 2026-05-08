@@ -1,7 +1,6 @@
 import secrets
 import string
 from datetime import date, datetime
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import User, Household, CommuteProfile, CommuteOverride, CommuteSchedule
@@ -210,13 +209,6 @@ def _destination_key(data: dict) -> str:
     return str(raw_value).strip() or "未命名目的地"
 
 
-def _find_schedule_by_destination(db: Session, user_id: int, dest_name: str) -> CommuteSchedule | None:
-    return db.query(CommuteSchedule).filter(
-        CommuteSchedule.user_id == user_id,
-        func.lower(CommuteSchedule.dest_name) == dest_name.lower(),
-    ).first()
-
-
 def _schedule_by_id(db: Session, user_id: int, schedule_id) -> CommuteSchedule | None:
     if schedule_id is None:
         return None
@@ -231,25 +223,23 @@ def _schedule_by_id(db: Session, user_id: int, schedule_id) -> CommuteSchedule |
 
 
 def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> CommuteSchedule:
-    """由 LIFF POST /api/schedule/submit 呼叫，upsert 使用者的通勤排程。
+    """由 LIFF POST /api/schedule/submit 呼叫，儲存使用者的通勤排程。
     data 欄位（內部格式）：
       originName, originAddress, originLat, originLng,
       destName, destAddress, destLat, destLng,
       time, days, reminderEnabled
+
+    新增模式一律 append 成新排程；編輯模式只依 scheduleId 更新指定排程，
+    不再用 userId 或目的地名稱合併，避免覆蓋同一使用者的其他排程。
     """
     user = get_or_create_user(db, line_user_id)
     get_or_create_profile(db, user.id)
 
     dest_name = _destination_key(data)
+    mode = data.get("mode")
     schedule = _schedule_by_id(db, user.id, data.get("scheduleId"))
-    if schedule is None and data.get("scheduleId") is not None and data.get("mode") == "edit":
+    if schedule is None and mode == "edit":
         raise ValueError("找不到要編輯的排程")
-    if schedule is None:
-        schedule = _find_schedule_by_destination(db, user.id, dest_name)
-    elif data.get("destName"):
-        same_destination_schedule = _find_schedule_by_destination(db, user.id, dest_name)
-        if same_destination_schedule and same_destination_schedule.id != schedule.id:
-            schedule = same_destination_schedule
     if not schedule:
         schedule = CommuteSchedule(user_id=user.id, dest_name=dest_name, is_active=True)
         db.add(schedule)

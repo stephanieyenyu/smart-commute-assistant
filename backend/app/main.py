@@ -23,7 +23,12 @@ from app.crud import (
 from app.google_maps import geocode_address
 from app.dashboard_view import render_dashboard_html
 from app.models import User
-from app.schedule_summary import build_member_status_payload, build_schedule_status_payload
+from app.schedule_summary import (
+    build_member_status_payload,
+    build_schedule_status_payload,
+    dashboard_target_schedule,
+)
+from app.service import build_today_commute_payload
 
 
 Base.metadata.create_all(bind=engine)
@@ -64,8 +69,11 @@ def ensure_runtime_schema() -> None:
                         "DROP CONSTRAINT IF EXISTS uq_commute_schedules_user_id"
                     ))
                     conn.execute(text(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_commute_schedules_user_destination "
-                        "ON commute_schedules (user_id, dest_name)"
+                        "ALTER TABLE commute_schedules "
+                        "DROP CONSTRAINT IF EXISTS uq_commute_schedules_user_destination"
+                    ))
+                    conn.execute(text(
+                        "DROP INDEX IF EXISTS uq_commute_schedules_user_destination"
                     ))
 
             if "commute_overrides" in tables:
@@ -303,6 +311,16 @@ async def dashboard_page():
     return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
 
 
+@app.get("/dashboard/family", response_class=HTMLResponse)
+async def dashboard_family_page():
+    return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/family-dashboard", response_class=HTMLResponse)
+async def family_dashboard_page():
+    return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
+
+
 @app.get("/api/dashboard/status")
 async def dashboard_status(
     userId: str = Query(...),
@@ -316,6 +334,24 @@ async def dashboard_status(
     today_mode = get_transport_mode_override(db, user.id, now_dt.date()) if user else None
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
     schedule_payload = build_schedule_status_payload(schedules, profile, mode_label, now_dt=now_dt)
+    commute_display = None
+    commute_target_date, commute_schedule = dashboard_target_schedule(schedules, now_dt=now_dt)
+    if user and commute_target_date and commute_schedule:
+        commute_mode = get_transport_mode_override(db, user.id, commute_target_date)
+        commute_payload = await build_today_commute_payload(
+            db=db,
+            user_id=user.id,
+            target_date=commute_target_date,
+            force_mode_override=commute_mode,
+            schedule_id=commute_schedule.id,
+        )
+        if commute_payload.get("ok"):
+            commute_display = commute_payload.get("display")
+        else:
+            commute_display = {
+                "targetDate": commute_target_date.isoformat(),
+                "text": commute_payload.get("text") or "目前沒有可顯示的通勤建議",
+            }
     family_view = view == "family"
     member_payloads = []
     invite_code = None
@@ -350,6 +386,7 @@ async def dashboard_status(
         "generatedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "refreshSeconds": 30,
         "schedule": schedule_payload,
+        "commute": commute_display,
         "members": member_payloads,
         "inviteCode": invite_code,
         "lineText": schedule_payload["lineText"],
