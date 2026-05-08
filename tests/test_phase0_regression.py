@@ -41,7 +41,11 @@ def load_service_module():
             "get_next_setup_step": None,
             "get_override_for_date": None,
             "get_transport_mode_override": None,
+            "get_commute_schedules_by_user_id": lambda db, user_id: [],
             "save_frozen_reminder": None,
+        },
+        "app.models": {
+            "CommuteSchedule": type("CommuteSchedule", (), {}),
         },
     }
 
@@ -119,17 +123,27 @@ class Phase0RegressionTests(unittest.TestCase):
         commute_text = self.service._format_today_commute_text(plan, header="好的，今天切換為：捷運優先。")
         reminder_text = self.service._build_reminder_payload_from_plan(plan)["text"]
 
-        commute_transport = next(line for line in commute_text.splitlines() if line.startswith("通勤方式："))
+        commute_transport = next(line for line in commute_text.splitlines() if line.startswith("完整交通方式："))
         reminder_transport = next(line for line in reminder_text.splitlines() if line.startswith("📍 通勤方式："))
-        commute_detail = commute_transport.removeprefix("通勤方式：")
+        commute_detail = commute_transport.removeprefix("完整交通方式：")
         reminder_detail = reminder_transport.removeprefix("📍 通勤方式：")
 
-        self.assertEqual(commute_detail, reminder_detail)
+        self.assertEqual(reminder_detail, commute_detail)
         self.assertIn("請搭乘 淡水信義線", commute_detail)
         self.assertIn("於『明德』上車", commute_detail)
         self.assertIn("在『芝山』下車", commute_detail)
         self.assertIn("從『出口 1』走", commute_detail)
         self.assertNotIn("目的地附近捷運站", commute_detail)
+        self.assertEqual(
+            [line.split("：", 1)[0] for line in commute_text.splitlines()],
+            ["預估出門時間", "目標抵達時間", "完整交通方式", "可選路線"],
+        )
+        self.assertNotIn("轉乘站名", commute_text)
+        self.assertNotIn("步行距離", commute_text)
+        self.assertNotIn("預計等待時間", commute_text)
+        self.assertNotIn("最近站牌", commute_text)
+        self.assertNotIn("步行到站牌", commute_text)
+        self.assertNotIn("預估抵達站牌時間", commute_text)
 
     def test_forced_metro_does_not_fall_back_to_bus_step(self):
         plan = self.metro_plan()
@@ -161,7 +175,8 @@ class Phase0RegressionTests(unittest.TestCase):
         self.assertIn("於『南京敦化路口』上車", transport_line)
         self.assertIn("在『捷運西門站』下車", transport_line)
         self.assertIn("（約 8 分鐘後到站）", transport_line)
-        self.assertIn("可選路線：307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", transport_line)
+        route_options = self.service._available_route_options_text(self.bus_plan())
+        self.assertEqual("307（約 8 分鐘後到站）、652（約 12 分鐘後到站）", route_options)
         self.assertNotIn("12（約 2 分鐘後到站）", transport_line)
 
     def test_bus_departure_uses_realtime_eta_walk_and_three_minute_buffer(self):
@@ -185,6 +200,8 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:05")
+        self.assertEqual(result["departure_date"], "2026-05-02")
+        self.assertIn("2026-05-02T08:05:00", result["departure_datetime"])
 
     def test_bus_departure_never_later_than_latest_on_time_departure(self):
         self.service._now_taipei_naive = lambda: datetime(2026, 5, 2, 8, 0)
@@ -207,6 +224,7 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:25")
+        self.assertEqual(result["departure_date"], "2026-05-02")
 
     def test_metro_departure_uses_transit_duration_without_extra_wait_penalty(self):
         result = asyncio.run(
@@ -220,6 +238,7 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:42")
+        self.assertEqual(result["departure_date"], "2026-05-02")
 
 
 if __name__ == "__main__":

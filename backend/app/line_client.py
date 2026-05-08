@@ -1,4 +1,6 @@
 import json
+import os
+from urllib.parse import urlencode
 from linebot.v3.messaging import (
     Configuration,
     AsyncApiClient,
@@ -6,6 +8,7 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     PushMessageRequest,
     TextMessage,
+    AudioMessage,
     FlexMessage,
     QuickReply,
     QuickReplyItem,
@@ -86,19 +89,24 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
             await reply_text(reply_token, texts[0])
 
 
-async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: list[dict]) -> None:
+async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dict | list[dict]) -> None:
     """
-    發送 Flex Message Carousel。
-    flex_contents: list of Flex Bubble dicts（每個 dict 為一張卡片）。
+    發送 Flex Message。
+    flex_contents 可為單張 Flex Bubble dict，或多張 Bubble dict 組成的 Carousel。
     """
-    carousel = {
-        "type": "carousel",
-        "contents": flex_contents,
-    }
+    if isinstance(flex_contents, dict):
+        container_payload = flex_contents
+    elif len(flex_contents) == 1:
+        container_payload = flex_contents[0]
+    else:
+        container_payload = {
+            "type": "carousel",
+            "contents": flex_contents,
+        }
     try:
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
-            flex_container = FlexContainer.from_dict(carousel)
+            flex_container = FlexContainer.from_dict(container_payload)
             await line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
@@ -123,6 +131,46 @@ async def push_text(user_id: str, text: str) -> None:
             PushMessageRequest(
                 to=user_id,
                 messages=[TextMessage(text=text)]
+            )
+        )
+
+
+def build_tts_audio_url(text: str) -> str:
+    """
+    建立 LINE 可讀取的 HTTPS TTS 音訊 URL。
+    可用 TTS_AUDIO_BASE_URL 覆寫；預設使用公開 HTTPS TTS 端點產生中文語音。
+    """
+    configured_base = os.getenv("TTS_AUDIO_BASE_URL", "").strip()
+    query_text = (text or "出門提醒").replace("\n", " ")
+    if configured_base:
+        separator = "&" if "?" in configured_base else "?"
+        return f"{configured_base}{separator}{urlencode({'text': query_text})}"
+    return "https://translate.google.com/translate_tts?" + urlencode({
+        "ie": "UTF-8",
+        "client": "tw-ob",
+        "tl": "zh-TW",
+        "q": query_text[:180],
+    })
+
+
+def estimate_tts_duration_ms(text: str) -> int:
+    return max(5000, min(60000, len(text or "") * 220))
+
+
+async def push_audio_message(user_id: str, original_content_url: str, duration_ms: int) -> None:
+    if not original_content_url.startswith("https://"):
+        raise ValueError("LINE AudioMessage requires an HTTPS original_content_url")
+    async with AsyncApiClient(configuration) as api_client:
+        line_bot_api = AsyncMessagingApi(api_client)
+        await line_bot_api.push_message(
+            PushMessageRequest(
+                to=user_id,
+                messages=[
+                    AudioMessage(
+                        original_content_url=original_content_url,
+                        duration=duration_ms,
+                    )
+                ]
             )
         )
 

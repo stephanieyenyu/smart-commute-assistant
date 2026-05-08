@@ -1,23 +1,132 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+<<<<<<< HEAD
 from fastapi.staticfiles import StaticFiles
+=======
+from fastapi.responses import HTMLResponse
+>>>>>>> 93967a0d3e3c86434f19cc2278ebe4a4fad71eb5
 from pydantic import BaseModel
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.db import Base, engine, SessionLocal
 from app.webhook import router as webhook_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
-from app.crud import upsert_commute_schedule, get_commute_schedule
+from app.crud import (
+    upsert_commute_schedule,
+    delete_commute_schedule,
+    get_commute_schedules,
+    get_commute_schedules_by_user_id,
+    get_household_members,
+    get_transport_mode_override,
+)
 from app.google_maps import geocode_address
+<<<<<<< HEAD
 from app.dashboard_ws import router as ws_router
 from app.family import router as family_router
+=======
+from app.dashboard_view import render_dashboard_html
+from app.models import User
+from app.schedule_summary import (
+    active_schedules_for_date,
+    build_member_status_payload,
+    build_schedule_status_payload,
+    dashboard_target_schedule,
+)
+from app.service import build_today_commute_payload
+>>>>>>> 93967a0d3e3c86434f19cc2278ebe4a4fad71eb5
 
 
 Base.metadata.create_all(bind=engine)
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+
+def ensure_runtime_schema() -> None:
+    """Best-effort schema repair for Render instances that only run app startup."""
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        dialect = engine.dialect.name
+        with engine.begin() as conn:
+            if "users" in tables:
+                user_columns = {column["name"] for column in inspector.get_columns("users")}
+                if "display_name" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN display_name VARCHAR"))
+                if "household_id" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN household_id INTEGER"))
+
+            if "commute_schedules" in tables:
+                schedule_columns = {column["name"] for column in inspector.get_columns("commute_schedules")}
+                if "is_active" not in schedule_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text(
+                            "ALTER TABLE commute_schedules "
+                            "ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"
+                        ))
+                    else:
+                        conn.execute(text(
+                            "ALTER TABLE commute_schedules "
+                            "ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL"
+                        ))
+
+                if dialect == "postgresql":
+                    conn.execute(text(
+                        "ALTER TABLE commute_schedules "
+                        "DROP CONSTRAINT IF EXISTS uq_commute_schedules_user_id"
+                    ))
+                    conn.execute(text(
+                        "ALTER TABLE commute_schedules "
+                        "DROP CONSTRAINT IF EXISTS ix_commute_schedules_user_id"
+                    ))
+                    conn.execute(text(
+                        "DROP INDEX IF EXISTS ix_commute_schedules_user_id"
+                    ))
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_commute_schedules_user_id "
+                        "ON commute_schedules (user_id)"
+                    ))
+                    conn.execute(text(
+                        "ALTER TABLE commute_schedules "
+                        "DROP CONSTRAINT IF EXISTS uq_commute_schedules_user_destination"
+                    ))
+                    conn.execute(text(
+                        "DROP INDEX IF EXISTS uq_commute_schedules_user_destination"
+                    ))
+
+            if "commute_overrides" in tables:
+                override_columns = {column["name"] for column in inspector.get_columns("commute_overrides")}
+                if "schedule_id" not in override_columns:
+                    conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN schedule_id INTEGER"))
+                for column_name in (
+                    "monitor_one_hour_sent_at",
+                    "monitor_five_min_sent_at",
+                    "departure_question_sent_at",
+                    "departed_at",
+                ):
+                    if column_name not in override_columns:
+                        if dialect == "postgresql":
+                            conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} TIMESTAMP WITH TIME ZONE"))
+                        else:
+                            conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} DATETIME"))
+                if dialect == "postgresql":
+                    conn.execute(text(
+                        "ALTER TABLE commute_overrides "
+                        "DROP CONSTRAINT IF EXISTS uq_commute_overrides_user_date"
+                    ))
+                    conn.execute(text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_commute_overrides_user_date_schedule "
+                        "ON commute_overrides (user_id, target_date, schedule_id)"
+                    ))
+    except Exception as schema_error:
+        print(f"[schema] runtime schema repair skipped: {schema_error}")
+
+
+ensure_runtime_schema()
 
 
 def get_db():
@@ -73,8 +182,15 @@ class ScheduleSubmitPayload(BaseModel):
     destLat: Optional[float] = None
     destLng: Optional[float] = None
     arrivalTime: Optional[str] = None       # HH:MM 格式
-    weekdays: Optional[List[int]] = None    # 0=週日, 1=週一, ..., 6=週六
+    weekdays: Optional[List[int]] = None    # 0=週一, 1=週二, ..., 6=週日
     reminderEnabled: Optional[bool] = True
+    mode: Optional[str] = None              # create/edit，由 LIFF query 或表單帶入
+    scheduleId: Optional[int] = None        # edit 時指定要修改的排程
+
+
+class ScheduleDeletePayload(BaseModel):
+    userId: str
+    scheduleId: int
 
 
 # ── 排程總覽 Flex Builder ─────────────────────────────────────────────────────
@@ -223,6 +339,9 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
             "time":            payload.arrivalTime,
             "days":            payload.weekdays,
             "reminderEnabled": payload.reminderEnabled,
+            "mode":            payload.mode,
+            "scheduleId":      payload.scheduleId,
+            "partial":         payload.mode == "edit",
         }
         schedule = upsert_commute_schedule(db, payload.userId, data)
 
@@ -246,6 +365,7 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
             "message": "排程設定已儲存",
             "data": {
                 "userId":            payload.userId,
+                "scheduleId":        schedule.id,
                 "originName":        schedule.origin_name,
                 "originAddress":     schedule.origin_address,
                 "originLat":         schedule.origin_lat,
@@ -266,17 +386,45 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
 
 # ── GET /api/schedule ─────────────────────────────────────────────────────────
 
+def _schedule_response_list(schedules):
+    return [
+        {
+            "scheduleId": s.id,
+            "originName": s.origin_name,
+            "originAddress": s.origin_address,
+            "originLat": s.origin_lat,
+            "originLng": s.origin_lng,
+            "destinationName": s.dest_name,
+            "destinationAddress": s.dest_address,
+            "destLat": s.dest_lat,
+            "destLng": s.dest_lng,
+            "arrivalTime": s.time,
+            "weekdays": s.days,
+            "reminderEnabled": s.reminder_enabled,
+        }
+        for s in schedules
+    ]
+
+
 @app.get("/api/schedule")
-async def get_schedule(userId: str = Query(...), db: Session = Depends(get_db)):
+async def get_schedule(
+    userId: str = Query(...),
+    scheduleId: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
     """LIFF 前端讀取既有排程設定（用於預填編輯表單）。
     若無資料回傳 { hasData: false }。
     """
-    schedule = get_commute_schedule(db, userId)
+    schedules = get_commute_schedules(db, userId)
+    if not schedules:
+        return {"hasData": False, "schedules": []}
+    schedule = next((s for s in schedules if s.id == scheduleId), None) if scheduleId else schedules[0]
     if not schedule:
-        return {"hasData": False}
+        raise HTTPException(status_code=404, detail="找不到指定排程")
     return {
         "hasData":           True,
         "userId":            userId,
+        "scheduleId":        schedule.id,
         "originName":        schedule.origin_name,
         "originAddress":     schedule.origin_address,
         "originLat":         schedule.origin_lat,
@@ -288,6 +436,166 @@ async def get_schedule(userId: str = Query(...), db: Session = Depends(get_db)):
         "arrivalTime":       schedule.time,
         "weekdays":          schedule.days,
         "reminderEnabled":   schedule.reminder_enabled,
+        "schedules": _schedule_response_list(schedules),
+    }
+
+
+# ── DELETE /api/schedule ──────────────────────────────────────────────────────
+
+@app.delete("/api/schedule")
+async def delete_schedule(
+    userId: str = Query(...),
+    scheduleId: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    schedule = delete_commute_schedule(db, userId, scheduleId)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="找不到指定排程，或該排程已刪除")
+    schedules = get_commute_schedules(db, userId)
+    return {
+        "ok": True,
+        "message": "排程已刪除",
+        "deletedScheduleId": schedule.id,
+        "schedules": _schedule_response_list(schedules),
+    }
+
+
+@app.delete("/api/schedule/{schedule_id}")
+async def delete_schedule_by_path(
+    schedule_id: int,
+    userId: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    return await delete_schedule(userId=userId, scheduleId=schedule_id, db=db)
+
+
+@app.post("/api/schedule/delete")
+async def post_delete_schedule(payload: ScheduleDeletePayload, db: Session = Depends(get_db)):
+    schedule = delete_commute_schedule(db, payload.userId, payload.scheduleId)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="找不到指定排程，或該排程已刪除")
+    schedules = get_commute_schedules(db, payload.userId)
+    return {
+        "ok": True,
+        "message": "排程已刪除",
+        "deletedScheduleId": schedule.id,
+        "schedules": _schedule_response_list(schedules),
+    }
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+TRANSPORT_MODE_NAME_MAP = {
+    None: "自動判斷",
+    "auto": "自動判斷",
+    "shortest": "最短時間優先 (Google)",
+    "bus": "公車優先",
+    "metro": "捷運優先",
+    "bus_to_metro": "公車轉捷運",
+}
+
+
+def get_user_for_dashboard(db: Session, line_user_id: str):
+    return db.query(User).filter(User.line_user_id == line_user_id).first()
+
+
+def dashboard_commute_target_schedule(schedules, now_dt: datetime):
+    """Use the same priority as LINE today advice: today's first schedule, then tomorrow."""
+    today_schedules = active_schedules_for_date(schedules, now_dt.date())
+    if today_schedules:
+        return now_dt.date(), today_schedules[0]
+    tomorrow = now_dt.date() + timedelta(days=1)
+    tomorrow_schedules = active_schedules_for_date(schedules, tomorrow)
+    if tomorrow_schedules:
+        return tomorrow, tomorrow_schedules[0]
+    return None, None
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page():
+    return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/dashboard/family", response_class=HTMLResponse)
+async def dashboard_family_page():
+    return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/family-dashboard", response_class=HTMLResponse)
+async def family_dashboard_page():
+    return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/api/dashboard/status")
+async def dashboard_status(
+    userId: str = Query(...),
+    view: str = Query("personal"),
+    db: Session = Depends(get_db),
+):
+    user = get_user_for_dashboard(db, userId)
+    schedules = get_commute_schedules(db, userId)
+    profile = user.profile if user else None
+    now_dt = datetime.now(TAIPEI_TZ)
+    today_mode = get_transport_mode_override(db, user.id, now_dt.date()) if user else None
+    mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
+    schedule_payload = build_schedule_status_payload(schedules, profile, mode_label, now_dt=now_dt)
+    commute_display = None
+    commute_target_date, commute_schedule = dashboard_commute_target_schedule(schedules, now_dt=now_dt)
+    if user and commute_target_date and commute_schedule:
+        commute_mode = get_transport_mode_override(db, user.id, commute_target_date)
+        commute_payload = await build_today_commute_payload(
+            db=db,
+            user_id=user.id,
+            target_date=commute_target_date,
+            force_mode_override=commute_mode,
+            schedule_id=commute_schedule.id,
+        )
+        if commute_payload.get("ok"):
+            commute_display = commute_payload.get("display")
+        else:
+            commute_display = {
+                "targetDate": commute_target_date.isoformat(),
+                "text": commute_payload.get("text") or "目前沒有可顯示的通勤建議",
+            }
+    family_view = view == "family"
+    member_payloads = []
+    invite_code = None
+    if family_view and user and user.household_id:
+        invite_code = user.household.invite_code if user.household else None
+        members = get_household_members(db, user.household_id)
+        for member in members:
+            member_schedules = get_commute_schedules_by_user_id(db, member.id)
+            member_profile = member.profile
+            member_mode = get_transport_mode_override(db, member.id, now_dt.date())
+            member_mode_label = TRANSPORT_MODE_NAME_MAP.get(member_mode or "auto", "自動判斷")
+            member_payloads.append(build_member_status_payload(
+                member,
+                member_schedules,
+                member_profile,
+                member_mode_label,
+                now_dt=now_dt,
+            ))
+    elif user:
+        member_payloads.append(build_member_status_payload(
+            user,
+            schedules,
+            profile,
+            mode_label,
+            now_dt=now_dt,
+        ))
+    return {
+        "ok": True,
+        "title": "家庭通勤看板" if family_view else "個人通勤看板",
+        "view": "family" if family_view else "personal",
+        "viewLabel": "家庭看板" if family_view else "個人看板",
+        "generatedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "refreshSeconds": 30,
+        "schedule": schedule_payload,
+        "commute": commute_display,
+        "members": member_payloads,
+        "inviteCode": invite_code,
+        "lineText": schedule_payload["lineText"],
+        "weeklyText": schedule_payload["weeklyText"],
     }
 
 
@@ -298,27 +606,34 @@ async def get_history(userId: str, db: Session = Depends(get_db)):
     """讀取用戶歷史使用過的地點紀錄（出發地 + 目的地）。
     從 CommuteSchedule 提取，未來可擴充為完整歷史記錄表。
     """
-    from app.crud import get_commute_schedule
-    schedule = get_commute_schedule(db, userId)
+    from app.crud import get_commute_schedules
+    schedules = get_commute_schedules(db, userId)
 
     history = []
-    if schedule:
+    seen = set()
+    for schedule in schedules:
         if schedule.origin_address:
-            history.append({
-                "type":    "origin",
-                "name":    schedule.origin_name,
-                "address": schedule.origin_address,
-                "lat":     schedule.origin_lat,
-                "lng":     schedule.origin_lng,
-            })
+            key = ("origin", schedule.origin_address)
+            if key not in seen:
+                seen.add(key)
+                history.append({
+                    "type":    "origin",
+                    "name":    schedule.origin_name,
+                    "address": schedule.origin_address,
+                    "lat":     schedule.origin_lat,
+                    "lng":     schedule.origin_lng,
+                })
         if schedule.dest_address:
-            history.append({
-                "type":    "destination",
-                "name":    schedule.dest_name,
-                "address": schedule.dest_address,
-                "lat":     schedule.dest_lat,
-                "lng":     schedule.dest_lng,
-            })
+            key = ("destination", schedule.dest_address)
+            if key not in seen:
+                seen.add(key)
+                history.append({
+                    "type":    "destination",
+                    "name":    schedule.dest_name,
+                    "address": schedule.dest_address,
+                    "lat":     schedule.dest_lat,
+                    "lng":     schedule.dest_lng,
+                })
 
     return {
         "userId":  userId,
