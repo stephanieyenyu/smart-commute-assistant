@@ -323,6 +323,21 @@ def get_commute_schedules_by_user_id(db: Session, user_id: int) -> list[CommuteS
     ).order_by(CommuteSchedule.id.asc()).all()
 
 
+def delete_commute_schedule(db: Session, line_user_id: str, schedule_id: int) -> CommuteSchedule | None:
+    """Soft delete a user's schedule so old records stay auditable but no longer trigger reminders."""
+    user = db.query(User).filter(User.line_user_id == line_user_id).first()
+    if not user:
+        return None
+    schedule = _schedule_by_id(db, user.id, schedule_id)
+    if not schedule or not getattr(schedule, "is_active", True):
+        return None
+    schedule.is_active = False
+    schedule.reminder_enabled = False
+    db.commit()
+    db.refresh(schedule)
+    return schedule
+
+
 def get_all_schedules_for_day(db: Session, day_of_week: int) -> list[CommuteSchedule]:
     """取得今天需要提醒的所有排程（day_of_week: 0=週一, 1=週二, ..., 6=週日）。"""
     all_schedules = db.query(CommuteSchedule).filter(
