@@ -146,3 +146,59 @@ async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
     except Exception as e:
         print(f"[line] push_with_quick_reply error: {e}")
         await push_text(user_id, text)
+
+
+async def push_flex_message(
+    user_id: str,
+    alt_text: str,
+    flex_contents: list[dict],
+    quick_reply_items: list | None = None,
+) -> None:
+    """
+    推播 Flex Message（Bubble 或 Carousel）給用戶。
+    若提供 quick_reply_items，在 Flex 之後附加一則純文字訊息帶 QuickReply。
+    LINE Messaging API 的 QuickReply 只能附加在訊息串的最後一則上。
+
+    Args:
+        user_id: LINE user ID
+        alt_text: Flex 訊息的替代文字（通知列顯示）
+        flex_contents: list of Flex Bubble dicts（自動包裝為 Carousel）
+                       或單一 Bubble dict（直接傳送）
+        quick_reply_items: 同 _build_quick_reply_items 格式的 list
+    """
+    # 決定 Flex container 類型
+    if isinstance(flex_contents, list):
+        container_dict = {"type": "carousel", "contents": flex_contents}
+    else:
+        container_dict = flex_contents  # 直接是 bubble dict
+
+    messages = []
+    try:
+        flex_container = FlexContainer.from_dict(container_dict)
+        messages.append(FlexMessage(alt_text=alt_text, contents=flex_container))
+    except Exception as e:
+        print(f"[line] push_flex_message build container error: {e}")
+        await push_text(user_id, alt_text)
+        return
+
+    # 若有 Quick Reply，附加到最後一則純文字訊息
+    if quick_reply_items:
+        qr_items = _build_quick_reply_items(quick_reply_items)
+        messages.append(
+            TextMessage(
+                text="請選擇下一步：",
+                quick_reply=QuickReply(items=qr_items),
+            )
+        )
+
+    try:
+        async with AsyncApiClient(configuration) as api_client:
+            line_bot_api = AsyncMessagingApi(api_client)
+            await line_bot_api.push_message(
+                PushMessageRequest(to=user_id, messages=messages)
+            )
+        print(f"[line] push_flex_message sent to user_id={user_id}")
+    except Exception as e:
+        print(f"[line] push_flex_message error: {e}")
+        # Fallback：推播純文字
+        await push_text(user_id, alt_text)
