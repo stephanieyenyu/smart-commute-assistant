@@ -855,7 +855,7 @@ def _bus_route_label(bus_snapshot: dict) -> str | None:
     return None
 
 
-def _bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = None) -> str:
+def _bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = None, with_label: bool = True) -> str:
     options: list[str] = []
     seen = set()
     arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
@@ -880,7 +880,39 @@ def _bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = Non
     if fallback_route and fallback_route != "公車" and fallback_route not in seen:
         options.insert(0, fallback_route)
 
-    return f"可選路線：{'、'.join(options)}" if options else ""
+    if not options:
+        return ""
+    route_text = "、".join(options)
+    return f"可選路線：{route_text}" if with_label else route_text
+
+
+def _available_route_options_text(plan: dict) -> str:
+    best_option = plan.get("best_option") or {}
+    recommended_mode = plan.get("recommended_mode")
+    snapshot = best_option.get("snapshot") or {}
+    google_detailed = snapshot.get("google_detailed") or {}
+    steps = (google_detailed or {}).get("steps", [])
+    matched_step = _select_transit_step(steps, recommended_mode)
+
+    bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
+    bus_fallback = None
+    if matched_step and _is_bus_step(matched_step):
+        bus_fallback = matched_step.get("line_short_name") or matched_step.get("line_name")
+    elif recommended_mode == "bus":
+        bus_fallback = _bus_route_label(bus_snap)
+
+    bus_options = _bus_route_options_text(bus_snap or {}, bus_fallback, with_label=False)
+    if bus_options:
+        return bus_options
+
+    route_names = []
+    for step in steps:
+        if step.get("type") != "TRANSIT":
+            continue
+        route_name = step.get("line_short_name") or step.get("line_name")
+        if route_name and route_name not in route_names:
+            route_names.append(route_name)
+    return "、".join(route_names) if route_names else "無即時可選路線"
 
 
 def _metro_line_from_station_ids(origin_station: dict, destination_station: dict) -> str:
@@ -934,16 +966,13 @@ def _format_transport_line(plan: dict) -> str:
         exit_info = "" if is_bus else (_exit_info_from_steps(steps, matched_step) or _exit_info_from_snapshot(snapshot))
 
         eta_str = ""
-        route_options = ""
         if is_bus:
             chosen = bus_snap.get("chosen_bus") or {}
             eta = chosen.get("eta_min")
             if eta is not None:
                 eta_str = f"（約 {eta} 分鐘後到站）"
-            route_options = _bus_route_options_text(bus_snap, line)
 
-        options_text = f" {route_options}。" if route_options else ""
-        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}{eta_str}。{options_text}"
+        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}{eta_str}。"
 
     if recommended_mode == "metro":
         metro_snap = snapshot
@@ -962,14 +991,12 @@ def _format_transport_line(plan: dict) -> str:
         first_stop = bus_snap.get("first_stop") or {}
         walk_min = bus_snap.get("walk_minutes")
         chosen = bus_snap.get("chosen_bus") or {}
-        stop_name = first_stop.get("stop_name", "最近站牌")
+        stop_name = first_stop.get("stop_name", "上車站點")
         route = _bus_route_label(bus_snap)
         eta = chosen.get("eta_min")
         route_str = route or "公車"
         eta_str = f"（約 {eta} 分鐘後到站）" if eta is not None else ""
-        route_options = _bus_route_options_text(bus_snap, route_str)
-        options_text = f" {route_options}。" if route_options else ""
-        return f"🚌 建議搭公車！請搭乘 {route_str}，於『{stop_name}』上車，並在『目的地附近站牌』下車{eta_str}。{options_text}"
+        return f"🚌 建議搭公車！請搭乘 {route_str}，於『{stop_name}』上車，並在『目的地附近站牌』下車{eta_str}。"
 
     return "🚶 建議參考 Google 地圖最快路徑。"
 
@@ -1058,9 +1085,7 @@ def _format_weather_summary(weather_info: dict) -> str:
 
 
 def build_commute_display_payload(plan: dict) -> dict:
-    transport_parts = [_get_transport_line(plan)]
-    transport_parts.extend(build_transport_detail_lines(plan))
-    full_transport = "；".join(part for part in transport_parts if part)
+    full_transport = _get_transport_line(plan)
     display = {
         "targetDate": plan["target_date"].isoformat(),
         "estimatedDepartureTime": plan["final_departure_time"],
@@ -1068,14 +1093,14 @@ def build_commute_display_payload(plan: dict) -> dict:
         "estimatedCommuteTime": f"約 {plan['baseline_minutes']} 分鐘",
         "estimatedCommuteMinutes": plan["baseline_minutes"],
         "fullTransport": full_transport,
+        "availableRoutes": _available_route_options_text(plan),
         "currentWeather": _format_weather_summary(plan["weather_info"]),
     }
     display["text"] = "\n".join([
         f"預估出門時間：{display['estimatedDepartureTime']}",
         f"目標抵達時間：{display['targetArrivalTime']}",
-        f"預估通勤時間：{display['estimatedCommuteTime']}",
         f"完整交通方式：{display['fullTransport']}",
-        f"當前天氣：{display['currentWeather']}",
+        f"可選路線：{display['availableRoutes']}",
     ])
     return display
 

@@ -242,7 +242,8 @@ class Phase1StabilityTests(unittest.TestCase):
         line_client_py = self.read_repo_file("backend/app/line_client.py")
         webhook_py = self.read_repo_file("backend/app/webhook.py")
 
-        self.assertIn("build_transport_detail_lines(plan)", service_py)
+        self.assertIn("_available_route_options_text(plan)", service_py)
+        self.assertIn('"availableRoutes"', service_py)
         self.assertIn('"apparent_temperature"', weather_py)
         self.assertIn("return 10", weather_py)
         self.assertIn("MORNING_MONITOR_OFFSETS", reminder_py)

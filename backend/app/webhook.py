@@ -241,9 +241,8 @@ def build_commute_advice_flex(plan: dict) -> dict:
             "contents": [
                 row("預估出門時間", display.get("estimatedDepartureTime")),
                 row("目標抵達時間", display.get("targetArrivalTime")),
-                row("預估通勤時間", display.get("estimatedCommuteTime")),
                 row("完整交通方式", display.get("fullTransport")),
-                row("當前天氣", display.get("currentWeather")),
+                row("可選路線", display.get("availableRoutes")),
             ],
         },
         "footer": {
