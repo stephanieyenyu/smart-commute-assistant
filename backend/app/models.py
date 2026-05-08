@@ -164,6 +164,10 @@ class CommuteOverride(Base):
 
     last_sent_plan_key = Column(String, nullable=True)
     last_sent_at = Column(DateTime(timezone=True), nullable=True)
+    monitor_one_hour_sent_at = Column(DateTime(timezone=True), nullable=True)
+    monitor_five_min_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departure_question_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

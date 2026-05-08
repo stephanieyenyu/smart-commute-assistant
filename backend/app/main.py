@@ -72,6 +72,17 @@ def ensure_runtime_schema() -> None:
                 override_columns = {column["name"] for column in inspector.get_columns("commute_overrides")}
                 if "schedule_id" not in override_columns:
                     conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN schedule_id INTEGER"))
+                for column_name in (
+                    "monitor_one_hour_sent_at",
+                    "monitor_five_min_sent_at",
+                    "departure_question_sent_at",
+                    "departed_at",
+                ):
+                    if column_name not in override_columns:
+                        if dialect == "postgresql":
+                            conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} TIMESTAMP WITH TIME ZONE"))
+                        else:
+                            conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} DATETIME"))
                 if dialect == "postgresql":
                     conn.execute(text(
                         "ALTER TABLE commute_overrides "
@@ -301,9 +312,10 @@ async def dashboard_status(
     user = get_user_for_dashboard(db, userId)
     schedules = get_commute_schedules(db, userId)
     profile = user.profile if user else None
-    today_mode = get_transport_mode_override(db, user.id, datetime.now(TAIPEI_TZ).date()) if user else None
+    now_dt = datetime.now(TAIPEI_TZ)
+    today_mode = get_transport_mode_override(db, user.id, now_dt.date()) if user else None
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
-    schedule_payload = build_schedule_status_payload(schedules, profile, mode_label)
+    schedule_payload = build_schedule_status_payload(schedules, profile, mode_label, now_dt=now_dt)
     family_view = view == "family"
     member_payloads = []
     invite_code = None
@@ -313,14 +325,14 @@ async def dashboard_status(
         for member in members:
             member_schedules = get_commute_schedules_by_user_id(db, member.id)
             member_profile = member.profile
-            member_mode = get_transport_mode_override(db, member.id, datetime.now(TAIPEI_TZ).date())
+            member_mode = get_transport_mode_override(db, member.id, now_dt.date())
             member_mode_label = TRANSPORT_MODE_NAME_MAP.get(member_mode or "auto", "自動判斷")
             member_payloads.append(build_member_status_payload(
                 member,
                 member_schedules,
                 member_profile,
                 member_mode_label,
-                now_dt=datetime.now(TAIPEI_TZ),
+                now_dt=now_dt,
             ))
     elif user:
         member_payloads.append(build_member_status_payload(
@@ -328,7 +340,7 @@ async def dashboard_status(
             schedules,
             profile,
             mode_label,
-            now_dt=datetime.now(TAIPEI_TZ),
+            now_dt=now_dt,
         ))
     return {
         "ok": True,

@@ -97,6 +97,58 @@ def schedule_to_summary(schedule, profile=None) -> dict:
     }
 
 
+def _hhmm_to_minutes(hhmm: str | None) -> int | None:
+    if not hhmm:
+        return None
+    try:
+        hour, minute = [int(part) for part in str(hhmm).split(":")[:2]]
+        return hour * 60 + minute
+    except Exception:
+        return None
+
+
+def dashboard_display_schedule_rows(schedules, now_dt: datetime | None = None) -> tuple[str, list[dict]]:
+    now_dt = now_dt or datetime.now()
+    schedule_list = [
+        schedule for schedule in coerce_schedules(schedules)
+        if getattr(schedule, "is_active", True)
+    ]
+    now_minutes = now_dt.hour * 60 + now_dt.minute
+    today_index = now_dt.weekday()
+    tomorrow_index = (today_index + 1) % 7
+
+    today_rows = []
+    for schedule in schedule_list:
+        if today_index not in normalize_days(getattr(schedule, "days", None)):
+            continue
+        arrival_minutes = _hhmm_to_minutes(getattr(schedule, "time", None))
+        if arrival_minutes is not None and arrival_minutes < now_minutes:
+            continue
+        today_rows.append(schedule)
+
+    if today_rows:
+        selected = sorted(today_rows, key=lambda schedule: schedule_arrival_time(schedule))
+        title = "今日排程"
+    else:
+        selected = [
+            schedule for schedule in schedule_list
+            if tomorrow_index in normalize_days(getattr(schedule, "days", None))
+        ]
+        selected.sort(key=lambda schedule: schedule_arrival_time(schedule))
+        title = "明日排程"
+
+    rows = []
+    for schedule in selected:
+        rows.append({
+            "scheduleId": getattr(schedule, "id", None),
+            "origin": schedule_origin(schedule),
+            "destination": schedule_destination(schedule),
+            "arrivalTime": schedule_arrival_time(schedule),
+            "weekdayText": format_weekdays(getattr(schedule, "days", None)),
+        })
+    return title, rows
+
+
 def weekly_schedule_rows(schedules) -> list[dict]:
     schedule_list = coerce_schedules(schedules)
     rows = []
@@ -130,7 +182,12 @@ def format_weekly_schedule_text(schedules) -> str:
     return "\n".join(lines)
 
 
-def build_schedule_status_payload(schedules, profile=None, today_mode_label: str = "自動判斷") -> dict:
+def build_schedule_status_payload(
+    schedules,
+    profile=None,
+    today_mode_label: str = "自動判斷",
+    now_dt: datetime | None = None,
+) -> dict:
     schedule_list = coerce_schedules(schedules)
     main_schedule = primary_schedule(schedule_list)
     has_schedule = main_schedule is not None
@@ -148,6 +205,9 @@ def build_schedule_status_payload(schedules, profile=None, today_mode_label: str
         "scheduleCount": len(schedule_list),
         "updatedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
+    display_title, display_schedules = dashboard_display_schedule_rows(schedule_list, now_dt=now_dt)
+    payload["displayScheduleTitle"] = display_title
+    payload["displaySchedules"] = display_schedules
     payload["lineText"] = format_commute_setting_text(
         schedule_list,
         profile=profile,
@@ -267,5 +327,5 @@ def build_member_status_payload(
         "displayName": display_name,
         "lineUserId": getattr(user, "line_user_id", None),
         **status,
-        "schedule": build_schedule_status_payload(coerce_schedules(schedules), profile, today_mode_label),
+        "schedule": build_schedule_status_payload(coerce_schedules(schedules), profile, today_mode_label, now_dt=now_dt),
     }

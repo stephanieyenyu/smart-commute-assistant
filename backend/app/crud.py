@@ -12,6 +12,10 @@ def _clear_override_reminder_fields(override: CommuteOverride):
     override.frozen_departure_time = None
     override.frozen_reminder_text = None
     override.reminder_prepared_at = None
+    override.monitor_one_hour_sent_at = None
+    override.monitor_five_min_sent_at = None
+    override.departure_question_sent_at = None
+    override.departed_at = None
 
 
 # ─────────────────────────────────────────────────────────
@@ -475,6 +479,66 @@ def mark_reminder_sent(
     db.commit()
     db.refresh(override)
     return override
+
+
+def mark_monitor_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    schedule_id: int,
+    monitor_key: str,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date, schedule_id=schedule_id)
+    if monitor_key == "one_hour":
+        override.monitor_one_hour_sent_at = sent_at
+    elif monitor_key == "five_min":
+        override.monitor_five_min_sent_at = sent_at
+    else:
+        raise ValueError("monitor_key must be one_hour or five_min")
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_departure_question_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    schedule_id: int,
+    sent_at: datetime,
+):
+    override = get_or_create_override(db, user_id, target_date, schedule_id=schedule_id)
+    override.departure_question_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_departed_for_today(
+    db: Session,
+    user_id: int,
+    target_date,
+    departed_at: datetime,
+    schedule_id: int | None = None,
+) -> list[CommuteOverride]:
+    query = db.query(CommuteOverride).filter(
+        CommuteOverride.user_id == user_id,
+        CommuteOverride.target_date == target_date,
+    )
+    if schedule_id is not None:
+        query = query.filter(CommuteOverride.schedule_id == schedule_id)
+    else:
+        query = query.filter(
+            CommuteOverride.departure_question_sent_at.isnot(None),
+            CommuteOverride.departed_at.is_(None),
+        )
+    overrides = query.all()
+    for override in overrides:
+        override.departed_at = departed_at
+    if overrides:
+        db.commit()
+    return overrides
 
 
 def clear_today_reminder_state_db(db: Session, user_id: int, target_date, schedule_id: int | None = None):
