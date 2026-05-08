@@ -17,6 +17,7 @@ from app.crud import (
     get_or_create_profile,
     get_profile,
     get_commute_schedules,
+    delete_commute_schedule,
     ensure_household_for_user,
     join_household_by_code,
     set_pending_field,
@@ -79,6 +80,7 @@ SETTINGS_QR = [
     {"type": "uri",     "label": "➕ 新增排程設定",  "uri": f"{LIFF_URL}?mode=create"},
     {"type": "message", "label": "📅 一週排程設定",  "text": "一週排程設定"},
     {"type": "message", "label": "✏️ 編輯排程",      "text": "編輯排程"},
+    {"type": "message", "label": "🗑️ 刪除排程",      "text": "刪除排程"},
     {"type": "message", "label": "🔔 開啟自動提醒",  "text": "開啟自動提醒"},
     {"type": "message", "label": "🔕 關閉自動提醒",  "text": "關閉自動提醒"},
     {"type": "message", "label": "📋 查看提醒設定",  "text": "查看提醒設定"},
@@ -126,6 +128,7 @@ COMMAND_ALIASES = {
     "add_schedule":         {"新增排程設定", "新增排程"},
     "weekly_schedule":      {"一週排程設定", "一周排程設定", "一週排程", "一周排程", "查看一週排程設定"},
     "edit_schedule":        {"編輯排程", "修改排程"},
+    "delete_schedule":      {"刪除排程", "刪除排程設定", "移除排程"},
     "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結"},
     "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結", "家庭看板", "開啟家庭看板"},
     "join_household":       {"加入家庭", "加入家庭群組", "綁定家庭"},
@@ -179,6 +182,19 @@ def build_dashboard_url(request: Request, line_user_id: str, view: str = "person
 def first_schedule_for_date(schedules, target_date: date):
     matched = active_schedules_for_date(schedules, target_date)
     return matched[0] if matched else None
+
+
+def parse_delete_schedule_id(command_text: str) -> int | None:
+    prefix = "刪除排程"
+    if not command_text.startswith(prefix):
+        return None
+    raw_id = command_text.removeprefix(prefix).replace("設定", "")
+    if not raw_id:
+        return None
+    try:
+        return int(raw_id)
+    except ValueError:
+        return None
 
 
 def parse_household_invite_code(user_text: str) -> str | None:
@@ -324,12 +340,14 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 ("新增排程設定", "新增一組通勤排程；新增流程不會直接覆蓋舊排程"),
                 ("一週排程設定", "查看目前一整週的啟用日、到達時間與目的地，無關表單填寫"),
                 ("編輯排程", "先選擇要修改的排程，再進行部分修改"),
+                ("刪除排程", "選擇不再使用的排程，刪除後不會再出現在提醒與看板"),
                 ("查看目前設定", "傳送「查看設定」查看已儲存的通勤資訊"),
             ],
             [
                 uri_btn("➕ 新增排程設定", create_url),
                 btn("📅 一週排程設定", "一週排程設定"),
                 btn("✏️ 編輯排程", "編輯排程"),
+                btn("🗑️ 刪除排程", "刪除排程"),
                 btn("📊 查看設定", "查看設定"),
             ]
         ),
@@ -534,6 +552,67 @@ async def line_webhook(
                     reply_token,
                     "新增排程設定會建立新的通勤排程，不會直接覆蓋既有排程。",
                     [{"type": "uri", "label": "➕ 新增排程設定", "uri": build_liff_url("create")}],
+                )
+                continue
+
+            delete_schedule_id = parse_delete_schedule_id(command_text)
+            if command_text in COMMAND_ALIASES["delete_schedule"] or delete_schedule_id is not None:
+                schedules = get_commute_schedules(db, line_user_id)
+                if not schedules:
+                    await reply_with_quick_reply(
+                        reply_token,
+                        "目前尚未建立排程，沒有可刪除的項目。",
+                        [{"type": "uri", "label": "➕ 新增排程設定", "uri": build_liff_url("create")}],
+                    )
+                    continue
+
+                if delete_schedule_id is not None:
+                    target_schedule = next((s for s in schedules if s.id == delete_schedule_id), None)
+                    if target_schedule is None and 1 <= delete_schedule_id <= len(schedules):
+                        target_schedule = schedules[delete_schedule_id - 1]
+                    if target_schedule is None:
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "找不到這筆排程，請重新選擇要刪除的排程。",
+                            MAIN_MENU_QR,
+                        )
+                        continue
+
+                    deleted = delete_commute_schedule(db, line_user_id, target_schedule.id)
+                    if not deleted:
+                        await reply_with_quick_reply(
+                            reply_token,
+                            "刪除失敗：找不到這筆排程，或它已經被刪除。",
+                            MAIN_MENU_QR,
+                        )
+                        continue
+                    remaining = get_commute_schedules(db, line_user_id)
+                    await reply_with_quick_reply(
+                        reply_token,
+                        f"✅ 已刪除排程：{schedule_arrival_time(deleted)} 到{schedule_destination(deleted)}。\n"
+                        f"目前剩餘排程：{len(remaining)} 筆。",
+                        MAIN_MENU_QR,
+                    )
+                    continue
+
+                schedule_lines = []
+                delete_buttons = []
+                for index, schedule in enumerate(schedules, start=1):
+                    schedule_lines.append(
+                        f"{index}. {schedule_arrival_time(schedule)} 到{schedule_destination(schedule)}"
+                        f"（{format_weekdays(schedule.days)}）"
+                    )
+                    if len(delete_buttons) < 10:
+                        delete_buttons.append({
+                            "type": "message",
+                            "label": f"🗑️ 刪除 {index}",
+                            "text": f"刪除排程 {schedule.id}",
+                        })
+                await reply_with_quick_reply(
+                    reply_token,
+                    "請選擇要刪除的排程：\n"
+                    + "\n".join(schedule_lines),
+                    delete_buttons,
                 )
                 continue
 

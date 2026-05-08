@@ -15,6 +15,7 @@ from app.webhook import router as webhook_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
 from app.crud import (
     upsert_commute_schedule,
+    delete_commute_schedule,
     get_commute_schedules,
     get_commute_schedules_by_user_id,
     get_household_members,
@@ -169,6 +170,11 @@ class ScheduleSubmitPayload(BaseModel):
     scheduleId: Optional[int] = None        # edit 時指定要修改的排程
 
 
+class ScheduleDeletePayload(BaseModel):
+    userId: str
+    scheduleId: int
+
+
 # ── POST /api/schedule/submit ─────────────────────────────────────────────────
 
 @app.post("/api/schedule/submit")
@@ -251,6 +257,26 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
 
 # ── GET /api/schedule ─────────────────────────────────────────────────────────
 
+def _schedule_response_list(schedules):
+    return [
+        {
+            "scheduleId": s.id,
+            "originName": s.origin_name,
+            "originAddress": s.origin_address,
+            "originLat": s.origin_lat,
+            "originLng": s.origin_lng,
+            "destinationName": s.dest_name,
+            "destinationAddress": s.dest_address,
+            "destLat": s.dest_lat,
+            "destLng": s.dest_lng,
+            "arrivalTime": s.time,
+            "weekdays": s.days,
+            "reminderEnabled": s.reminder_enabled,
+        }
+        for s in schedules
+    ]
+
+
 @app.get("/api/schedule")
 async def get_schedule(
     userId: str = Query(...),
@@ -281,23 +307,50 @@ async def get_schedule(
         "arrivalTime":       schedule.time,
         "weekdays":          schedule.days,
         "reminderEnabled":   schedule.reminder_enabled,
-        "schedules": [
-            {
-                "scheduleId": s.id,
-                "originName": s.origin_name,
-                "originAddress": s.origin_address,
-                "originLat": s.origin_lat,
-                "originLng": s.origin_lng,
-                "destinationName": s.dest_name,
-                "destinationAddress": s.dest_address,
-                "destLat": s.dest_lat,
-                "destLng": s.dest_lng,
-                "arrivalTime": s.time,
-                "weekdays": s.days,
-                "reminderEnabled": s.reminder_enabled,
-            }
-            for s in schedules
-        ],
+        "schedules": _schedule_response_list(schedules),
+    }
+
+
+# ── DELETE /api/schedule ──────────────────────────────────────────────────────
+
+@app.delete("/api/schedule")
+async def delete_schedule(
+    userId: str = Query(...),
+    scheduleId: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    schedule = delete_commute_schedule(db, userId, scheduleId)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="找不到指定排程，或該排程已刪除")
+    schedules = get_commute_schedules(db, userId)
+    return {
+        "ok": True,
+        "message": "排程已刪除",
+        "deletedScheduleId": schedule.id,
+        "schedules": _schedule_response_list(schedules),
+    }
+
+
+@app.delete("/api/schedule/{schedule_id}")
+async def delete_schedule_by_path(
+    schedule_id: int,
+    userId: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    return await delete_schedule(userId=userId, scheduleId=schedule_id, db=db)
+
+
+@app.post("/api/schedule/delete")
+async def post_delete_schedule(payload: ScheduleDeletePayload, db: Session = Depends(get_db)):
+    schedule = delete_commute_schedule(db, payload.userId, payload.scheduleId)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="找不到指定排程，或該排程已刪除")
+    schedules = get_commute_schedules(db, payload.userId)
+    return {
+        "ok": True,
+        "message": "排程已刪除",
+        "deletedScheduleId": schedule.id,
+        "schedules": _schedule_response_list(schedules),
     }
 
 
