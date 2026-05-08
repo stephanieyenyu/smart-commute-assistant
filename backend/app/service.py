@@ -229,6 +229,8 @@ async def calculate_departure_time_by_mode_fast(
                 "並確保不晚於目標抵達時間"
             )
             return {
+                "departure_date": departure_dt.date().isoformat(),
+                "departure_datetime": departure_dt.replace(tzinfo=TAIPEI_TZ).isoformat(),
                 "departure_time": departure_dt.strftime("%H:%M"),
                 "baseline_minutes": baseline_minutes,
                 "mode_extra_minutes": max(0, total_minutes - baseline_minutes - weather_buffer_minutes),
@@ -249,6 +251,8 @@ async def calculate_departure_time_by_mode_fast(
         walk_note = f"、步行到捷運站約 {walk_minutes} 分鐘" if walk_minutes is not None else ""
         mode_note = f"以捷運通勤總時間 {baseline_minutes} 分鐘{walk_note}回推，確保不晚於目標抵達時間"
         return {
+            "departure_date": departure_dt.date().isoformat(),
+            "departure_datetime": departure_dt.replace(tzinfo=TAIPEI_TZ).isoformat(),
             "departure_time": departure_dt.strftime("%H:%M"),
             "baseline_minutes": baseline_minutes,
             "mode_extra_minutes": 0,
@@ -260,6 +264,8 @@ async def calculate_departure_time_by_mode_fast(
     departure_dt = latest_on_time_departure - timedelta(minutes=mode_extra_minutes)
 
     return {
+        "departure_date": departure_dt.date().isoformat(),
+        "departure_datetime": departure_dt.replace(tzinfo=TAIPEI_TZ).isoformat(),
         "departure_time": departure_dt.strftime("%H:%M"),
         "baseline_minutes": baseline_minutes,
         "mode_extra_minutes": mode_extra_minutes,
@@ -1088,6 +1094,8 @@ def build_commute_display_payload(plan: dict) -> dict:
     full_transport = _get_transport_line(plan)
     display = {
         "targetDate": plan["target_date"].isoformat(),
+        "departureDate": plan.get("departure_calc", {}).get("departure_date") or plan["target_date"].isoformat(),
+        "departureDateTime": plan.get("departure_calc", {}).get("departure_datetime"),
         "estimatedDepartureTime": plan["final_departure_time"],
         "targetArrivalTime": plan["effective_arrival_time"],
         "estimatedCommuteTime": f"約 {plan['baseline_minutes']} 分鐘",

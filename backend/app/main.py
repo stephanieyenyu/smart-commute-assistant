@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,7 @@ from app.google_maps import geocode_address
 from app.dashboard_view import render_dashboard_html
 from app.models import User
 from app.schedule_summary import (
+    active_schedules_for_date,
     build_member_status_payload,
     build_schedule_status_payload,
     dashboard_target_schedule,
@@ -370,6 +371,18 @@ def get_user_for_dashboard(db: Session, line_user_id: str):
     return db.query(User).filter(User.line_user_id == line_user_id).first()
 
 
+def dashboard_commute_target_schedule(schedules, now_dt: datetime):
+    """Use the same priority as LINE today advice: today's first schedule, then tomorrow."""
+    today_schedules = active_schedules_for_date(schedules, now_dt.date())
+    if today_schedules:
+        return now_dt.date(), today_schedules[0]
+    tomorrow = now_dt.date() + timedelta(days=1)
+    tomorrow_schedules = active_schedules_for_date(schedules, tomorrow)
+    if tomorrow_schedules:
+        return tomorrow, tomorrow_schedules[0]
+    return None, None
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
     return HTMLResponse(render_dashboard_html(), headers={"Cache-Control": "no-store, max-age=0"})
@@ -399,7 +412,7 @@ async def dashboard_status(
     mode_label = TRANSPORT_MODE_NAME_MAP.get(today_mode or "auto", "自動判斷")
     schedule_payload = build_schedule_status_payload(schedules, profile, mode_label, now_dt=now_dt)
     commute_display = None
-    commute_target_date, commute_schedule = dashboard_target_schedule(schedules, now_dt=now_dt)
+    commute_target_date, commute_schedule = dashboard_commute_target_schedule(schedules, now_dt=now_dt)
     if user and commute_target_date and commute_schedule:
         commute_mode = get_transport_mode_override(db, user.id, commute_target_date)
         commute_payload = await build_today_commute_payload(

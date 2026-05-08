@@ -200,6 +200,8 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:05")
+        self.assertEqual(result["departure_date"], "2026-05-02")
+        self.assertIn("2026-05-02T08:05:00", result["departure_datetime"])
 
     def test_bus_departure_never_later_than_latest_on_time_departure(self):
         self.service._now_taipei_naive = lambda: datetime(2026, 5, 2, 8, 0)
@@ -222,6 +224,7 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:25")
+        self.assertEqual(result["departure_date"], "2026-05-02")
 
     def test_metro_departure_uses_transit_duration_without_extra_wait_penalty(self):
         result = asyncio.run(
@@ -235,6 +238,7 @@ class Phase0RegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["departure_time"], "08:42")
+        self.assertEqual(result["departure_date"], "2026-05-02")
 
 
 if __name__ == "__main__":
