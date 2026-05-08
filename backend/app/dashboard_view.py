@@ -248,13 +248,14 @@ def render_dashboard_html() -> str:
 
     function startDepartureCountdown(commute) {
       if (countdownTimer) clearInterval(countdownTimer);
+      const isoText = commute && commute.departureDateTime;
       const timeText = commute && commute.estimatedDepartureTime;
-      const dateText = commute && commute.targetDate;
-      if (!timeText || !dateText) {
+      const dateText = commute && (commute.departureDate || commute.targetDate);
+      if (!isoText && (!timeText || !dateText)) {
         text("departureCountdown", "尚未取得出門時間");
         return;
       }
-      const target = new Date(`${dateText}T${timeText}:00+08:00`);
+      const target = isoText ? new Date(isoText) : new Date(`${dateText}T${timeText}:00+08:00`);
       const render = () => {
         const diffMs = target.getTime() - Date.now();
         if (!Number.isFinite(diffMs)) {
