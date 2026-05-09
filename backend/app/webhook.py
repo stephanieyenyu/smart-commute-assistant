@@ -136,7 +136,7 @@ COMMAND_ALIASES = {
     "basic_settings":       {"基本設定"},
     "board_management_help":{"看板管理說明"},
 }
-}
+
 
 TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "看板", "系統設定")
 
