@@ -137,20 +137,23 @@ COMMAND_ALIASES = {
     "board_management_help":{"看板管理說明"},
 }
 
-TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "看板", "系統設定")
+TOPIC_CARD_TITLES = ("通勤選單", "排程設定", "時間設定", "基本設定", "看板管理", "指令說明")
 
 TOPIC_CARD_ALIASES = {
-    "設定通勤路線": "設定通勤路線",
-    "通勤路線": "設定通勤路線",
-    "通勤建議": "通勤建議",
-    "交通建議": "通勤建議",
-    "交通方式": "交通方式",
-    "通勤方式": "交通方式",
-    "看板": "看板",
-    "看板管理": "看板",
-    "Dashboard": "看板",
-    "dashboard": "看板",
-    "系統設定": "系統設定",
+    "通勤選單": "通勤選單",
+    "通勤建議": "通勤選單",
+    "交通方式": "通勤選單",
+    "通勤方式": "通勤選單",
+    "交通建議": "通勤選單",
+    "排程設定": "排程設定",
+    "設定通勤路線": "排程設定",
+    "通勤路線": "排程設定",
+    "時間設定": "時間設定",
+    "基本設定": "基本設定",
+    "看板管理": "看板管理",
+    "看板": "看板管理",
+    "Dashboard": "看板管理",
+    "dashboard": "看板管理",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -281,28 +284,9 @@ def build_commute_advice_flex(plan: dict) -> dict:
 
 
 def _build_help_cards_by_title() -> dict[str, dict]:
-    """Build reusable topic bubbles for 指令說明 and single-topic replies."""
-    create_url = build_liff_url("create")
+    """Build reusable topic bubbles for 指令說明 and single-topic replies (text-only, no buttons)."""
 
-    def btn(label: str, text: str, style: str = "secondary") -> dict:
-        return {
-            "type": "button",
-            "action": {"type": "message", "label": label, "text": text},
-            "style": style,
-            "height": "sm",
-            "margin": "xs",
-        }
-
-    def uri_btn(label: str, uri: str) -> dict:
-        return {
-            "type": "button",
-            "action": {"type": "uri", "label": label, "uri": uri},
-            "style": "primary",
-            "height": "sm",
-            "margin": "xs",
-        }
-
-    def bubble(header_color: str, icon: str, title: str, rows: list, footer_btns: list) -> dict:
+    def bubble(header_color: str, icon: str, title: str, rows: list) -> dict:
         body_contents = [
             {"type": "text", "text": title, "weight": "bold",
              "size": "lg", "color": "#1a1a2e", "margin": "none"},
@@ -333,84 +317,65 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 "paddingAll": "14px", "spacing": "sm",
                 "contents": body_contents,
             },
-            "footer": {
-                "type": "box", "layout": "vertical",
-                "spacing": "xs", "paddingAll": "10px",
-                "contents": footer_btns,
-            }
         }
 
     return {
-        "設定通勤路線": bubble("#4a90d9", "🗺️", "設定通勤路線",
+        "通勤選單": bubble("#2563eb", "🚆", "通勤選單",
             [
-                ("新增排程設定", "新增一組通勤排程；新增流程不會直接覆蓋舊排程"),
-                ("一週排程設定", "查看目前一整週的啟用日、到達時間與目的地，無關表單填寫"),
-                ("編輯排程", "先選擇要修改的排程，再進行部分修改"),
-                ("刪除排程", "選擇不再使用的排程，刪除後不會再出現在提醒與看板"),
-                ("查看目前設定", "傳送「查看設定」查看已儲存的通勤資訊"),
-            ],
-            [
-                uri_btn("➕ 新增排程設定", create_url),
-                btn("📅 一週排程設定", "一週排程設定"),
-                btn("✏️ 編輯排程", "編輯排程"),
-                btn("🗑️ 刪除排程", "刪除排程"),
-                btn("📊 查看設定", "查看設定"),
-            ]
-        ),
-        "通勤建議": bubble("#7b68ee", "🚆", "通勤建議",
-            [
-                ("今天通勤建議", "查看今天最佳通勤方式與建議出發時間"),
+                ("今天通勤建議 / 今日通勤建議", "查看今天最佳通勤方式與建議出發時間"),
                 ("明天幾點出門", "預估明天需要幾點出發"),
-                ("修改今天到公司時間", "臨時更改今天的到達時間"),
-            ],
-            [
-                btn("🚆 今天通勤建議", "今天通勤建議", "primary"),
-                btn("⏰ 明天幾點出門", "明天幾點出門"),
-                btn("✏️ 修改今天時間", "修改今天到公司時間"),
-            ]
-        ),
-        "交通方式": bubble("#27ae60", "🚌", "交通方式",
-            [
                 ("今天搭公車", "強制切換為公車優先模式"),
                 ("今天搭捷運", "強制切換為捷運優先模式"),
-                ("最短時間優先", "Google 推薦最短路徑"),
-                ("今天自動判斷", "恢復自動判斷最佳交通"),
-            ],
-            [
-                btn("🚌 今天搭公車", "今天搭公車"),
-                btn("🚇 今天搭捷運", "今天搭捷運"),
-                btn("🚄 最短時間優先", "優先選擇通勤時間短"),
+                ("優先選擇通勤時間短", "Google 推薦最短路徑優先"),
+                ("今天自動判斷", "恢復自動判斷最佳交通方式"),
+                ("已出門", "確認已出門，停止今天後續提醒"),
             ]
         ),
-        "看板": bubble("#0f766e", "📺", "看板管理",
+        "排程設定": bubble("#4a90d9", "🗺️", "排程設定",
             [
-                ("排程看板 / 個人看板連結", "開啟只顯示自己通勤資訊的即時看板"),
+                ("新增排程設定", "建立新的通勤排程，不會覆蓋既有排程"),
+                ("一週排程設定", "查看整週啟用日、到達時間與目的地"),
+                ("編輯排程", "選擇要修改的排程後進行部分修改"),
+                ("刪除排程", "選擇不再使用的排程，刪除後不再出現在提醒與看板"),
+                ("查看設定", "查看已儲存的通勤路線資訊"),
+            ]
+        ),
+        "時間設定": bubble("#7b68ee", "⏰", "時間設定",
+            [
+                ("修改今天到公司時間", "臨時更改今天的到達時間"),
+                ("修改明天到公司時間", "預先設定明天的到達時間"),
+                ("直接輸入 HH:MM", "輸入時間數字（如 09:30）直接設定今天到達時間"),
+            ]
+        ),
+        "基本設定": bubble("#e67e22", "⚙️", "基本設定",
+            [
+                ("基本設定", "顯示 LIFF 設定頁面、查看設定與通勤建議的快捷入口"),
+                ("系統設定 / 系統設定選單", "顯示完整系統設定操作選單"),
+                ("開啟自動提醒", "啟用每日自動出發提醒"),
+                ("關閉自動提醒", "停用每日自動出發提醒"),
+                ("查看提醒設定", "查看目前提醒開關狀態與啟用排程數"),
+            ]
+        ),
+        "看板管理": bubble("#0f766e", "📺", "看板管理",
+            [
+                ("個人看板連結 / 排程看板", "開啟顯示個人通勤資訊的即時看板"),
                 ("家庭看板連結", "開啟家庭檢視看板，方便共用螢幕查看"),
                 ("看板管理說明", "查看看板功能說明與外接螢幕設定指引"),
-            ],
-            [
-                btn("📺 排程看板連結", "個人看板連結", "primary"),
-                btn("🏠 家庭看板連結", "家庭看板連結"),
-                btn("ℹ️ 看板管理說明", "看板管理說明"),
+                ("加入家庭 [邀請碼]", "輸入邀請碼加入家庭通勤群組"),
             ]
         ),
-        "系統設定": bubble("#e67e22", "⚙️", "系統設定",
+        "指令說明": bubble("#475569", "📖", "指令說明",
             [
-                ("系統設定選單", "顯示完整設定選單"),
-                ("開啟/關閉自動提醒", "控制每日自動出發提醒"),
-                ("查看提醒設定", "查看目前提醒開關狀態"),
-            ],
-            [
-                btn("⚙️ 系統設定選單", "系統設定選單", "primary"),
-                btn("🔔 開啟自動提醒", "開啟自動提醒"),
-                btn("🔕 關閉自動提醒", "關閉自動提醒"),
+                ("指令說明 / 說明 / help", "顯示全部六大功能分類的說明卡片"),
+                ("傳送主題名稱", "直接輸入主題關鍵字可單獨查看該分類說明"),
+                ("可用主題關鍵字", "通勤選單、排程設定、時間設定、基本設定、看板管理"),
             ]
         ),
     }
 
 
 def build_help_flex() -> list[dict]:
-    """Build Flex Message Carousel for 指令說明 — each bubble has footer action buttons."""
+    """Build Flex Message Carousel for 指令說明 — text-only bubbles, no buttons."""
     cards_by_title = _build_help_cards_by_title()
     return [cards_by_title[title] for title in TOPIC_CARD_TITLES]
 
