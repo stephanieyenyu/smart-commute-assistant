@@ -170,14 +170,14 @@ def set_user_display_name(db: Session, user_id: int, display_name: str) -> User:
     return user
 
 
-def get_users_for_household(db: Session, household_id: str = "default") -> list[User]:
-    household_id = (household_id or "default").strip() or "default"
-    query = db.query(User)
-    if household_id == "default":
-        query = query.filter(or_(User.household_id == "default", User.household_id.is_(None)))
-    else:
-        query = query.filter(User.household_id == household_id)
-    return query.order_by(User.id.asc()).all()
+def get_users_for_household(db: Session, household_id: str | int | None = "default") -> list[User]:
+    if household_id is None or str(household_id).strip() in {"", "default"}:
+        return db.query(User).filter(User.household_id.is_(None)).order_by(User.id.asc()).all()
+    try:
+        household_id_int = int(household_id)
+    except (TypeError, ValueError):
+        return []
+    return db.query(User).filter(User.household_id == household_id_int).order_by(User.id.asc()).all()
 
 
 def set_pending_field(db: Session, user_id: int, field_name: str | None):

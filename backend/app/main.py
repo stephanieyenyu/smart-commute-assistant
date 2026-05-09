@@ -343,6 +343,17 @@ class ScheduleSubmitPayload(BaseModel):
             return None
         return None
 
+    @model_validator(mode="after")
+    def require_manual_route_fields(self):
+        is_partial_edit = self.mode == "edit" and self.scheduleId is not None
+        if is_partial_edit:
+            return self
+        if not (self.originAddress or self.originName):
+            raise ValueError("originAddress 不可為空，請在 LIFF 手動輸入出發地")
+        if not (self.destinationName or self.destinationAddress):
+            raise ValueError("destination 不可為空，請在 LIFF 手動輸入目的地")
+        return self
+
 
 class ScheduleDeletePayload(BaseModel):
     userId: str
@@ -461,11 +472,13 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
         origin_lng = payload.originLng
         dest_lat   = payload.destLat
         dest_lng   = payload.destLng
+        origin_address = payload.originAddress or payload.originName
+        destination_address = payload.destinationAddress or payload.destinationName
 
         # 出發地：若無座標，嘗試 geocode
-        if (origin_lat is None or origin_lng is None) and payload.originAddress:
+        if (origin_lat is None or origin_lng is None) and origin_address:
             try:
-                geo = await geocode_address(payload.originAddress)
+                geo = await geocode_address(origin_address)
                 if geo:
                     origin_lat = geo.get("lat") or origin_lat
                     origin_lng = geo.get("lng") or origin_lng
@@ -476,9 +489,9 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
                 print(f"[geocode origin] error={geo_err}")
 
         # 目的地：若無座標，嘗試 geocode
-        if (dest_lat is None or dest_lng is None) and payload.destinationAddress:
+        if (dest_lat is None or dest_lng is None) and destination_address:
             try:
-                geo = await geocode_address(payload.destinationAddress)
+                geo = await geocode_address(destination_address)
                 if geo:
                     dest_lat = geo.get("lat") or dest_lat
                     dest_lng = geo.get("lng") or dest_lng
@@ -490,11 +503,11 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
         # 將前端欄位名稱轉換為內部格式
         data = {
             "originName":      payload.originName,
-            "originAddress":   payload.originAddress,
+            "originAddress":   origin_address,
             "originLat":       origin_lat,
             "originLng":       origin_lng,
             "destName":        payload.destinationName,
-            "destAddress":     payload.destinationAddress,
+            "destAddress":     destination_address,
             "destLat":         dest_lat,
             "destLng":         dest_lng,
             "time":            payload.arrivalTime,

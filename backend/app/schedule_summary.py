@@ -66,11 +66,7 @@ def schedule_origin(schedule, profile=None) -> str:
             or getattr(schedule, "origin_address", None)
             or "尚未設定"
         )
-    return (
-        getattr(profile, "home_place_name", None)
-        or getattr(profile, "home_address", None)
-        or "尚未設定"
-    )
+    return "尚未設定"
 
 
 def schedule_arrival_time(schedule, profile=None) -> str:

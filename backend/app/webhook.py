@@ -129,7 +129,7 @@ COMMAND_ALIASES = {
     "weekly_schedule":      {"一週排程設定", "一周排程設定", "一週排程", "一周排程", "查看一週排程設定"},
     "edit_schedule":        {"編輯排程", "修改排程"},
     "delete_schedule":      {"刪除排程", "刪除排程設定", "移除排程"},
-    "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結", "取得個人dashboard連結", "排程看板"},
+    "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結", "取得個人dashboard連結", "取得個人Dashboard連結", "個人dashboard連結", "個人Dashboard連結", "排程看板"},
     "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結", "家庭看板", "開啟家庭看板"},
     "join_household":       {"加入家庭", "加入家庭群組", "綁定家庭"},
     "departed":             {"已出門", "我已出門"},
@@ -176,7 +176,12 @@ def public_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def build_dashboard_url(request: Request, line_user_id: str, view: str = "personal") -> str:
+def build_dashboard_url(
+    request: Request,
+    line_user_id: str,
+    view: str = "personal",
+    household_id: int | str | None = None,
+) -> str:
     query = urlencode({"userId": line_user_id, "view": view})
     return f"{public_base_url(request)}/dashboard?{query}"
 
@@ -924,7 +929,8 @@ async def line_webhook(
 
             # ── 問候語 ────────────────────────────────────────────────────
             if command_text in {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}:
-                schedule = user.schedule
+                schedules = get_commute_schedules(db, line_user_id)
+                schedule = first_schedule_for_date(schedules, today_date) or (schedules[0] if schedules else None)
                 if schedule and schedule.origin_address:
                     await reply_with_quick_reply(
                         reply_token,
