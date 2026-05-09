@@ -425,6 +425,10 @@ async def line_webhook(
     request: Request,
     x_line_signature: str | None = Header(default=None),
 ):
+    print("====== 🚨 收到 LINE Webhook 敲門了！ ======")
+    body = await request.body()
+    body_str = body.decode("utf-8")
+    print(f"📦 裡面的內容是：{body_str}")
     body = await request.body()
     body_str = body.decode("utf-8")
     try:
