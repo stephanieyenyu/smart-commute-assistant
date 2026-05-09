@@ -751,9 +751,8 @@ async def _compute_today_plan(
     force_mode_override: str | None = None,
     schedule_id: int | None = None,
 ):
-    try:
-        if target_date is None:
-            target_date = datetime.now(TAIPEI_TZ).date()
+    if target_date is None:
+        target_date = datetime.now(TAIPEI_TZ).date()
 
     profile = _profile_snapshot(get_profile(db, user_id))
 
@@ -776,7 +775,8 @@ async def _compute_today_plan(
             text = f"{target_date.isoformat()} 目前沒有設定排程喔！"
         return {"ok": False, "reason": "no_schedule_for_date", "text": text}
     if schedule:
-        # 出發地一律由 LIFF 設定，不再 fallback 到舊的 profile.home_address
+        # Always sync from schedule — never fall back to stale profile home data.
+        # Origin must be explicitly set by the user in LIFF, same as destination.
         profile.home_address = schedule.origin_address
         profile.home_place_name = schedule.origin_name
         profile.home_lat = schedule.origin_lat
@@ -784,7 +784,9 @@ async def _compute_today_plan(
         if schedule.dest_address:
             profile.office_address = schedule.dest_address
             profile.office_place_name = schedule.dest_name
+        if schedule.dest_lat is not None:
             profile.office_lat = schedule.dest_lat
+        if schedule.dest_lng is not None:
             profile.office_lng = schedule.dest_lng
 
     # 使用本次選中的排程時間，避免多排程時拿到其他目的地的 profile 舊值。
@@ -804,93 +806,44 @@ async def _compute_today_plan(
         effective_arrival_time = override.target_arrival_time
         used_override = True
 
-        stored_mode_override = get_transport_mode_override(db, user_id, target_date)
-        mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
+    stored_mode_override = get_transport_mode_override(db, user_id, target_date)
+    mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
 
-        print(f"[compute-plan] calling Google Maps API: mode_override={mode_override}")
+    # Keep user-facing advice fast: route details already include the duration, so
+    # do not make a second Google Routes call just to calculate baseline minutes.
+    weather_info, option_choice = await asyncio.gather(
+        safe_call(get_commute_weather(profile), timeout_seconds=2.2),
+        safe_call(choose_commute_option_with_override(
+            profile=profile,
+            effective_arrival_time=effective_arrival_time,
+            weather_buffer_minutes=0,
+            target_date=target_date,
+            mode_override=mode_override,
+        ), timeout_seconds=4.8),
+    )
+    weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
+    weather_buffer = weather_info.get("extra_buffer_minutes", 0)
+    option_choice = option_choice or {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
+    best_option = option_choice.get("best_option", {}) or {}
+    selection_source = option_choice.get("selection_source", "auto")
+    baseline_minutes = _google_duration_from_option(best_option) or DEFAULT_COMMUTE_MINUTES
 
-        # Inject effective origin into profile for API calls (智慧參數帶入)
-        api_profile = profile
-        if effective_origin_lat is not None and effective_origin_lng is not None:
-            # 使用經緯度（優先）
-            if effective_origin_lat != home_lat or effective_origin_lng != home_lng:
-                api_profile = SimpleNamespace(**profile.__dict__)
-                api_profile.home_lat = effective_origin_lat
-                api_profile.home_lng = effective_origin_lng
-                print(f"[compute-plan] API call using origin coordinates: ({effective_origin_lat},{effective_origin_lng})")
-        elif effective_origin_address and effective_origin_address.strip():
-            # 使用地址字串（備援）
-            if effective_origin_address != home_address:
-                api_profile = SimpleNamespace(**profile.__dict__)
-                api_profile.home_address = effective_origin_address
-                print(f"[compute-plan] API call using origin address: {effective_origin_address}")
-        
-        # 目的地也使用智慧參數帶入
-        if office_lat is not None and office_lng is not None:
-            print(f"[compute-plan] API call using destination coordinates: ({office_lat},{office_lng})")
-        elif office_address and office_address.strip():
-            print(f"[compute-plan] API call using destination address: {office_address}")
+    departure_calc = await calculate_departure_time_by_mode_fast(
+        target_date=target_date,
+        effective_arrival_time=effective_arrival_time,
+        baseline_minutes=baseline_minutes,
+        weather_buffer_minutes=weather_buffer,
+        best_option=best_option,
+    )
 
-        try:
-            weather_info, option_choice = await asyncio.gather(
-                safe_call(get_commute_weather(api_profile), timeout_seconds=1.5),
-                safe_call(choose_commute_option_with_override(
-                    profile=api_profile,
-                    effective_arrival_time=effective_arrival_time,
-                    weather_buffer_minutes=0,
-                    target_date=target_date,
-                    mode_override=mode_override,
-                ), timeout_seconds=3.5),
-            )
-            print(f"[compute-plan] API calls completed: weather={weather_info is not None} option={option_choice is not None}")
-        except Exception as e:
-            print(f"[compute-plan] API calls failed: {e}")
-            traceback.print_exc()
-            # 即使 API 失敗也嘗試繼續使用預設值
-            weather_info = {"extra_buffer_minutes": 0, "weather_text": "未知", "temperature": None, "pop": None}
-            option_choice = {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
+    final_departure_time = departure_calc["departure_time"]
+    recommended_mode = best_option.get("mode", "google_transit")
 
-        print(f"[compute-plan] weather={weather_info is not None} option_choice={option_choice is not None}")
-        weather_info = weather_info or {"extra_buffer_minutes": 0, "weather_text": "未知"}
-        weather_buffer = weather_info.get("extra_buffer_minutes", 0)
-        option_choice = option_choice or {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
-        best_option = option_choice.get("best_option", {}) or {}
-        selection_source = option_choice.get("selection_source", "auto")
-        baseline_minutes = _google_duration_from_option(best_option) or DEFAULT_COMMUTE_MINUTES
-        print(f"[compute-plan] baseline_minutes={baseline_minutes} best_mode={best_option.get('mode')}")
-
-        try:
-            departure_calc = await calculate_departure_time_by_mode_fast(
-                target_date=target_date,
-                effective_arrival_time=effective_arrival_time,
-                baseline_minutes=baseline_minutes,
-                weather_buffer_minutes=weather_buffer,
-                best_option=best_option,
-            )
-        except Exception as e:
-            print(f"[compute-plan] departure_calc error: {e}")
-            traceback.print_exc()
-            return {
-                "ok": False,
-                "reason": "departure_calc_error",
-                "message": f"計算出門時間時發生錯誤：{str(e)}",
-            }
-
-        final_departure_time = departure_calc["departure_time"]
-        recommended_mode = best_option.get("mode", "google_transit")
-
-        today = datetime.now(TAIPEI_TZ).date()
-        if target_date == today:
-            target_label = "今天"
-        elif target_date == today + timedelta(days=1):
-            target_label = "明天"
-        else:
-            target_label = target_date.isoformat()
-        note = (
-            f"{target_label}使用臨時{arrival_label(destination_label)}：{effective_arrival_time}"
-            if used_override
-            else f"{target_label}使用固定{arrival_label(destination_label)}：{effective_arrival_time}"
-        )
+    note = (
+        f"已套用今天覆蓋到公司時間：{effective_arrival_time}"
+        if used_override
+        else f"目前使用預設到公司時間：{effective_arrival_time}"
+    )
 
     return {
         "ok": True,
@@ -909,15 +862,6 @@ async def _compute_today_plan(
         "mode_override": mode_override,
         "schedule_id": getattr(schedule, "id", None),
     }
-
-    except Exception as e:
-        print(f"[compute-plan] UNEXPECTED CRASH: {e}")
-        traceback.print_exc()
-        return {
-            "ok": False,
-            "reason": "unexpected_error",
-            "message": f"系統內部錯誤：{str(e)}",
-        }
 
 
 def _walk_metres(walk_minutes) -> str | None:
