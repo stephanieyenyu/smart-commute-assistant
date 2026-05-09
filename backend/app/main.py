@@ -256,7 +256,7 @@ class ScheduleSubmitPayload(BaseModel):
             "originAddress": ("originAddress", "origin_address", "homeAddress", "home_address", "startAddress", "start_address"),
             "originLat": ("originLat", "origin_lat", "homeLat", "home_lat", "startLat", "start_lat"),
             "originLng": ("originLng", "origin_lng", "homeLng", "home_lng", "startLng", "start_lng"),
-            "destinationName": ("destinationName", "destination_name", "destName", "dest_name", "destinationLabel", "destination_label"),
+            "destinationName": ("destinationName", "destination_name", "destination", "destName", "dest_name", "destinationLabel", "destination_label"),
             "destinationAddress": ("destinationAddress", "destination_address", "destAddress", "dest_address", "officeAddress", "office_address"),
             "destLat": ("destLat", "dest_lat", "destinationLat", "destination_lat", "officeLat", "office_lat"),
             "destLng": ("destLng", "dest_lng", "destinationLng", "destination_lng", "officeLng", "office_lng"),
@@ -529,6 +529,16 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
 
 @app.post("/liff/schedule/submit", include_in_schema=False)
 async def submit_schedule_liff_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
+    return await submit_schedule(payload, db)
+
+
+@app.options("/api/schedule/add", include_in_schema=False)
+async def submit_schedule_add_options():
+    return {"ok": True}
+
+
+@app.post("/api/schedule/add", include_in_schema=False)
+async def submit_schedule_add_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
     return await submit_schedule(payload, db)
 
 
