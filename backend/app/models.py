@@ -45,7 +45,7 @@ class User(Base):
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     destinations = relationship("CommuteDestination", back_populates="user", cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
-
+    schedules = relationship("CommuteSchedule", back_populates="user", cascade="all, delete-orphan")
 
 class CommuteProfile(Base):
     __tablename__ = "commute_profiles"
@@ -96,6 +96,31 @@ class CommuteProfile(Base):
 
     user = relationship("User", back_populates="profile")
 
+class CommuteSchedule(Base):
+    __tablename__ = "commute_schedules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+
+    origin_name = Column(String, nullable=True)
+    origin_address = Column(String, nullable=True)
+    origin_lat = Column(Float, nullable=True)
+    origin_lng = Column(Float, nullable=True)
+
+    dest_name = Column(String, nullable=True)
+    dest_address = Column(String, nullable=True)
+    dest_lat = Column(Float, nullable=True)
+    dest_lng = Column(Float, nullable=True)
+
+    time = Column(String, nullable=True)  # 預計抵達時間 (arrivalTime)
+    days = Column(JSON, nullable=True)    # 適用星期 (weekdays)
+    reminder_enabled = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="schedules")
 
 class CommuteOverride(Base):
     """每日排程狀態記錄：記錄今天的提醒是否已發送、凍結的提醒內容等。"""
