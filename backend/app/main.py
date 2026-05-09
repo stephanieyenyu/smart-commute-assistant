@@ -322,6 +322,27 @@ class ScheduleSubmitPayload(BaseModel):
             raise ValueError("weekdays 只能包含 0 到 6 的數字")
         return days
 
+    @field_validator("scheduleId", mode="before")
+    @classmethod
+    def normalize_schedule_id(cls, value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value) if value.is_integer() else None
+        if isinstance(value, str):
+            raw_value = value.strip()
+            if not raw_value:
+                return None
+            if re.fullmatch(r"\d+", raw_value):
+                return int(raw_value)
+            print(f"[schedule payload] ignoring non-integer scheduleId={raw_value}")
+            return None
+        return None
+
 
 class ScheduleDeletePayload(BaseModel):
     userId: str
