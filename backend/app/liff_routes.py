@@ -67,7 +67,7 @@ async def get_schedule_form(request: Request):
         raise HTTPException(status_code=500, detail="無法載入表單頁面")
 
 
-@api_router.post("/schedule/submit")
+@api_router.post("/schedule/add")
 async def submit_schedule(data: ScheduleSubmitRequest):
     """
     接收 LIFF 表單提交資料
