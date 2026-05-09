@@ -385,7 +385,7 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 ("看板管理說明", "查看看板功能說明與外接螢幕設定指引"),
             ],
             [
-                btn("📺 排程看板連結", "個人看板連結", "primary"),
+                btn("📺 個人看板連結", "個人看板連結", "primary"),
                 btn("🏠 家庭看板連結", "家庭看板連結"),
                 btn("ℹ️ 看板管理說明", "看板管理說明"),
             ]
@@ -716,6 +716,11 @@ async def line_webhook(
                 continue
 
             topic_title = topic_title_for_command(command_text)
+            if topic_title:
+                topic_card = build_topic_help_card(topic_title)
+                if topic_card:
+                    await reply_flex_message(reply_token, topic_title, topic_card)
+                    continue
 
             # ── 指令說明 → Flex Carousel ──────────────────────────────────
             if command_text in COMMAND_ALIASES["help"]:

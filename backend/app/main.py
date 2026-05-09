@@ -53,6 +53,55 @@ def ensure_runtime_schema() -> None:
                     conn.execute(text("ALTER TABLE users ADD COLUMN display_name VARCHAR"))
                 if "household_id" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN household_id INTEGER"))
+                if "created_at" not in user_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text("ALTER TABLE users ADD COLUMN created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+                    else:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN created_at DATETIME"))
+
+            if "commute_profiles" in tables:
+                profile_columns = {column["name"] for column in inspector.get_columns("commute_profiles")}
+                profile_string_columns = (
+                    "home_township",
+                    "home_place_name",
+                    "office_township",
+                    "office_place_name",
+                    "selected_bus_stop_id",
+                    "selected_bus_stop_name",
+                    "selected_metro_station_id",
+                    "selected_metro_station_name",
+                    "preferred_mode",
+                )
+                profile_float_columns = (
+                    "selected_bus_stop_lat",
+                    "selected_bus_stop_lng",
+                    "selected_metro_station_lat",
+                    "selected_metro_station_lng",
+                )
+                profile_integer_columns = (
+                    "last_computed_walk_to_bus_stop_min",
+                    "last_computed_walk_to_metro_min",
+                )
+                for column_name in profile_string_columns:
+                    if column_name not in profile_columns:
+                        conn.execute(text(f"ALTER TABLE commute_profiles ADD COLUMN {column_name} VARCHAR"))
+                for column_name in profile_float_columns:
+                    if column_name not in profile_columns:
+                        conn.execute(text(f"ALTER TABLE commute_profiles ADD COLUMN {column_name} FLOAT"))
+                for column_name in profile_integer_columns:
+                    if column_name not in profile_columns:
+                        conn.execute(text(f"ALTER TABLE commute_profiles ADD COLUMN {column_name} INTEGER"))
+                if "reminder_enabled" not in profile_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text("ALTER TABLE commute_profiles ADD COLUMN reminder_enabled BOOLEAN DEFAULT TRUE NOT NULL"))
+                    else:
+                        conn.execute(text("ALTER TABLE commute_profiles ADD COLUMN reminder_enabled BOOLEAN DEFAULT 1 NOT NULL"))
+                for column_name in ("created_at", "updated_at"):
+                    if column_name not in profile_columns:
+                        if dialect == "postgresql":
+                            conn.execute(text(f"ALTER TABLE commute_profiles ADD COLUMN {column_name} TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+                        else:
+                            conn.execute(text(f"ALTER TABLE commute_profiles ADD COLUMN {column_name} DATETIME"))
 
             if "commute_schedules" in tables:
                 schedule_columns = {column["name"] for column in inspector.get_columns("commute_schedules")}
@@ -107,6 +156,8 @@ def ensure_runtime_schema() -> None:
                             conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} TIMESTAMP WITH TIME ZONE"))
                         else:
                             conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} DATETIME"))
+                if "alert_status" not in override_columns:
+                    conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN alert_status VARCHAR"))
                 if dialect == "postgresql":
                     conn.execute(text(
                         "ALTER TABLE commute_overrides "

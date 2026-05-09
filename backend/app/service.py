@@ -703,6 +703,10 @@ async def _compute_today_plan(
         profile.home_lat = schedule.origin_lat
         profile.home_lng = schedule.origin_lng
         if schedule.dest_address:
+            profile.office_address = schedule.dest_address
+            profile.office_place_name = schedule.dest_name
+            profile.office_lat = schedule.dest_lat
+            profile.office_lng = schedule.dest_lng
 
     # 使用本次選中的排程時間，避免多排程時拿到其他目的地的 profile 舊值。
     if schedule and schedule.time:
