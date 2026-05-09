@@ -715,3 +715,21 @@ def clear_today_reminder_state_db(db: Session, user_id: int, target_date, schedu
         _clear_override_reminder_fields(override)
     db.commit()
     return None
+
+def undelete_commute_schedule(db: Session, line_user_id: str, schedule_id: int):
+    """復原被軟刪除的排程"""
+    from app.models import User
+    user = db.query(User).filter(User.line_user_id == line_user_id).first()
+    if not user:
+        return None
+    
+    schedule = _schedule_by_id(db, user.id, schedule_id)
+    if not schedule:
+        return None
+        
+    # 將狀態改回啟用
+    schedule.is_active = True
+    schedule.reminder_enabled = True
+    db.commit()
+    db.refresh(schedule)
+    return schedule
