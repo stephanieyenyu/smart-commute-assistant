@@ -697,20 +697,12 @@ async def _compute_today_plan(
             text = f"{target_date.isoformat()} 目前沒有設定排程喔！"
         return {"ok": False, "reason": "no_schedule_for_date", "text": text}
     if schedule:
-        if schedule.origin_address:
-            profile.home_address = schedule.origin_address
-            profile.home_place_name = schedule.origin_name
-        if schedule.origin_lat is not None:
-            profile.home_lat = schedule.origin_lat
-        if schedule.origin_lng is not None:
-            profile.home_lng = schedule.origin_lng
+        # 出發地一律由 LIFF 設定，不再 fallback 到舊的 profile.home_address
+        profile.home_address = schedule.origin_address
+        profile.home_place_name = schedule.origin_name
+        profile.home_lat = schedule.origin_lat
+        profile.home_lng = schedule.origin_lng
         if schedule.dest_address:
-            profile.office_address = schedule.dest_address
-            profile.office_place_name = schedule.dest_name
-        if schedule.dest_lat is not None:
-            profile.office_lat = schedule.dest_lat
-        if schedule.dest_lng is not None:
-            profile.office_lng = schedule.dest_lng
 
     # 使用本次選中的排程時間，避免多排程時拿到其他目的地的 profile 舊值。
     if schedule and schedule.time:
