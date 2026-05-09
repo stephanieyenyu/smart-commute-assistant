@@ -47,6 +47,7 @@ class User(Base):
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
     schedules = relationship("CommuteSchedule", back_populates="user", cascade="all, delete-orphan")
     household = relationship("Household", back_populates="members")
+    logs = relationship("CommuteLog", back_populates="user")
     
 class CommuteProfile(Base):
     __tablename__ = "commute_profiles"
