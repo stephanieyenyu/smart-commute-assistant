@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.db import Base, engine, SessionLocal
 from app.webhook import router as webhook_router
-from app.liff_routes import router as liff_router, api_router as liff_api_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
 from app.crud import (
     upsert_commute_schedule,
