@@ -3,7 +3,6 @@ import hashlib
 import math
 import re
 import time
-import traceback
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -17,17 +16,13 @@ from app.tdx_bus import (
     simplify_eta_list,
 )
 from app.weather import get_commute_weather
-from app import route_formatter
-from app.commute_schedule import arrival_label, target_label_text
 from app.crud import (
-    effective_commute_setting_for_date,
     get_profile,
     get_next_setup_step,
     get_override_for_date,
     get_transport_mode_override,
     get_commute_schedules_by_user_id,
     save_frozen_reminder,
-    record_commute_plan_log,
 )
 DEFAULT_COMMUTE_MINUTES = 56
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -36,19 +31,15 @@ _TRANSIT_CACHE = {}
 _BUS_CACHE = {}
 _METRO_CACHE = {}
 
-# Weather: 30 min, Transit (Google): 5 min, Bus realtime: 90 sec, Metro: 5 min
-TRANSIT_CACHE_SECONDS = 300   # Google Maps transit — 5 min
-BUS_CACHE_SECONDS = 90        # TDX bus ETA — 90 sec (realtime)
-METRO_CACHE_SECONDS = 300     # Metro station lookup — 5 min
+TRANSIT_CACHE_SECONDS = 180
+BUS_CACHE_SECONDS = 60
+METRO_CACHE_SECONDS = 180
 
 MODE_LABELS = {
     "google_transit": "目前以 Google 大眾運輸估算為主",
     "bus": "今天搭公車",
     "metro": "建議改搭捷運",
     "bus_to_metro": "今天搭公車轉捷運",
-    "mixed_transit": "今天搭大眾運輸轉乘",
-    "rail": "今天搭鐵路",
-    "light_rail": "今天搭輕軌",
 }
 
 
@@ -91,10 +82,8 @@ def _profile_snapshot(profile):
 
 
 def combine_date_hhmm(target_date: date, hhmm: str) -> datetime:
-    """建立帶台北時區的 datetime，確保傳給 Google Maps API 的時間正確。"""
-    hhmm_normalized = hhmm.replace("：", ":")
-    t = datetime.strptime(hhmm_normalized, "%H:%M").time()
-    return datetime.combine(target_date, t, tzinfo=TAIPEI_TZ)
+    t = datetime.strptime(hhmm, "%H:%M").time()
+    return datetime.combine(target_date, t)
 
 
 def _now_taipei_naive() -> datetime:
@@ -162,21 +151,13 @@ async def _fetch_arrivals_for_stop(city_name: str, stop: dict) -> list[dict]:
 
 
 async def estimate_commute_minutes(profile, target_date: date, arrival_time_str: str) -> int:
-    home_lat = getattr(profile, "home_lat", None)
-    home_lng = getattr(profile, "home_lng", None)
-    office_lat = getattr(profile, "office_lat", None)
-    office_lng = getattr(profile, "office_lng", None)
-    
-    print(f"[estimate-commute] Called with parameters: home_lat={home_lat}, home_lng={home_lng}, office_lat={office_lat}, office_lng={office_lng}, target_date={target_date}, arrival_time_str={arrival_time_str}")
-    
     if (
-        home_lat is None
-        or home_lng is None
-        or office_lat is None
-        or office_lng is None
+        getattr(profile, "home_lat", None) is None
+        or getattr(profile, "home_lng", None) is None
+        or getattr(profile, "office_lat", None) is None
+        or getattr(profile, "office_lng", None) is None
         or not arrival_time_str
     ):
-        print(f"[estimate-commute] Missing required parameters, returning default")
         return DEFAULT_COMMUTE_MINUTES
 
     cache_key = (
@@ -187,11 +168,9 @@ async def estimate_commute_minutes(profile, target_date: date, arrival_time_str:
     now = time.time()
     cached = _TRANSIT_CACHE.get(cache_key)
     if cached and now - cached[0] <= TRANSIT_CACHE_SECONDS:
-        print(f"[estimate-commute] Cache hit, returning cached value: {cached[1]} minutes")
         return cached[1]
 
     arrival_dt = combine_date_hhmm(target_date, arrival_time_str)
-    print(f"[estimate-commute] Calling Google Maps API with arrival_dt={arrival_dt}")
 
     try:
         minutes = await estimate_transit_minutes(
@@ -201,13 +180,10 @@ async def estimate_commute_minutes(profile, target_date: date, arrival_time_str:
             destination_lng=profile.office_lng,
             arrival_datetime=arrival_dt,
         )
-        print(f"[estimate-commute] Google Maps API returned: {minutes} minutes")
         _TRANSIT_CACHE[cache_key] = (now, minutes)
         return minutes
     except Exception as e:
-        print(f"[estimate-commute] exception: {e}")
-        print(f"[estimate-commute] Error details - origin=({profile.home_lat},{profile.home_lng}) destination=({profile.office_lat},{profile.office_lng}) arrival_time={arrival_time_str}")
-        traceback.print_exc()
+        print(f"[routes] estimate failed: {e}")
         return DEFAULT_COMMUTE_MINUTES
 
 
@@ -304,20 +280,15 @@ async def get_bus_realtime_snapshot(profile):
         home_lng = getattr(profile, "home_lng", None)
         city_name = _city_from_profile(profile)
 
-        print(f"[bus-snapshot] Called with parameters: home_lat={home_lat}, home_lng={home_lng}, city_name={city_name}")
-
         if home_lat is None or home_lng is None or not city_name:
-            print(f"[bus-snapshot] Missing required parameters: home_lat={home_lat}, home_lng={home_lng}, city_name={city_name}")
             return {"available": False, "reason": "city_or_coords_missing"}
 
         cache_key = f"{home_lat}|{home_lng}|{city_name}"
         now = time.time()
         cached = _BUS_CACHE.get(cache_key)
         if cached and now - cached[0] <= BUS_CACHE_SECONDS:
-            print(f"[bus-snapshot] Cache hit, returning cached data")
             return cached[1]
 
-        print(f"[bus-snapshot] Calling get_nearby_stops with city_name={city_name}, lat={home_lat}, lng={home_lng}")
         nearby_stops = await get_nearby_stops(
             city_name=city_name,
             lat=home_lat,
@@ -325,11 +296,9 @@ async def get_bus_realtime_snapshot(profile):
             distance_m=500,
             top=8,
         )
-        print(f"[bus-snapshot] get_nearby_stops returned {len(nearby_stops) if nearby_stops else 0} stops")
         nearby_stops = _dedupe_stops_by_name(nearby_stops)
 
         if not nearby_stops:
-            print(f"[bus-snapshot] No nearby stops found")
             result = {"available": False, "reason": "no_nearby_stops"}
             _BUS_CACHE[cache_key] = (now, result)
             return result
@@ -348,10 +317,8 @@ async def get_bus_realtime_snapshot(profile):
             walk_minutes = max(1, round(dist_km * 1000 / 80))
 
         arrival_at_stop_min = (walk_minutes or 0) + 1
-        print(f"[bus-snapshot] Fetching arrivals for stop: {first_stop.get('stop_name')}")
         valid_eta_list = await _fetch_arrivals_for_stop(city_name, first_stop)
         valid_eta_list = [eta for eta in valid_eta_list if eta.get("eta_min") is not None]
-        print(f"[bus-snapshot] Got {len(valid_eta_list)} valid ETA entries")
 
         chosen_bus = None
         for eta in valid_eta_list:
@@ -378,8 +345,7 @@ async def get_bus_realtime_snapshot(profile):
         return result
 
     except Exception as e:
-        print(f"[bus-snapshot] exception: {e}")
-        traceback.print_exc()
+        print(f"[bus-snapshot] failed: {e}")
         return {"available": False, "reason": "exception"}
 
 
@@ -390,20 +356,15 @@ async def get_metro_snapshot(profile):
         office_lat = getattr(profile, "office_lat", None)
         office_lng = getattr(profile, "office_lng", None)
 
-        print(f"[metro-snapshot] Called with parameters: home_lat={home_lat}, home_lng={home_lng}, office_lat={office_lat}, office_lng={office_lng}")
-
         if home_lat is None or home_lng is None:
-            print(f"[metro-snapshot] Missing home coordinates")
             return {"available": False, "reason": "coords_missing"}
 
         cache_key = f"{home_lat}|{home_lng}|{office_lat}|{office_lng}"
         now = time.time()
         cached = _METRO_CACHE.get(cache_key)
         if cached and now - cached[0] <= METRO_CACHE_SECONDS:
-            print(f"[metro-snapshot] Cache hit, returning cached data")
             return cached[1]
 
-        print(f"[metro-snapshot] Fetching nearest metro station for home=({home_lat},{home_lng})")
         station_task = asyncio.create_task(get_nearest_metro_station_async(home_lat, home_lng))
         destination_station_task = (
             asyncio.create_task(get_nearest_metro_station_async(office_lat, office_lng))
@@ -413,22 +374,17 @@ async def get_metro_snapshot(profile):
 
         station = await station_task
         if not station:
-            print(f"[metro-snapshot] No station found near home")
             if destination_station_task:
                 destination_station_task.cancel()
             result = {"available": False, "reason": "no_station"}
             _METRO_CACHE[cache_key] = (now, result)
             return result
 
-        print(f"[metro-snapshot] Found station: {station.get('name')}")
-
         destination_station = None
         suggested_exit = None
         if destination_station_task:
             destination_station = await destination_station_task
-            print(f"[metro-snapshot] Found destination station: {destination_station.get('name') if destination_station else None}")
             exits = await get_station_exits_async((destination_station or {}).get("id"))
-            print(f"[metro-snapshot] Got {len(exits) if exits else 0} exits for destination station")
             exits_with_distance = []
             for exit_info in exits:
                 exit_lat = exit_info.get("lat")
@@ -441,7 +397,6 @@ async def get_metro_snapshot(profile):
                 ))
             if exits_with_distance:
                 suggested_exit = min(exits_with_distance, key=lambda item: item[0])[1]
-                print(f"[metro-snapshot] Suggested exit: {suggested_exit.get('name')}")
 
         station_lat = station.get("lat")
         station_lng = station.get("lng")
@@ -468,8 +423,7 @@ async def get_metro_snapshot(profile):
         return result
 
     except Exception as e:
-        print(f"[metro-snapshot] exception: {e}")
-        traceback.print_exc()
+        print(f"[metro-snapshot] failed: {e}")
         return {"available": False, "reason": "exception"}
 
 
@@ -480,25 +434,7 @@ async def choose_commute_option_with_override(
     target_date: date,
     mode_override: str | None = None,
 ):
-    home_lat = getattr(profile, "home_lat", None)
-    home_lng = getattr(profile, "home_lng", None)
-    office_lat = getattr(profile, "office_lat", None)
-    office_lng = getattr(profile, "office_lng", None)
-
-    if home_lat is None or home_lng is None or office_lat is None or office_lng is None:
-        print(f"[choose-commute] INVALID COORDS: home=({home_lat},{home_lng}) office=({office_lat},{office_lng})")
-        return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
-
-    if not effective_arrival_time:
-        print(f"[choose-commute] INVALID ARRIVAL TIME: {effective_arrival_time}")
-        return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
-
-    try:
-        arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
-    except Exception as e:
-        print(f"[choose-commute] time parse error: {e}")
-        return {"best_option": {"mode": "google_transit"}, "selection_source": "auto"}
-
+    arrival_dt = combine_date_hhmm(target_date, effective_arrival_time)
     requested_mode = mode_override or "auto"
     allowed_travel_modes = None
     if requested_mode == "bus":
@@ -506,23 +442,21 @@ async def choose_commute_option_with_override(
     elif requested_mode == "metro":
         allowed_travel_modes = ["SUBWAY", "TRAIN", "RAIL", "LIGHT_RAIL"]
 
-    print(f"[choose-commute] calling APIs: origin=({home_lat},{home_lng}) dest=({office_lat},{office_lng}) arrival={arrival_dt}")
-
     google_task = asyncio.create_task(
         safe_call(estimate_transit_minutes_detailed(
-            home_lat, home_lng,
-            office_lat, office_lng,
+            profile.home_lat, profile.home_lng,
+            profile.office_lat, profile.office_lng,
             arrival_dt,
             allowed_travel_modes=allowed_travel_modes,
-        ), timeout_seconds=3.0)
+        ), timeout_seconds=4.2)
     )
     bus_task = (
-        asyncio.create_task(safe_call(get_bus_realtime_snapshot(profile), timeout_seconds=2.0))
+        asyncio.create_task(safe_call(get_bus_realtime_snapshot(profile), timeout_seconds=2.5))
         if requested_mode in {"auto", "shortest", "bus"}
         else None
     )
     metro_task = (
-        asyncio.create_task(safe_call(get_metro_snapshot(profile), timeout_seconds=2.5))
+        asyncio.create_task(safe_call(get_metro_snapshot(profile), timeout_seconds=3.5))
         if requested_mode in {"auto", "metro"}
         else None
     )
@@ -535,12 +469,11 @@ async def choose_commute_option_with_override(
     if bus_snapshot and bus_snapshot.get("available"):
         chosen_bus = bus_snapshot.get("chosen_bus")
 
+    metro_available = bool(metro_snapshot and metro_snapshot.get("available"))
     google_detailed = google_detailed or {}
     google_steps = google_detailed.get("steps", []) or []
-    google_bus_step = route_formatter.select_transit_step(google_steps, "bus")
-    google_metro_step = route_formatter.select_transit_step(google_steps, "metro")
-    google_mode = route_formatter.route_mode_from_steps(google_steps)
-
+    google_bus_step = _select_transit_step(google_steps, "bus")
+    google_metro_step = _select_transit_step(google_steps, "metro")
     bus_snapshot_with_details = dict(bus_snapshot or {})
     metro_snapshot_with_details = dict(metro_snapshot or {})
     if bus_snapshot_with_details:
@@ -549,7 +482,7 @@ async def choose_commute_option_with_override(
         metro_snapshot_with_details["google_detailed"] = google_detailed
 
     google_option = {
-        "mode": google_mode,
+        "mode": "google_transit",
         "reason": "google_transit",
         "summary": "目前以 Google 大眾運輸建議為主",
         "snapshot": {
@@ -560,33 +493,35 @@ async def choose_commute_option_with_override(
     }
 
     bus_option = None
-    if google_bus_step:
+    if (bus_snapshot and bus_snapshot.get("available") and chosen_bus) or google_bus_step:
         bus_snapshot_dict = bus_snapshot or {}
-        bus_label = route_formatter.line_label_from_step(google_bus_step)
-        google_bus_route = google_bus_step.get("line_short_name") or google_bus_step.get("line_name")
-        chosen_route = (chosen_bus or {}).get("route_name") or (chosen_bus or {}).get("subroute_name")
-        chosen_bus_matches_google = route_formatter.route_names_match(chosen_route, google_bus_route)
-        eta_min = (chosen_bus or {}).get("eta_min") if chosen_bus_matches_google else None
+        first_stop = bus_snapshot_dict.get("first_stop", {}) or {}
+        walk_minutes = bus_snapshot_dict.get("walk_minutes")
+        eta_min = chosen_bus.get("eta_min") if chosen_bus else None
+        bus_label = _bus_route_label(bus_snapshot_with_details)
+        if not bus_label and google_bus_step:
+            bus_label = google_bus_step.get("line_short_name") or google_bus_step.get("line_name")
+        bus_label = bus_label or "公車"
 
         wait_minutes = max(0, (eta_min or 0) - (bus_snapshot_dict.get("arrival_at_stop_min") or 0))
-        bus_snapshot_for_option = dict(bus_snapshot_with_details or {"google_detailed": google_detailed})
-        if not chosen_bus_matches_google:
-            bus_snapshot_for_option["chosen_bus"] = {}
         bus_option = {
             "mode": "bus",
-            "reason": "google_bus_route",
-            "summary": f"可搭公車 {bus_label}，於『{google_bus_step.get('departure_stop') or 'Google Maps 未提供上車站名'}』上車。",
+            "reason": "bus_available" if chosen_bus else "google_bus_route",
+            "summary": f"可搭公車 {bus_label}，於『{first_stop.get('stop_name', '最近站牌')}』上車。",
             "wait_minutes": wait_minutes,
             "reliability_penalty_minutes": 3,
-            "snapshot": bus_snapshot_for_option,
+            "snapshot": bus_snapshot_with_details or {"google_detailed": google_detailed},
         }
 
     metro_option = None
-    if google_metro_step:
+    if metro_available or google_metro_step:
+        metro_snapshot_dict = metro_snapshot or {}
+        station = metro_snapshot_dict.get("station", {}) or {}
+        walk_minutes = metro_snapshot_dict.get("walk_minutes")
         metro_option = {
             "mode": "metro",
-            "reason": "google_metro_route",
-            "summary": f"搭乘 {route_formatter.line_label_from_step(google_metro_step)}，於『{google_metro_step.get('departure_stop') or 'Google Maps 未提供上車站名'}』上車。",
+            "reason": "metro_available" if metro_available else "google_metro_route",
+            "summary": f"搭乘捷運，最近站牌『{station.get('name', '無法識別捷運站')}』，步行約 {walk_minutes or '無法估算'} 分鐘。",
             "wait_minutes": 3,
             "transfer_minutes": 2,
             "reliability_penalty_minutes": 1,
@@ -594,10 +529,6 @@ async def choose_commute_option_with_override(
         }
 
     if requested_mode == "shortest":
-        if google_mode == "bus" and bus_option:
-            return {"best_option": bus_option, "selection_source": "manual"}
-        if google_mode == "metro" and metro_option:
-            return {"best_option": metro_option, "selection_source": "manual"}
         return {"best_option": google_option, "selection_source": "manual"}
 
     if requested_mode == "bus":
@@ -605,11 +536,11 @@ async def choose_commute_option_with_override(
             return {"best_option": bus_option, "selection_source": "manual"}
         return {
             "best_option": {
-                "mode": "google_transit",
-                "reason": "google_bus_route_unavailable",
-                "summary": "Google Maps 目前未提供公車路線，系統不會自行猜測公車站名或路線。",
+                "mode": "bus",
+                "reason": "bus_forced_without_details",
+                "summary": "已切換為公車優先",
                 "wait_minutes": 0,
-                "reliability_penalty_minutes": 0,
+                "reliability_penalty_minutes": 3,
                 "snapshot": {"google_detailed": google_detailed},
             },
             "selection_source": "manual",
@@ -620,34 +551,25 @@ async def choose_commute_option_with_override(
             return {"best_option": metro_option, "selection_source": "manual"}
         return {
             "best_option": {
-                "mode": google_mode,
-                "reason": "google_metro_route_unavailable",
-                "summary": "Google Maps 目前未提供捷運路線，系統不會自行猜測捷運站名或出口。",
-                "wait_minutes": 0,
-                "transfer_minutes": 0,
-                "reliability_penalty_minutes": 0,
+                "mode": "metro",
+                "reason": "metro_forced_without_details",
+                "summary": "已切換為捷運優先",
+                "wait_minutes": 3,
+                "transfer_minutes": 2,
+                "reliability_penalty_minutes": 1,
                 "snapshot": {"google_detailed": google_detailed},
             },
             "selection_source": "manual",
         }
 
     if requested_mode == "bus_to_metro":
-        if google_mode == "mixed_transit":
-            return {"best_option": google_option, "selection_source": "manual"}
-        return {
-            "best_option": {
-                "mode": google_mode,
-                "reason": "google_mixed_route_unavailable",
-                "summary": "Google Maps 目前未提供公車轉乘捷運的路線，系統不會自行拼湊轉乘。",
-                "wait_minutes": 0,
-                "transfer_minutes": 0,
-                "reliability_penalty_minutes": 0,
-                "snapshot": {"google_detailed": google_detailed},
-            },
-            "selection_source": "manual",
-        }
+        # Simplified for now, can be expanded if we have specific bus_to_metro logic
+        return {"best_option": google_option, "selection_source": "manual"}
 
-    if google_mode == "bus" and bus_option:
+    # auto priority: Metro > Bus > Google
+    if metro_option:
+        return {"best_option": metro_option, "selection_source": "auto"}
+    if bus_option:
         return {"best_option": bus_option, "selection_source": "auto"}
     return {"best_option": google_option, "selection_source": "auto"}
 
@@ -1246,21 +1168,6 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     }
 
 
-_normalize_exit_label = route_formatter.normalize_exit_label
-_exit_info_from_steps = route_formatter.exit_info_from_steps
-_is_bus_step = route_formatter.is_bus_step
-_is_metro_step = route_formatter.is_metro_step
-_select_transit_step = route_formatter.select_transit_step
-_bus_route_label = route_formatter.bus_route_label
-_bus_route_options_text = route_formatter.bus_route_options_text
-_metro_line_from_station_ids = route_formatter.metro_line_from_station_ids
-_exit_info_from_snapshot = route_formatter.exit_info_from_snapshot
-_format_transport_line = route_formatter.format_transport_line
-_get_transport_line = route_formatter.get_transport_line
-_format_today_commute_text = route_formatter.format_today_commute_text
-_build_reminder_payload_from_plan = route_formatter.build_reminder_payload_from_plan
-
-
 
 async def build_today_commute_payload(
     db,
@@ -1303,7 +1210,7 @@ async def build_today_reminder_payload(
     if not plan.get("ok"):
         return plan
 
-    return route_formatter.build_reminder_payload_from_plan(plan)
+    return _build_reminder_payload_from_plan(plan)
 
 
 async def freeze_today_reminder_payload(
