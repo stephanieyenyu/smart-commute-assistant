@@ -733,3 +733,16 @@ def undelete_commute_schedule(db: Session, line_user_id: str, schedule_id: int):
     db.commit()
     db.refresh(schedule)
     return schedule
+
+def undelete_destination(db: Session, user_id: int, destination_id: int):
+       from app.models import CommuteDestination
+       dest = db.query(CommuteDestination).filter(
+           CommuteDestination.id == destination_id, 
+           CommuteDestination.user_id == user_id
+       ).first()
+       
+       if dest:
+           dest.is_active = True  # 假設您是用 is_active 做軟刪除
+           db.commit()
+           db.refresh(dest)
+       return dest
