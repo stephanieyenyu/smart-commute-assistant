@@ -26,7 +26,7 @@ def get_or_create_user(db: Session, line_user_id: str) -> User:
     if user:
         return user
 
-    user = User(line_user_id=line_user_id, household_id="default")
+    user = User(line_user_id=line_user_id)
     db.add(user)
     db.commit()
     db.refresh(user)
