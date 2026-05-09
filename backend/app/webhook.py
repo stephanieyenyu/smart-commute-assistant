@@ -129,10 +129,13 @@ COMMAND_ALIASES = {
     "weekly_schedule":      {"一週排程設定", "一周排程設定", "一週排程", "一周排程", "查看一週排程設定"},
     "edit_schedule":        {"編輯排程", "修改排程"},
     "delete_schedule":      {"刪除排程", "刪除排程設定", "移除排程"},
-    "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結"},
+    "personal_dashboard_link": {"個人看板連結", "取得個人看板連結", "Dashboard連結", "看板連結", "取得個人dashboard連結", "排程看板"},
     "family_dashboard_link": {"家庭看板連結", "取得家庭看板連結", "家庭看板", "開啟家庭看板"},
     "join_household":       {"加入家庭", "加入家庭群組", "綁定家庭"},
     "departed":             {"已出門", "我已出門"},
+    "basic_settings":       {"基本設定"},
+    "board_management_help":{"看板管理說明"},
+}
 }
 
 TOPIC_CARD_TITLES = ("設定通勤路線", "通勤建議", "交通方式", "看板", "系統設定")
@@ -375,15 +378,18 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 btn("🚄 最短時間優先", "優先選擇通勤時間短"),
             ]
         ),
-        "看板": bubble("#0f766e", "📺", "看板",
+        "看板": bubble("#0f766e", "📺", "看板管理",
             [
-                ("個人看板連結", "開啟只顯示自己通勤資訊的即時看板"),
+                ("排程看板 / 個人看板連結", "開啟只顯示自己通勤資訊的即時看板"),
                 ("家庭看板連結", "開啟家庭檢視看板，方便共用螢幕查看"),
+                ("看板管理說明", "查看看板功能說明與外接螢幕設定指引"),
             ],
             [
-                btn("📺 個人看板連結", "個人看板連結", "primary"),
+                btn("📺 排程看板連結", "個人看板連結", "primary"),
                 btn("🏠 家庭看板連結", "家庭看板連結"),
+                btn("ℹ️ 看板管理說明", "看板管理說明"),
             ]
+        ),
         ),
         "系統設定": bubble("#e67e22", "⚙️", "系統設定",
             [
@@ -682,21 +688,34 @@ async def line_webhook(
                 )
                 continue
 
-            topic_title = topic_title_for_command(command_text)
-            if topic_title:
-                topic_card = build_topic_help_card(topic_title)
-                if topic_card:
-                    await reply_flex_message(reply_token, topic_title, topic_card)
-                    continue
-
-            # ── 系統設定 ──────────────────────────────────────────────────
-            if command_text in COMMAND_ALIASES["system_settings"]:
+            # ── 看板管理說明 ──────────────────────────────────────────────
+            if command_text in COMMAND_ALIASES["board_management_help"]:
+                dashboard_url = build_dashboard_url(request, line_user_id, "personal")
                 await reply_with_quick_reply(
                     reply_token,
-                    "⚙️ 系統設定選單\n請選擇以下操作：",
-                    SETTINGS_QR,
+                    "看板管理：請選擇要取得看板連結，或查看電腦外接螢幕設定。",
+                    [
+                        {"type": "uri",     "label": "📺 開啟個人看板",  "uri": dashboard_url},
+                        {"type": "message", "label": "🏠 家庭看板連結",  "text": "家庭看板連結"},
+                    ],
                 )
                 continue
+
+            # ── 基本設定 ──────────────────────────────────────────────────
+            if command_text in COMMAND_ALIASES["basic_settings"]:
+                await reply_with_quick_reply(
+                    reply_token,
+                    "⚙️ 基本設定\n請選擇以下操作：",
+                    [
+                        {"type": "uri",     "label": "🖥️ 打開 LIFF Dashboard", "uri": LIFF_URL},
+                        {"type": "message", "label": "📊 查看設定",            "text": "查看設定"},
+                        {"type": "message", "label": "🚆 今日通勤建議",         "text": "今天通勤建議"},
+                        {"type": "message", "label": "🗓️ 明日通勤建議",         "text": "明天幾點出門"},
+                    ],
+                )
+                continue
+
+            topic_title = topic_title_for_command(command_text)
 
             # ── 指令說明 → Flex Carousel ──────────────────────────────────
             if command_text in COMMAND_ALIASES["help"]:
