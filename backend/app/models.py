@@ -17,6 +17,19 @@ from sqlalchemy.sql import func
 from app.db import Base
 
 
+class Household(Base):
+    """家庭群組，用 invite_code 讓多位 LINE 使用者綁到同一個家庭看板。"""
+    __tablename__ = "households"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invite_code = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    members = relationship("User", back_populates="household")
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
@@ -26,15 +39,12 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     line_user_id = Column(String, unique=True, index=True, nullable=False)
     display_name = Column(String, nullable=True)
-    household_id = Column(String, index=True, nullable=True)
-    role = Column(String, nullable=False, default="user")
+    household_id = Column(Integer, ForeignKey("households.id"), index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     profile = relationship("CommuteProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     destinations = relationship("CommuteDestination", back_populates="user", cascade="all, delete-orphan")
     overrides = relationship("CommuteOverride", back_populates="user", cascade="all, delete-orphan")
-    schedule_templates = relationship("CommuteScheduleTemplate", back_populates="user", cascade="all, delete-orphan")
-    logs = relationship("CommuteLog", back_populates="user", cascade="all, delete-orphan")
 
 
 class CommuteProfile(Base):
@@ -87,71 +97,16 @@ class CommuteProfile(Base):
     user = relationship("User", back_populates="profile")
 
 
-class CommuteScheduleTemplate(Base):
-    __tablename__ = "commute_schedule_templates"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    destination_id = Column(Integer, ForeignKey("commute_destinations.id"), index=True, nullable=True)
-    name = Column(String, nullable=True)
-    target_arrival_time = Column(String, nullable=False)
-    destination_label = Column(String, nullable=False, default="目的地")
-    active_weekdays = Column(JSON, nullable=False)
-    is_fixed = Column(Boolean, nullable=False, default=True)
-    is_active = Column(Boolean, nullable=False, default=True)
-    # Soft delete support
-    is_deleted = Column(Boolean, nullable=False, default=False)
-    deleted_at = Column(DateTime(timezone=True), nullable=True)
-
-    # Custom origin (fallback to home if null)
-    origin_address = Column(String, nullable=True)
-    origin_lat = Column(Float, nullable=True)
-    origin_lng = Column(Float, nullable=True)
-    origin_city = Column(String, nullable=True)
-    origin_township = Column(String, nullable=True)
-    origin_place_name = Column(String, nullable=True)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    user = relationship("User", back_populates="schedule_templates")
-    destination = relationship("CommuteDestination", back_populates="schedule_templates")
-
-
-class CommuteDestination(Base):
-    __tablename__ = "commute_destinations"
-    __table_args__ = (
-        UniqueConstraint("user_id", "label", name="uq_commute_destinations_user_label"),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    label = Column(String, nullable=False)
-    address = Column(String, nullable=True)
-    lat = Column(Float, nullable=True)
-    lng = Column(Float, nullable=True)
-    city = Column(String, nullable=True)
-    township = Column(String, nullable=True)
-    place_name = Column(String, nullable=True)
-    # Soft delete support
-    is_deleted = Column(Boolean, nullable=False, default=False)
-    deleted_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    user = relationship("User", back_populates="destinations")
-    schedule_templates = relationship("CommuteScheduleTemplate", back_populates="destination")
-
-
 class CommuteOverride(Base):
+    """每日排程狀態記錄：記錄今天的提醒是否已發送、凍結的提醒內容等。"""
     __tablename__ = "commute_overrides"
     __table_args__ = (
         UniqueConstraint("user_id", "target_date", name="uq_commute_overrides_user_date"),
-        Index("ix_commute_overrides_target_date_frozen_departure", "target_date", "frozen_departure_time"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    schedule_id = Column(Integer, ForeignKey("commute_schedules.id"), index=True, nullable=True)
     target_date = Column(Date, index=True, nullable=False)
 
     target_arrival_time = Column(String, nullable=True)
@@ -166,25 +121,16 @@ class CommuteOverride(Base):
 
     last_sent_plan_key = Column(String, nullable=True)
     last_sent_at = Column(DateTime(timezone=True), nullable=True)
-
-    departure_confirmed_at = Column(DateTime(timezone=True), nullable=True)
-    departure_check_sent_at = Column(DateTime(timezone=True), nullable=True)
-    departure_snoozed_until = Column(DateTime(timezone=True), nullable=True)
-    snooze_one_min_sent_at = Column(DateTime(timezone=True), nullable=True)
-    snooze_departure_sent_at = Column(DateTime(timezone=True), nullable=True)
-    departure_timeout_at = Column(DateTime(timezone=True), nullable=True)
-    departure_timeout_silent = Column(Boolean, nullable=False, default=False)
-
-    nightly_brief_plan_key = Column(String, nullable=True)
-    nightly_brief_sent_at = Column(DateTime(timezone=True), nullable=True)
-
-    watchdog_alert_key = Column(String, nullable=True)
-    watchdog_alert_sent_at = Column(DateTime(timezone=True), nullable=True)
+    monitor_one_hour_sent_at = Column(DateTime(timezone=True), nullable=True)
+    monitor_five_min_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departure_question_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="overrides")
+    schedule = relationship("CommuteSchedule")
 
 
 class CommuteLog(Base):
@@ -195,25 +141,21 @@ class CommuteLog(Base):
     date = Column(Date, nullable=False, index=True)
     day_of_week = Column(Integer, nullable=True)
     is_holiday = Column(Boolean, nullable=True)
-    
+
     target_arrival_time = Column(String, nullable=True)
     suggested_departure_time = Column(String, nullable=True)
     actual_departure_time = Column(String, nullable=True)
-    
+
     suggested_transport = Column(String, nullable=True)
     actual_transport = Column(String, nullable=True)
-    selection_source = Column(String, nullable=True)
-    recommended_mode = Column(String, nullable=True)
-    risk_score = Column(Float, nullable=True)
-    weather_buffer_minutes = Column(Integer, nullable=True)
     
     weather_condition = Column(String, nullable=True)
     rain_prob = Column(Integer, nullable=True)
     temp = Column(Float, nullable=True)
-    
+
     gmaps_traffic_duration = Column(Integer, nullable=True)
     tdx_bus_eta = Column(Integer, nullable=True)
-    
+
     actual_arrival_time = Column(String, nullable=True)
     is_late = Column(Boolean, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -230,3 +172,34 @@ class ApiHealthLog(Base):
     latency_ms = Column(Integer, nullable=True)
     status_code = Column(Integer, nullable=True)
     error_message = Column(String, nullable=True)
+
+
+# ─────────────────────────────────────────────────────────
+# 家庭群組模組
+# ─────────────────────────────────────────────────────────
+
+class FamilyGroup(Base):
+    """家庭群組：可包含多位成員，共享家庭看板。"""
+    __tablename__ = "family_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    # 邀請用的唯一 token（UUID hex）
+    invite_token = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    members = relationship("FamilyMember", back_populates="group", cascade="all, delete-orphan")
+
+
+class FamilyMember(Base):
+    """家庭群組成員：將 User 與 FamilyGroup 關聯，並記錄成員暱稱。"""
+    __tablename__ = "family_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("family_groups.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    nickname = Column(String, nullable=True)
+    joined_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    group = relationship("FamilyGroup", back_populates="members")
+    user = relationship("User", back_populates="family_memberships")

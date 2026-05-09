@@ -1,9 +1,7 @@
 services:
   - type: web
     name: smart-commute-assistant
-    env: python
+    runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
-    autoDeploy: true

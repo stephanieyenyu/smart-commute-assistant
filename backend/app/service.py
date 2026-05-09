@@ -25,10 +25,10 @@ from app.crud import (
     get_next_setup_step,
     get_override_for_date,
     get_transport_mode_override,
+    get_commute_schedules_by_user_id,
     save_frozen_reminder,
     record_commute_plan_log,
 )
-
 DEFAULT_COMMUTE_MINUTES = 56
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
@@ -50,6 +50,44 @@ MODE_LABELS = {
     "rail": "今天搭鐵路",
     "light_rail": "今天搭輕軌",
 }
+
+
+def _normalize_schedule_days(days) -> list[int]:
+    normalized = []
+    for day in days or []:
+        try:
+            value = int(day)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 6 and value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def _active_schedules_for_date(schedules, target_date: date, require_time: bool = True) -> list:
+    target_weekday = target_date.weekday()
+    matched = []
+    for schedule in schedules or []:
+        if not getattr(schedule, "is_active", True):
+            continue
+        if target_weekday not in _normalize_schedule_days(getattr(schedule, "days", None)):
+            continue
+        if require_time and not getattr(schedule, "time", None):
+            continue
+        matched.append(schedule)
+    return sorted(matched, key=lambda schedule: getattr(schedule, "time", "") or "")
+
+
+def _profile_snapshot(profile):
+    fields = (
+        "home_address", "home_lat", "home_lng", "home_city", "home_township", "home_place_name",
+        "office_address", "office_lat", "office_lng", "office_city", "office_township", "office_place_name",
+        "selected_bus_stop_id", "selected_bus_stop_name", "selected_bus_stop_lat", "selected_bus_stop_lng",
+        "selected_metro_station_id", "selected_metro_station_name", "selected_metro_station_lat", "selected_metro_station_lng",
+        "last_computed_walk_to_bus_stop_min", "last_computed_walk_to_metro_min", "walk_to_bus_stop_min",
+        "preferred_arrival_time", "preferred_mode", "reminder_enabled",
+    )
+    return SimpleNamespace(**{field: getattr(profile, field, None) for field in fields})
 
 
 def combine_date_hhmm(target_date: date, hhmm: str) -> datetime:
@@ -215,6 +253,8 @@ async def calculate_departure_time_by_mode_fast(
                 "並確保不晚於目標抵達時間"
             )
             return {
+                "departure_date": departure_dt.date().isoformat(),
+                "departure_datetime": departure_dt.replace(tzinfo=TAIPEI_TZ).isoformat(),
                 "departure_time": departure_dt.strftime("%H:%M"),
                 "baseline_minutes": baseline_minutes,
                 "mode_extra_minutes": max(0, total_minutes - baseline_minutes - weather_buffer_minutes),
@@ -235,6 +275,8 @@ async def calculate_departure_time_by_mode_fast(
         walk_note = f"、步行到捷運站約 {walk_minutes} 分鐘" if walk_minutes is not None else ""
         mode_note = f"以捷運通勤總時間 {baseline_minutes} 分鐘{walk_note}回推，確保不晚於目標抵達時間"
         return {
+            "departure_date": departure_dt.date().isoformat(),
+            "departure_datetime": departure_dt.replace(tzinfo=TAIPEI_TZ).isoformat(),
             "departure_time": departure_dt.strftime("%H:%M"),
             "baseline_minutes": baseline_minutes,
             "mode_extra_minutes": 0,
@@ -246,6 +288,8 @@ async def calculate_departure_time_by_mode_fast(
     departure_dt = latest_on_time_departure - timedelta(minutes=mode_extra_minutes)
 
     return {
+        "departure_date": departure_dt.date().isoformat(),
+        "departure_datetime": departure_dt.replace(tzinfo=TAIPEI_TZ).isoformat(),
         "departure_time": departure_dt.strftime("%H:%M"),
         "baseline_minutes": baseline_minutes,
         "mode_extra_minutes": mode_extra_minutes,
@@ -613,12 +657,14 @@ def _weather_line(weather_info: dict) -> str:
     temp = weather_info.get("temperature")
     temp_min = weather_info.get("temperature_min")
     temp_max = weather_info.get("temperature_max")
+    apparent_temperature = weather_info.get("apparent_temperature")
+    apparent_text = f"，體感 {apparent_temperature}°C" if apparent_temperature is not None else ""
 
     if temp is not None:
-        return f"{text}，{temp}°C"
+        return f"{text}，{temp}°C{apparent_text}"
     if temp_min is not None and temp_max is not None:
-        return f"{text}，{temp_min}-{temp_max}°C"
-    return text
+        return f"{text}，{temp_min}-{temp_max}°C{apparent_text}"
+    return f"{text}{apparent_text}"
 
 
 def _rain_line(weather_info: dict) -> str:
@@ -703,116 +749,60 @@ async def _compute_today_plan(
     user_id: int,
     target_date: date | None = None,
     force_mode_override: str | None = None,
+    schedule_id: int | None = None,
 ):
     try:
         if target_date is None:
             target_date = datetime.now(TAIPEI_TZ).date()
 
-        profile = get_profile(db, user_id)
-        print(f"[compute-plan] user_id={user_id} target_date={target_date} profile_id={profile.id if profile else None}")
+    profile = _profile_snapshot(get_profile(db, user_id))
 
-        next_step = get_next_setup_step(profile)
-        if next_step is not None:
-            print(f"[compute-plan] setup incomplete: next_step={next_step}")
-            return {"ok": False, "reason": "setup_incomplete", "next_step": next_step}
-
-        override = get_override_for_date(db, user_id, target_date)
-        effective_setting = effective_commute_setting_for_date(db, profile, target_date, override)
-        print(f"[compute-plan] effective_setting={'ok' if effective_setting else 'none'} arrival_time={effective_setting['arrival_time'] if effective_setting else 'N/A'}")
-        if effective_setting is None:
-            return {"ok": False, "reason": "schedule_inactive", "target_date": target_date}
-
-        effective_arrival_time = effective_setting["arrival_time"]
-        destination_label = effective_setting["destination_label"]
-        destination = effective_setting.get("destination")
-        effective_schedule_source = effective_setting["source"]
-        if destination is not None and getattr(destination, "lat", None) is not None and getattr(destination, "lng", None) is not None:
-            profile = SimpleNamespace(**profile.__dict__)
-            profile.office_address = getattr(destination, "address", None) or profile.office_address
-            profile.office_lat = getattr(destination, "lat", None)
-            profile.office_lng = getattr(destination, "lng", None)
-            profile.office_city = getattr(destination, "city", None) or profile.office_city
-            print(f"[compute-plan] using schedule destination: lat={profile.office_lat} lng={profile.office_lng} city={profile.office_city}")
-
-        home_lat = getattr(profile, "home_lat", None)
-        home_lng = getattr(profile, "home_lng", None)
-        home_address = getattr(profile, "home_address", None)
-        office_lat = getattr(profile, "office_lat", None)
-        office_lng = getattr(profile, "office_lng", None)
-        office_address = getattr(profile, "office_address", None)
-
-        # Check for custom schedule origin (coordinates or address)
-        schedule_origin_lat = effective_setting.get("origin_lat")
-        schedule_origin_lng = effective_setting.get("origin_lng")
-        schedule_origin_address = effective_setting.get("origin_address")
-        
-        if schedule_origin_lat is not None and schedule_origin_lng is not None:
-            effective_origin_lat = schedule_origin_lat
-            effective_origin_lng = schedule_origin_lng
-            effective_origin_address = schedule_origin_address or home_address
-            print(f"[compute-plan] using schedule custom origin: lat={effective_origin_lat} lng={effective_origin_lng}")
-        elif schedule_origin_address and schedule_origin_address.strip():
-            effective_origin_lat = None
-            effective_origin_lng = None
-            effective_origin_address = schedule_origin_address
-            print(f"[compute-plan] using schedule custom origin address: {effective_origin_address}")
+    # 從今天啟用的 CommuteSchedule 補充座標（LIFF 設定後 profile 可能尚未有座標）
+    schedules = get_commute_schedules_by_user_id(db, user_id)
+    if schedule_id is not None:
+        schedule = next((s for s in schedules if s.id == schedule_id), None)
+        if schedule and not _active_schedules_for_date([schedule], target_date):
+            schedule = None
+    else:
+        date_schedules = _active_schedules_for_date(schedules, target_date)
+        schedule = date_schedules[0] if date_schedules else None
+    if not schedule:
+        today = datetime.now(TAIPEI_TZ).date()
+        if target_date == today:
+            text = "您今天目前沒有設定排程喔！"
+        elif target_date == today + timedelta(days=1):
+            text = "您明天目前沒有設定排程喔！"
         else:
-            effective_origin_lat = home_lat
-            effective_origin_lng = home_lng
-            effective_origin_address = home_address
-            print(f"[compute-plan] using home as origin: lat={effective_origin_lat} lng={effective_origin_lng} address={effective_origin_address}")
+            text = f"{target_date.isoformat()} 目前沒有設定排程喔！"
+        return {"ok": False, "reason": "no_schedule_for_date", "text": text}
+    if schedule:
+        # 出發地一律由 LIFF 設定，不再 fallback 到舊的 profile.home_address
+        profile.home_address = schedule.origin_address
+        profile.home_place_name = schedule.origin_name
+        profile.home_lat = schedule.origin_lat
+        profile.home_lng = schedule.origin_lng
+        if schedule.dest_address:
+            profile.office_address = schedule.dest_address
+            profile.office_place_name = schedule.dest_name
+            profile.office_lat = schedule.dest_lat
+            profile.office_lng = schedule.dest_lng
 
-        # 雙軌制驗證：只要有「經緯度」或「地址字串」其中一項就視為合法
-        # 強制型態轉換：確保字串轉浮點數不會失敗
-        try:
-            if effective_origin_lat is not None:
-                effective_origin_lat = float(effective_origin_lat)
-            if effective_origin_lng is not None:
-                effective_origin_lng = float(effective_origin_lng)
-        except (ValueError, TypeError) as e:
-            print(f"[compute-plan] origin coordinate conversion error: {e}, lat={effective_origin_lat}, lng={effective_origin_lng}")
-            effective_origin_lat = None
-            effective_origin_lng = None
-        
-        try:
-            if office_lat is not None:
-                office_lat = float(office_lat)
-            if office_lng is not None:
-                office_lng = float(office_lng)
-        except (ValueError, TypeError) as e:
-            print(f"[compute-plan] destination coordinate conversion error: {e}, lat={office_lat}, lng={office_lng}")
-            office_lat = None
-            office_lng = None
-        
-        has_origin_coords = effective_origin_lat is not None and effective_origin_lng is not None
-        has_origin_address = effective_origin_address and effective_origin_address.strip()
-        
-        if not has_origin_coords and not has_origin_address:
-            print(f"[compute-plan] missing origin: coords=({effective_origin_lat},{effective_origin_lng}) address={effective_origin_address}")
-            return {
-                "ok": False,
-                "reason": "missing_home_address",
-                "message": "您的出發地址尚未設定完整，請提供經緯度或地址字串 📍",
-            }
+    # 使用本次選中的排程時間，避免多排程時拿到其他目的地的 profile 舊值。
+    if schedule and schedule.time:
+        profile.preferred_arrival_time = schedule.time
 
-        has_dest_coords = office_lat is not None and office_lng is not None
-        has_dest_address = office_address and office_address.strip()
-        
-        if not has_dest_coords and not has_dest_address:
-            print(f"[compute-plan] missing destination: coords=({office_lat},{office_lng}) address={office_address}")
-            return {
-                "ok": False,
-                "reason": "missing_destination_address",
-                "message": f"您的排程「{destination_label}」缺少經緯度或地址資訊，請先至 [排程設定] 補齊喔！",
-            }
-        
-        print(f"[compute-plan] validation passed: origin_coords={has_origin_coords}, origin_addr={has_origin_address}, dest_coords={has_dest_coords}, dest_addr={has_dest_address}")
+    # 必須有出發地和目的地才能計算
+    if not profile.home_address or not profile.office_address or not profile.preferred_arrival_time:
+        return {"ok": False, "reason": "setup_incomplete", "next_step": "schedule"}
 
-        schedule_template_id = effective_setting.get("schedule_template_id")
-        used_override = False
-        if override and override.target_arrival_time:
-            effective_arrival_time = override.target_arrival_time
-            used_override = True
+    effective_arrival_time = profile.preferred_arrival_time
+    override = get_override_for_date(db, user_id, target_date, schedule_id=getattr(schedule, "id", None))
+    if override is None and getattr(schedule, "id", None) is not None:
+        override = get_override_for_date(db, user_id, target_date)
+    used_override = False
+    if override and override.target_arrival_time:
+        effective_arrival_time = override.target_arrival_time
+        used_override = True
 
         stored_mode_override = get_transport_mode_override(db, user_id, target_date)
         mode_override = force_mode_override if force_mode_override is not None else stored_mode_override
@@ -902,29 +892,23 @@ async def _compute_today_plan(
             else f"{target_label}使用固定{arrival_label(destination_label)}：{effective_arrival_time}"
         )
 
-        print(f"[compute-plan] success: departure={final_departure_time} mode={recommended_mode}")
-
-        return {
-            "ok": True,
-            "profile": profile,
-            "target_date": target_date,
-            "effective_arrival_time": effective_arrival_time,
-            "destination_label": destination_label,
-            "arrival_label": arrival_label(destination_label),
-            "target_label_text": target_label_text(destination_label),
-            "effective_schedule_source": effective_schedule_source,
-            "schedule_template_id": schedule_template_id,
-            "weather_info": weather_info,
-            "weather_buffer": weather_buffer,
-            "baseline_minutes": baseline_minutes,
-            "best_option": best_option,
-            "selection_source": selection_source,
-            "recommended_mode": recommended_mode,
-            "final_departure_time": final_departure_time,
-            "departure_calc": departure_calc,
-            "note": note,
-            "mode_override": mode_override,
-        }
+    return {
+        "ok": True,
+        "profile": profile,
+        "target_date": target_date,
+        "effective_arrival_time": effective_arrival_time,
+        "weather_info": weather_info,
+        "weather_buffer": weather_buffer,
+        "baseline_minutes": baseline_minutes,
+        "best_option": best_option,
+        "selection_source": selection_source,
+        "recommended_mode": recommended_mode,
+        "final_departure_time": final_departure_time,
+        "departure_calc": departure_calc,
+        "note": note,
+        "mode_override": mode_override,
+        "schedule_id": getattr(schedule, "id", None),
+    }
 
     except Exception as e:
         print(f"[compute-plan] UNEXPECTED CRASH: {e}")
@@ -1010,7 +994,7 @@ def _bus_route_label(bus_snapshot: dict) -> str | None:
     return None
 
 
-def _bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = None) -> str:
+def _bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = None, with_label: bool = True) -> str:
     options: list[str] = []
     seen = set()
     arrival_at_stop_min = bus_snapshot.get("arrival_at_stop_min")
@@ -1035,7 +1019,39 @@ def _bus_route_options_text(bus_snapshot: dict, fallback_route: str | None = Non
     if fallback_route and fallback_route != "公車" and fallback_route not in seen:
         options.insert(0, fallback_route)
 
-    return f"可選路線：{'、'.join(options)}" if options else ""
+    if not options:
+        return ""
+    route_text = "、".join(options)
+    return f"可選路線：{route_text}" if with_label else route_text
+
+
+def _available_route_options_text(plan: dict) -> str:
+    best_option = plan.get("best_option") or {}
+    recommended_mode = plan.get("recommended_mode")
+    snapshot = best_option.get("snapshot") or {}
+    google_detailed = snapshot.get("google_detailed") or {}
+    steps = (google_detailed or {}).get("steps", [])
+    matched_step = _select_transit_step(steps, recommended_mode)
+
+    bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
+    bus_fallback = None
+    if matched_step and _is_bus_step(matched_step):
+        bus_fallback = matched_step.get("line_short_name") or matched_step.get("line_name")
+    elif recommended_mode == "bus":
+        bus_fallback = _bus_route_label(bus_snap)
+
+    bus_options = _bus_route_options_text(bus_snap or {}, bus_fallback, with_label=False)
+    if bus_options:
+        return bus_options
+
+    route_names = []
+    for step in steps:
+        if step.get("type") != "TRANSIT":
+            continue
+        route_name = step.get("line_short_name") or step.get("line_name")
+        if route_name and route_name not in route_names:
+            route_names.append(route_name)
+    return "、".join(route_names) if route_names else "無即時可選路線"
 
 
 def _metro_line_from_station_ids(origin_station: dict, destination_station: dict) -> str:
@@ -1089,16 +1105,13 @@ def _format_transport_line(plan: dict) -> str:
         exit_info = "" if is_bus else (_exit_info_from_steps(steps, matched_step) or _exit_info_from_snapshot(snapshot))
 
         eta_str = ""
-        route_options = ""
         if is_bus:
             chosen = bus_snap.get("chosen_bus") or {}
             eta = chosen.get("eta_min")
             if eta is not None:
                 eta_str = f"（約 {eta} 分鐘後到站）"
-            route_options = _bus_route_options_text(bus_snap, line)
 
-        options_text = f" {route_options}。" if route_options else ""
-        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}{eta_str}。{options_text}"
+        return f"{v_emoji} 建議{mode_text}！請搭乘 {line}，於『{dep_stop}』上車，並在『{arr_stop}』下車{(' ' + exit_info) if exit_info else ''}{eta_str}。"
 
     if recommended_mode == "metro":
         metro_snap = snapshot
@@ -1117,14 +1130,12 @@ def _format_transport_line(plan: dict) -> str:
         first_stop = bus_snap.get("first_stop") or {}
         walk_min = bus_snap.get("walk_minutes")
         chosen = bus_snap.get("chosen_bus") or {}
-        stop_name = first_stop.get("stop_name", "最近站牌")
+        stop_name = first_stop.get("stop_name", "上車站點")
         route = _bus_route_label(bus_snap)
         eta = chosen.get("eta_min")
         route_str = route or "公車"
         eta_str = f"（約 {eta} 分鐘後到站）" if eta is not None else ""
-        route_options = _bus_route_options_text(bus_snap, route_str)
-        options_text = f" {route_options}。" if route_options else ""
-        return f"🚌 建議搭公車！請搭乘 {route_str}，於『{stop_name}』上車，並在『目的地附近站牌』下車{eta_str}。{options_text}"
+        return f"🚌 建議搭公車！請搭乘 {route_str}，於『{stop_name}』上車，並在『目的地附近站牌』下車{eta_str}。"
 
     return "🚶 建議參考 Google 地圖最快路徑。"
 
@@ -1136,47 +1147,107 @@ def _get_transport_line(plan: dict) -> str:
     return plan["transport_line"]
 
 
-def _format_today_commute_text(plan: dict, header: str = "今日通勤建議：") -> str:
-    weather_info = plan["weather_info"]
-    weather_buffer = plan["weather_buffer"]
-    baseline_minutes = plan["baseline_minutes"]
+def build_transport_detail_lines(plan: dict) -> list[str]:
+    best_option = plan.get("best_option") or {}
+    recommended_mode = plan.get("recommended_mode")
+    snapshot = best_option.get("snapshot") or {}
+    google_detailed = snapshot.get("google_detailed") or {}
+    steps = (google_detailed or {}).get("steps", [])
+    matched_step = _select_transit_step(steps, recommended_mode)
+    lines = []
 
-    # Line 1: 目標抵達
-    arrival_line = f"目標抵達：{plan['effective_arrival_time']}"
+    if matched_step:
+        dep_stop = matched_step.get("departure_stop") or "最近站點"
+        arr_stop = matched_step.get("arrival_stop") or "目的地站點"
+        lines.append(f"轉乘站名：{dep_stop} → {arr_stop}")
 
-    # Line 2: 建議出門（含緩衝說明）
-    departure_note = ""
-    if weather_buffer > 0:
-        wx = weather_info.get("weather_text", "")
-        if "雨" in wx or "雷" in wx:
-            departure_note = f"（已包含雨天 {weather_buffer} 分鐘緩衝）"
-        else:
-            departure_note = f"（已包含天氣緩衝 {weather_buffer} 分鐘）"
-    departure_line = f"建議出門：{plan['final_departure_time']}{departure_note}"
+    bus_snap = snapshot if recommended_mode == "bus" else snapshot.get("bus_snapshot", {})
+    metro_snap = snapshot if recommended_mode == "metro" else snapshot.get("metro_snapshot", {})
 
-    # Line 3: 通勤時間
-    commute_line = f"通勤時間：約 {baseline_minutes} 分鐘"
+    walk_minutes = None
+    walk_distance = None
+    if bus_snap:
+        walk_minutes = bus_snap.get("walk_minutes")
+        walk_distance = _walk_metres(walk_minutes)
+    if walk_minutes is None and metro_snap:
+        walk_minutes = metro_snap.get("walk_minutes")
+        distance_km = metro_snap.get("distance_km")
+        walk_distance = f"{distance_km:.2f} 公里" if distance_km is not None else _walk_metres(walk_minutes)
 
-    # Line 4: 交通方式 (Moved up for visibility)
-    transport_line = f"通勤方式：{_get_transport_line(plan)}"
+    if walk_minutes is not None:
+        lines.append(f"步行距離：約 {walk_distance or _walk_metres(walk_minutes)}，步行約 {walk_minutes} 分鐘")
+    else:
+        lines.append("步行距離：即時路網未回傳，請依 Google 路徑現場調整")
 
-    # Line 5: 天氣
-    wx_text = weather_info.get("weather_text", "未知")
+    wait_minutes = best_option.get("wait_minutes")
+    chosen_bus = (bus_snap or {}).get("chosen_bus") or {}
+    if chosen_bus.get("eta_min") is not None:
+        wait_minutes = max(0, chosen_bus.get("eta_min") - ((bus_snap or {}).get("arrival_at_stop_min") or 0))
+    if wait_minutes is not None:
+        lines.append(f"預計等待時間：約 {wait_minutes} 分鐘")
+    else:
+        lines.append("預計等待時間：以即時資料估算中")
+
+    if recommended_mode == "bus" and bus_snap:
+        for detail in _build_bus_detail_lines(bus_snap)[:4]:
+            if detail not in lines:
+                lines.append(detail)
+    elif recommended_mode == "metro" and metro_snap:
+        for detail in _build_metro_detail_lines(metro_snap)[:4]:
+            if detail not in lines:
+                lines.append(detail)
+
+    return lines
+
+
+def _format_weather_summary(weather_info: dict) -> str:
+    wx_text = weather_info.get("weather_text") or "未知"
     temp_min = weather_info.get("temperature_min")
     temp_max = weather_info.get("temperature_max")
     temp = weather_info.get("temperature")
     pop = weather_info.get("pop")
+    apparent_temperature = weather_info.get("apparent_temperature")
 
-    if temp is not None:
-        temp_str = f"，{temp}°C"
+    if temp is not None and apparent_temperature is not None:
+        temp_text = f"溫度 {temp}°C，體感 {apparent_temperature}°C"
+    elif apparent_temperature is not None:
+        temp_text = f"體感 {apparent_temperature}°C"
+    elif temp is not None:
+        temp_text = f"溫度 {temp}°C"
     elif temp_min is not None and temp_max is not None:
-        temp_str = f"，{temp_min}-{temp_max}°C"
+        temp_text = f"溫度 {temp_min}-{temp_max}°C"
     else:
-        temp_str = ""
-    pop_str = f"。降雨機率 {pop}%" if pop is not None else ""
-    weather_line = f"今日天氣：{wx_text}{temp_str}{pop_str}"
+        temp_text = "溫度無即時資訊"
 
-    return "\n".join([header, arrival_line, departure_line, transport_line, commute_line, weather_line])
+    pop_text = f"降雨機率 {pop}%" if pop is not None else "降雨機率無即時資訊"
+    return f"{wx_text}，{pop_text}，{temp_text}"
+
+
+def build_commute_display_payload(plan: dict) -> dict:
+    full_transport = _get_transport_line(plan)
+    display = {
+        "targetDate": plan["target_date"].isoformat(),
+        "departureDate": plan.get("departure_calc", {}).get("departure_date") or plan["target_date"].isoformat(),
+        "departureDateTime": plan.get("departure_calc", {}).get("departure_datetime"),
+        "estimatedDepartureTime": plan["final_departure_time"],
+        "targetArrivalTime": plan["effective_arrival_time"],
+        "estimatedCommuteTime": f"約 {plan['baseline_minutes']} 分鐘",
+        "estimatedCommuteMinutes": plan["baseline_minutes"],
+        "fullTransport": full_transport,
+        "availableRoutes": _available_route_options_text(plan),
+        "currentWeather": _format_weather_summary(plan["weather_info"]),
+    }
+    display["text"] = "\n".join([
+        f"預估出門時間：{display['estimatedDepartureTime']}",
+        f"目標抵達時間：{display['targetArrivalTime']}",
+        f"完整交通方式：{display['fullTransport']}",
+        f"可選路線：{display['availableRoutes']}",
+    ])
+    return display
+
+
+def _format_today_commute_text(plan: dict, header: str = "今日通勤建議：") -> str:
+    return build_commute_display_payload(plan)["text"]
 
 
 def _build_reminder_payload_from_plan(plan: dict) -> dict:
@@ -1198,6 +1269,7 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     temp_max = weather_info.get("temperature_max")
     temp = weather_info.get("temperature")
     pop = weather_info.get("pop")
+    apparent_temperature = weather_info.get("apparent_temperature")
 
     if temp is not None:
         temp_str = f"，{temp}°C"
@@ -1206,12 +1278,13 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     else:
         temp_str = ""
     pop_str = f"。降雨機率 {pop}%" if pop is not None else ""
+    apparent_str = f"。體感溫度 {apparent_temperature}°C" if apparent_temperature is not None else ""
 
     lines = [
         f"🔔 出門提醒：您預計在 {plan['final_departure_time']} 出門{departure_note}",
         f"📍 通勤方式：{_get_transport_line(plan)}",
-        f"📅 目標 {plan['effective_arrival_time']} {plan.get('target_label_text', '抵達目的地')} (通勤約 {baseline_minutes} 分鐘)",
-        f"🌤 天氣：{wx_text}{temp_str}{pop_str}",
+        f"📅 目標 {plan['effective_arrival_time']} 抵達公司 (通勤約 {baseline_minutes} 分鐘)",
+        f"🌤 天氣：{wx_text}{temp_str}{pop_str}{apparent_str}",
     ]
 
     text = "\n".join(lines)
@@ -1222,6 +1295,7 @@ def _build_reminder_payload_from_plan(plan: dict) -> dict:
     return {
         "ok": True,
         "plan_key": plan_key,
+        "schedule_id": plan.get("schedule_id"),
         "departure_time": plan["final_departure_time"],
         "recommended_mode": plan["recommended_mode"],
         "text": text,
@@ -1250,101 +1324,21 @@ async def build_today_commute_payload(
     target_date: date | None = None,
     force_mode_override: str | None = None,
     header: str = "今日通勤建議：",
-    log_plan: bool = True,
+    schedule_id: int | None = None,
 ):
-    try:
-        plan = await _compute_today_plan(
-            db=db,
-            user_id=user_id,
-            target_date=target_date,
-            force_mode_override=force_mode_override,
-        )
-        if not plan.get("ok"):
-            reason = plan.get("reason", "unknown")
-            message = plan.get("message", "無法計算通勤建議")
-            print(f"[build-payload] plan not ok: reason={reason}")
-            # 即使 plan 失敗，也回傳包含必要欄位的結構，避免 Dashboard 報 NoneType 錯誤
-            safe_plan = {
-                "ok": False,
-                "reason": reason,
-                "message": message,
-                "text": f"❌ {message}",
-                "target_date": target_date,
-                "effective_arrival_time": "",
-                "final_departure_time": "",
-                "baseline_minutes": 0,
-                "weather_buffer": 0,
-                "weather_info": {},
-                "best_option": {},
-                "recommended_mode": "",
-                "target_label_text": "",
-                "mode_override": force_mode_override or "auto",
-                "plan_key": None,
-            }
-            if log_plan:
-                try:
-                    record_commute_plan_log(db, user_id, safe_plan)
-                except Exception as log_e:
-                    print(f"[build-payload] log error: {log_e}")
-            return safe_plan
-
-        try:
-            plan["text"] = route_formatter.format_today_commute_text(plan, header=header)
-        except Exception as e:
-            print(f"[build-payload] format error: {e}")
-            traceback.print_exc()
-            return {
-                "ok": False,
-                "reason": "format_error",
-                "message": f"格式化通勤建議時發生錯誤：{str(e)}",
-                "text": f"❌ 格式化通勤建議時發生錯誤：{str(e)}",
-                "target_date": target_date,
-                "effective_arrival_time": "",
-                "final_departure_time": "",
-                "baseline_minutes": 0,
-                "weather_buffer": 0,
-                "weather_info": {},
-                "best_option": {},
-                "recommended_mode": "",
-                "target_label_text": "",
-                "mode_override": force_mode_override or "auto",
-                "plan_key": None,
-            }
-
-        try:
-            plan["plan_key"] = route_formatter.build_reminder_payload_from_plan(plan).get("plan_key")
-        except Exception as e:
-            print(f"[build-payload] plan_key error: {e}")
-            traceback.print_exc()
-            plan["plan_key"] = None
-
-        if log_plan:
-            try:
-                record_commute_plan_log(db, user_id, plan)
-            except Exception as e:
-                print(f"[build-payload] log error: {e}")
-                traceback.print_exc()
+    plan = await _compute_today_plan(
+        db=db,
+        user_id=user_id,
+        target_date=target_date,
+        force_mode_override=force_mode_override,
+        schedule_id=schedule_id,
+    )
+    if not plan.get("ok"):
         return plan
-    except Exception as e:
-        print(f"[build-payload] UNEXPECTED CRASH: {e}")
-        traceback.print_exc()
-        return {
-            "ok": False,
-            "reason": "unexpected_error",
-            "message": f"系統內部錯誤：{str(e)}",
-            "text": f"❌ 系統內部錯誤：{str(e)}",
-            "target_date": target_date,
-            "effective_arrival_time": "",
-            "final_departure_time": "",
-            "baseline_minutes": 0,
-            "weather_buffer": 0,
-            "weather_info": {},
-            "best_option": {},
-            "recommended_mode": "",
-            "target_label_text": "",
-            "mode_override": force_mode_override or "auto",
-            "plan_key": None,
-        }
+
+    plan["display"] = build_commute_display_payload(plan)
+    plan["text"] = plan["display"]["text"]
+    return plan
 
 
 async def build_today_reminder_payload(
@@ -1352,6 +1346,7 @@ async def build_today_reminder_payload(
     user_id: int,
     target_date: date | None = None,
     plan: dict | None = None,
+    schedule_id: int | None = None,
 ):
     if plan is None:
         plan = await _compute_today_plan(
@@ -1359,6 +1354,7 @@ async def build_today_reminder_payload(
             user_id=user_id,
             target_date=target_date,
             force_mode_override=None,
+            schedule_id=schedule_id,
         )
     if not plan.get("ok"):
         return plan
@@ -1371,12 +1367,14 @@ async def freeze_today_reminder_payload(
     user_id: int,
     target_date: date | None = None,
     plan: dict | None = None,
+    schedule_id: int | None = None,
 ):
     payload = await build_today_reminder_payload(
         db=db,
         user_id=user_id,
         target_date=target_date,
         plan=plan,
+        schedule_id=schedule_id,
     )
     if not payload.get("ok"):
         return payload
@@ -1389,5 +1387,6 @@ async def freeze_today_reminder_payload(
         frozen_departure_time=payload["departure_time"],
         frozen_reminder_text=payload["text"],
         prepared_at=datetime.now(TAIPEI_TZ),
+        schedule_id=payload.get("schedule_id") or schedule_id,
     )
     return payload
