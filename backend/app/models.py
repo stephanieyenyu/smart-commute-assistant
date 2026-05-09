@@ -229,3 +229,14 @@ class FamilyMember(Base):
 
     group = relationship("FamilyGroup", back_populates="members")
     user = relationship("User", back_populates="family_memberships")
+
+class CommuteDestination(Base):
+    __tablename__ = "commute_destinations"
+
+    id = Column(Integer, primary key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    destination_name = Column(String) # 例如：公司、學校
+    # ... 其他欄位 (地址、經緯度等) ...
+
+    # 與 User 互相對應
+    user = relationship("User", back_populates="destinations")
