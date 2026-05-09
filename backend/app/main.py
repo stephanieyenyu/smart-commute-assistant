@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import List, Optional
+import re
+from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -217,6 +218,8 @@ if os.path.isdir(_STATIC_DIR):
 
 class ScheduleSubmitPayload(BaseModel):
     """前端 LIFF POST /api/schedule/submit 的 Payload 格式"""
+    model_config = ConfigDict(extra="ignore")
+
     userId: str
     originName: Optional[str] = None
     originAddress: Optional[str] = None
@@ -231,6 +234,93 @@ class ScheduleSubmitPayload(BaseModel):
     reminderEnabled: Optional[bool] = True
     mode: Optional[str] = None              # create/edit，由 LIFF query 或表單帶入
     scheduleId: Optional[int] = None        # edit 時指定要修改的排程
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_liff_payload_variants(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+
+        data = dict(values)
+
+        def pick(*keys: str) -> Any:
+            for key in keys:
+                value = data.get(key)
+                if value is not None and value != "":
+                    return value
+            return None
+
+        normalized_keys = {
+            "userId": ("userId", "user_id", "lineUserId", "line_user_id"),
+            "originName": ("originName", "origin_name", "homeName", "home_name", "startName", "start_name"),
+            "originAddress": ("originAddress", "origin_address", "homeAddress", "home_address", "startAddress", "start_address"),
+            "originLat": ("originLat", "origin_lat", "homeLat", "home_lat", "startLat", "start_lat"),
+            "originLng": ("originLng", "origin_lng", "homeLng", "home_lng", "startLng", "start_lng"),
+            "destinationName": ("destinationName", "destination_name", "destName", "dest_name", "destinationLabel", "destination_label"),
+            "destinationAddress": ("destinationAddress", "destination_address", "destAddress", "dest_address", "officeAddress", "office_address"),
+            "destLat": ("destLat", "dest_lat", "destinationLat", "destination_lat", "officeLat", "office_lat"),
+            "destLng": ("destLng", "dest_lng", "destinationLng", "destination_lng", "officeLng", "office_lng"),
+            "arrivalTime": ("arrivalTime", "arrival_time", "targetArrivalTime", "target_arrival_time", "preferredArrivalTime", "preferred_arrival_time"),
+            "weekdays": ("weekdays", "activeWeekdays", "active_weekdays", "days"),
+            "reminderEnabled": ("reminderEnabled", "reminder_enabled"),
+            "scheduleId": ("scheduleId", "schedule_id"),
+        }
+
+        for target, aliases in normalized_keys.items():
+            value = pick(*aliases)
+            if value is not None:
+                data[target] = value
+
+        for key, value in list(data.items()):
+            if isinstance(value, str):
+                stripped = value.strip()
+                data[key] = stripped if stripped else None
+
+        return data
+
+    @field_validator("userId")
+    @classmethod
+    def require_user_id(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise ValueError("userId 不可為空")
+        return value
+
+    @field_validator("arrivalTime")
+    @classmethod
+    def normalize_arrival_time(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", value)
+        if not match:
+            raise ValueError("arrivalTime 必須為 HH:MM 格式")
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if hour > 23 or minute > 59:
+            raise ValueError("arrivalTime 時間超出範圍")
+        return f"{hour:02d}:{minute:02d}"
+
+    @field_validator("weekdays", mode="before")
+    @classmethod
+    def normalize_weekdays(cls, value: Any) -> Optional[List[int]]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, str):
+            raw_days = [part for part in re.split(r"[\s,]+", value) if part]
+        elif isinstance(value, (list, tuple, set)):
+            raw_days = list(value)
+        else:
+            raise ValueError("weekdays 必須是陣列或逗號分隔字串")
+
+        try:
+            days = sorted({int(day) for day in raw_days})
+        except (TypeError, ValueError) as exc:
+            raise ValueError("weekdays 只能包含 0 到 6 的數字") from exc
+
+        if any(day < 0 or day > 6 for day in days):
+            raise ValueError("weekdays 只能包含 0 到 6 的數字")
+        return days
 
 
 class ScheduleDeletePayload(BaseModel):
@@ -334,6 +424,11 @@ SCHEDULE_SAVED_QUICK_REPLIES = [
 
 # ── POST /api/schedule/submit ─────────────────────────────────────────────────
 
+@app.options("/api/schedule/submit")
+async def submit_schedule_options():
+    return {"ok": True}
+
+
 @app.post("/api/schedule/submit")
 async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
     """LIFF 前端送出通勤排程設定。
@@ -424,9 +519,17 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
                 "reminderEnabled":   schedule.reminder_enabled,
             }
         }
+    except ValueError as e:
+        print(f"[POST /api/schedule/submit] validation_error={e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         print(f"[POST /api/schedule/submit] error={e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/liff/schedule/submit", include_in_schema=False)
+async def submit_schedule_liff_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
+    return await submit_schedule(payload, db)
 
 
 # ── GET /api/schedule ─────────────────────────────────────────────────────────

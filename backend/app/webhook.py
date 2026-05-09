@@ -154,6 +154,22 @@ TOPIC_CARD_ALIASES = {
     "系統設定": "系統設定",
 }
 
+COMMAND_HELP_GROUPS = {
+    "通勤選單": ["今日通勤建議", "明天幾點出門", "查看今天交通方式", "今天自動判斷", "優先選擇通勤時間短", "今天搭公車", "今天搭捷運"],
+    "排程設定": ["新增排程設定", "一週排程設定", "編輯排程", "刪除排程 1", "查看設定"],
+    "時間設定": ["修改今天到公司時間", "修改明天到公司時間", "明天幾點出門"],
+    "基本設定": ["基本設定", "系統設定選單", "查看設定", "開啟自動提醒", "關閉自動提醒", "查看提醒設定", "重新設定"],
+    "看板管理": ["個人看板連結", "家庭看板連結", "看板管理說明"],
+    "指令說明": ["指令說明", "說明", "help"],
+}
+
+
+def build_command_help_text() -> str:
+    sections = []
+    for title, commands in COMMAND_HELP_GROUPS.items():
+        sections.append(f"[{title}]\n" + "\n".join(f"- {command}" for command in commands))
+    return "指令說明\n\n" + "\n\n".join(sections)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def format_profile_text(schedule, profile, today_mode=None):
@@ -722,10 +738,9 @@ async def line_webhook(
                     await reply_flex_message(reply_token, topic_title, topic_card)
                     continue
 
-            # ── 指令說明 → Flex Carousel ──────────────────────────────────
+            # ── 指令說明 → plain text only ────────────────────────────────
             if command_text in COMMAND_ALIASES["help"]:
-                cards = build_help_flex()
-                await reply_flex_message(reply_token, "📖 指令說明", cards)
+                await reply_text(reply_token, build_command_help_text())
                 continue
 
             # ── 查看設定 ──────────────────────────────────────────────────
