@@ -14,8 +14,8 @@ from app.config import LINE_CHANNEL_SECRET
 from app.db import SessionLocal
 from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply
 from app.crud import (
-    delete_schedule_template,
-        undelete_schedule_template,
+    delete_commute_schedule,
+        undelete_commute_schedule,
         undelete_destination,
     get_or_create_user,
     get_or_create_profile,
