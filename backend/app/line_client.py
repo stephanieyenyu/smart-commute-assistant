@@ -1,3 +1,6 @@
+import json
+import os
+from urllib.parse import urlencode
 from linebot.v3.messaging import (
     Configuration,
     AsyncApiClient,
@@ -5,15 +8,15 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     PushMessageRequest,
     TextMessage,
+    AudioMessage,
+    FlexMessage,
     QuickReply,
     QuickReplyItem,
     LocationAction,
     MessageAction,
     DatetimePickerAction,
-    PostbackAction,
+    URIAction,
 )
-import httpx
-
 from app.config import LINE_CHANNEL_ACCESS_TOKEN
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
@@ -95,7 +98,6 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
       - type: 'location'      → opens LINE map
       - type: 'message'       → sends a text message
       - type: 'datetimepicker'→ opens time/date picker (requires 'data', 'mode')
-      - type: 'postback'      → sends a postback event (requires 'data', optional 'displayText')
     """
     quick_reply_items = []
     for item in items:
@@ -107,12 +109,6 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
                 label=item["label"],
                 data=item.get("data", "postback"),
                 mode=item.get("mode", "time"),
-            )
-        elif t == "postback":
-            action = PostbackAction(
-                label=item["label"],
-                data=item.get("data", ""),
-                display_text=item.get("displayText"),
             )
         else:  # message
             action = MessageAction(label=item["label"], text=item["text"])
@@ -260,20 +256,10 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
     quick_reply = _quick_reply_payload(items)
     messages = []
     for i, t in enumerate(texts):
-        qr = quick_reply if i == len(texts) - 1 else None
-        msg = {"type": "text", "text": sanitise_outbound_text(t)}
-        if qr:
-            msg["quickReply"] = qr
-        messages.append(msg)
-
-    payload = {
-        "replyToken": reply_token,
-        "messages": messages,
-    }
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
+        # Only the last message can have quick replies attached
+        qr = QuickReply(items=quick_reply_items) if i == len(texts) - 1 else None
+        messages.append(TextMessage(text=t, quick_reply=qr))
+    
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
             response = await client.post(
@@ -301,6 +287,41 @@ async def reply_multi_messages_with_quick_reply(reply_token: str, texts: list[st
                 print(f"[line] reply_multi fallback error: {fallback_error}")
 
 
+async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dict | list[dict]) -> None:
+    """
+    發送 Flex Message。
+    flex_contents 可為單張 Flex Bubble dict，或多張 Bubble dict 組成的 Carousel。
+    """
+    if isinstance(flex_contents, dict):
+        container_payload = flex_contents
+    elif len(flex_contents) == 1:
+        container_payload = flex_contents[0]
+    else:
+        container_payload = {
+            "type": "carousel",
+            "contents": flex_contents,
+        }
+    try:
+        async with AsyncApiClient(configuration) as api_client:
+            line_bot_api = AsyncMessagingApi(api_client)
+            flex_container = FlexContainer.from_dict(container_payload)
+            await line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[
+                        FlexMessage(
+                            alt_text=alt_text,
+                            contents=flex_container,
+                        )
+                    ]
+                )
+            )
+    except Exception as e:
+        print(f"[line] reply_flex_message error: {e}")
+        # Fallback to plain text
+        await reply_text(reply_token, alt_text)
+
+
 async def push_text(user_id: str, text: str) -> None:
     text = sanitise_outbound_text(text)
     payload = {
@@ -321,6 +342,46 @@ async def push_text(user_id: str, text: str) -> None:
             response.raise_for_status()
     except Exception as e:
         print(f"[line] push_text error: {e}")
+
+
+def build_tts_audio_url(text: str) -> str:
+    """
+    建立 LINE 可讀取的 HTTPS TTS 音訊 URL。
+    可用 TTS_AUDIO_BASE_URL 覆寫；預設使用公開 HTTPS TTS 端點產生中文語音。
+    """
+    configured_base = os.getenv("TTS_AUDIO_BASE_URL", "").strip()
+    query_text = (text or "出門提醒").replace("\n", " ")
+    if configured_base:
+        separator = "&" if "?" in configured_base else "?"
+        return f"{configured_base}{separator}{urlencode({'text': query_text})}"
+    return "https://translate.google.com/translate_tts?" + urlencode({
+        "ie": "UTF-8",
+        "client": "tw-ob",
+        "tl": "zh-TW",
+        "q": query_text[:180],
+    })
+
+
+def estimate_tts_duration_ms(text: str) -> int:
+    return max(5000, min(60000, len(text or "") * 220))
+
+
+async def push_audio_message(user_id: str, original_content_url: str, duration_ms: int) -> None:
+    if not original_content_url.startswith("https://"):
+        raise ValueError("LINE AudioMessage requires an HTTPS original_content_url")
+    async with AsyncApiClient(configuration) as api_client:
+        line_bot_api = AsyncMessagingApi(api_client)
+        await line_bot_api.push_message(
+            PushMessageRequest(
+                to=user_id,
+                messages=[
+                    AudioMessage(
+                        original_content_url=original_content_url,
+                        duration=duration_ms,
+                    )
+                ]
+            )
+        )
 
 
 async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
@@ -348,92 +409,3 @@ async def push_with_quick_reply(user_id: str, text: str, items: list) -> None:
     except Exception as e:
         print(f"[line] push_with_quick_reply error: {e}")
         await push_text(user_id, text)
-
-
-def build_departure_check_flex_message() -> dict:
-    return {
-        "type": "flex",
-        "altText": "您出門了嗎？",
-        "contents": {
-            "type": "bubble",
-            "size": "mega",
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "spacing": "md",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "您出門了嗎？",
-                        "weight": "bold",
-                        "size": "xl",
-                        "color": "#111111",
-                    },
-                    {
-                        "type": "text",
-                        "text": "如果還需要時間，我會五分鐘後再提醒一次。",
-                        "size": "sm",
-                        "color": "#666666",
-                        "wrap": True,
-                    },
-                ],
-            },
-            "footer": {
-                "type": "box",
-                "layout": "vertical",
-                "spacing": "sm",
-                "contents": [
-                    {
-                        "type": "button",
-                        "style": "primary",
-                        "color": "#1fb86a",
-                        "action": {
-                            "type": "postback",
-                            "label": "已經出門了",
-                            "data": "action=departure_check&choice=left",
-                            "displayText": "已經出門了",
-                        },
-                    },
-                    {
-                        "type": "button",
-                        "style": "secondary",
-                        "action": {
-                            "type": "postback",
-                            "label": "我還需要五分鐘",
-                            "data": "action=departure_check&choice=need_5",
-                            "displayText": "我還需要五分鐘",
-                        },
-                    },
-                ],
-            },
-        },
-    }
-
-
-async def push_departure_check_message(user_id: str) -> None:
-    payload = {
-        "to": user_id,
-        "messages": [build_departure_check_flex_message()],
-    }
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
-            response = await client.post(
-                "https://api.line.me/v2/bot/message/push",
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-    except Exception as e:
-        print(f"[line] push_departure_check_message error: {e}")
-        await push_with_quick_reply(
-            user_id,
-            "您出門了嗎？",
-            [
-                {"type": "message", "label": "已經出門了", "text": "已經出門了"},
-                {"type": "message", "label": "我還需要五分鐘", "text": "我還需要五分鐘"},
-            ],
-        )

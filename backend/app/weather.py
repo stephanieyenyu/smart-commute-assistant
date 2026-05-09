@@ -35,6 +35,7 @@ def _build_failed_weather_result(
         "temperature": None,
         "temperature_min": None,
         "temperature_max": None,
+        "apparent_temperature": None,
         "extra_buffer_minutes": 0,
         "scope": scope,
         "city": city,
@@ -55,7 +56,7 @@ def _calculate_weather_buffer(pop: int | None, weather_text: str | None) -> int:
     wx = weather_text or ""
 
     if pop is not None and pop >= 80:
-        return 12
+        return 10
     if pop is not None and pop >= 60:
         return 8
     if pop is not None and pop >= 40:
@@ -66,6 +67,18 @@ def _calculate_weather_buffer(pop: int | None, weather_text: str | None) -> int:
         return 6
 
     return 0
+
+
+def _estimate_apparent_temperature(
+    temperature: int | None,
+    temperature_min: int | None,
+    temperature_max: int | None,
+) -> int | None:
+    if temperature is not None:
+        return temperature
+    if temperature_min is not None and temperature_max is not None:
+        return round((temperature_min + temperature_max) / 2)
+    return temperature_min if temperature_min is not None else temperature_max
 
 
 def _pick_parameter_value(parameter_block: dict[str, Any]) -> str | None:
@@ -142,6 +155,7 @@ def _parse_city_weather_payload(city_name: str, payload: dict[str, Any]) -> dict
             max_t = _safe_int(raw_value)
 
     extra_buffer = _calculate_weather_buffer(pop_value, wx_value)
+    apparent_temperature = _estimate_apparent_temperature(None, min_t, max_t)
 
     return {
         "weather_text": wx_value or "未知",
@@ -150,6 +164,7 @@ def _parse_city_weather_payload(city_name: str, payload: dict[str, Any]) -> dict
         "temperature": None,
         "temperature_min": min_t,
         "temperature_max": max_t,
+        "apparent_temperature": apparent_temperature,
         "extra_buffer_minutes": extra_buffer,
         "scope": "city",
         "city": city_name,
