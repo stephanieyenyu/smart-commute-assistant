@@ -16,6 +16,7 @@ from app.tdx_bus import (
     simplify_eta_list,
 )
 from app.weather import get_commute_weather
+from app import route_formatter
 from app.crud import (
     get_profile,
     get_next_setup_step,
@@ -41,6 +42,9 @@ MODE_LABELS = {
     "metro": "建議改搭捷運",
     "bus_to_metro": "今天搭公車轉捷運",
 }
+
+ROUTE_FORMATTER_COMMUTE_TEXT = route_formatter.format_today_commute_text
+ROUTE_FORMATTER_REMINDER_PAYLOAD = route_formatter.build_reminder_payload_from_plan
 
 
 def _normalize_schedule_days(days) -> list[int]:
@@ -529,6 +533,10 @@ async def choose_commute_option_with_override(
         }
 
     if requested_mode == "shortest":
+        if google_bus_step and bus_option:
+            return {"best_option": bus_option, "selection_source": "manual"}
+        if google_metro_step and metro_option:
+            return {"best_option": metro_option, "selection_source": "manual"}
         return {"best_option": google_option, "selection_source": "manual"}
 
     if requested_mode == "bus":
@@ -948,6 +956,8 @@ def _exit_info_from_snapshot(snapshot: dict) -> str:
 
 
 def _format_transport_line(plan: dict) -> str:
+    return route_formatter.format_transport_line(plan)
+
     best_option = plan["best_option"]
     recommended_mode = plan["recommended_mode"]
     snapshot = best_option.get("snapshot") or {}
@@ -1007,10 +1017,7 @@ def _format_transport_line(plan: dict) -> str:
 
 
 def _get_transport_line(plan: dict) -> str:
-    if plan.get("transport_line"):
-        return plan["transport_line"]
-    plan["transport_line"] = _format_transport_line(plan)
-    return plan["transport_line"]
+    return route_formatter.get_transport_line(plan)
 
 
 def build_transport_detail_lines(plan: dict) -> list[str]:
@@ -1176,6 +1183,7 @@ async def build_today_commute_payload(
     force_mode_override: str | None = None,
     header: str = "今日通勤建議：",
     schedule_id: int | None = None,
+    log_plan: bool = True,
 ):
     plan = await _compute_today_plan(
         db=db,
@@ -1189,6 +1197,12 @@ async def build_today_commute_payload(
 
     plan["display"] = build_commute_display_payload(plan)
     plan["text"] = plan["display"]["text"]
+    if log_plan:
+        try:
+            from app.crud import record_commute_plan_log
+            record_commute_plan_log(db, user_id, plan["target_date"], plan)
+        except Exception as log_error:
+            print(f"[commute-log] error={log_error}")
     return plan
 
 

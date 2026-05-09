@@ -16,11 +16,13 @@ from linebot.v3.messaging import (
     MessageAction,
     DatetimePickerAction,
     URIAction,
+    PostbackAction,
 )
 from linebot.v3.messaging.models import FlexContainer
 from app.config import LINE_CHANNEL_ACCESS_TOKEN
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+PERSISTENT_QUICK_REPLIES = []
 
 
 def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
@@ -45,6 +47,12 @@ def _build_quick_reply_items(items: list) -> list[QuickReplyItem]:
             )
         elif t == "uri":
             action = URIAction(label=item["label"], uri=item["uri"])
+        elif t == "postback":
+            action = PostbackAction(
+                label=item["label"],
+                data=item["data"],
+                display_text=item.get("display_text"),
+            )
         else:  # message
             action = MessageAction(label=item["label"], text=item["text"])
         quick_reply_items.append(QuickReplyItem(action=action))
@@ -233,3 +241,53 @@ async def push_flex_message(
     except Exception as e:
         print(f"[line] push_flex_message error: {e}")
         await push_text(user_id, alt_text)
+
+
+def build_departure_check_flex_message() -> dict:
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": "您出門了嗎？", "weight": "bold", "size": "lg"},
+                {"type": "text", "text": "請回覆目前狀態，系統會同步更新看板。", "wrap": True, "size": "sm"},
+            ],
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "action": {
+                        "type": "postback",
+                        "label": "已經出門了",
+                        "data": "action=departure_check&choice=left",
+                        "displayText": "我已經出門了",
+                    },
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "action": {
+                        "type": "postback",
+                        "label": "我還需要五分鐘",
+                        "data": "action=departure_check&choice=need_5",
+                        "displayText": "我還需要五分鐘",
+                    },
+                },
+            ],
+        },
+    }
+
+
+async def push_departure_check_message(user_id: str) -> None:
+    await push_flex_message(
+        user_id=user_id,
+        alt_text="您出門了嗎？",
+        flex_contents=[build_departure_check_flex_message()],
+    )

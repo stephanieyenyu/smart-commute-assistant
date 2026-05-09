@@ -1,7 +1,10 @@
+import asyncio
 import json
 import os
+import traceback
 from datetime import date, datetime, timedelta
-from urllib.parse import urlencode
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -425,21 +428,53 @@ async def line_webhook(
     request: Request,
     x_line_signature: str | None = Header(default=None),
 ):
-    print("====== 🚨 收到 LINE Webhook 敲門了！ ======")
+    print("====== LINE Webhook received ======")
     body = await request.body()
     body_str = body.decode("utf-8")
-    print(f"📦 裡面的內容是：{body_str}")
-    body = await request.body()
-    body_str = body.decode("utf-8")
+    print(f"[line-webhook] body={body_str}")
     try:
         events = parser.parse(body_str, x_line_signature)
     except InvalidSignatureError:
+        print("[line-webhook] invalid signature")
         raise HTTPException(status_code=400, detail="Invalid signature")
+    except Exception as parse_error:
+        print(f"[line-webhook] parse error: {parse_error}")
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
+    request_base_url = str(request.base_url).rstrip("/")
+    task = asyncio.create_task(_process_line_events_safely(events, request_base_url))
+    task.add_done_callback(_log_line_webhook_task_result)
+
+    # LINE requires a fast 200 OK. All DB/API/LINE reply work happens in the
+    # background task above so slow integrations cannot make LINE time out.
+    return {"ok": True}
+
+
+def _log_line_webhook_task_result(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        print("[line-webhook] background task cancelled")
+    except Exception as task_error:
+        print(f"[line-webhook] background task crashed: {task_error}")
+        traceback.print_exc()
+
+
+async def _process_line_events_safely(events, request_base_url: str) -> None:
+    try:
+        await _process_line_events(events, request_base_url)
+    except Exception as error:
+        print(f"[line-webhook] unhandled background error: {error}")
+        traceback.print_exc()
+
+
+async def _process_line_events(events, request_base_url: str) -> None:
+    request = SimpleNamespace(base_url=f"{request_base_url}/")
     db = SessionLocal()
     try:
         for event in events:
-            line_user_id = event.source.user_id
+            line_user_id = getattr(getattr(event, "source", None), "user_id", None)
             if not line_user_id:
                 continue
 
@@ -469,6 +504,42 @@ async def line_webhook(
                 reply_token = event.reply_token
                 today_date    = today_taipei()
                 tomorrow_date = today_date + timedelta(days=1)
+                parsed_postback = {
+                    key: values[0]
+                    for key, values in parse_qs(postback_data).items()
+                    if values
+                }
+                postback_action = parsed_postback.get("action")
+
+                if postback_action == "departure_check":
+                    try:
+                        from app.departure_confirmation import (
+                            confirm_departure_for_user,
+                            format_taipei_hhmm,
+                            snooze_departure_for_user,
+                        )
+                        choice = parsed_postback.get("choice")
+                        if choice == "left":
+                            confirmed = confirm_departure_for_user(db, user.id, today_date)
+                            await reply_with_quick_reply(
+                                reply_token,
+                                f"✅ 已記錄您 {format_taipei_hhmm(confirmed.departure_confirmed_at)} 出門。",
+                                MAIN_MENU_QR,
+                            )
+                            continue
+                        if choice == "need_5":
+                            snoozed = snooze_departure_for_user(db, user.id, today_date)
+                            await reply_with_quick_reply(
+                                reply_token,
+                                f"⏱ 已延後五分鐘，新的提醒時間：{format_taipei_hhmm(snoozed.departure_snoozed_until)}。",
+                                MAIN_MENU_QR,
+                            )
+                            continue
+                    except Exception as departure_error:
+                        print(f"[departure-check] error={departure_error}")
+                        traceback.print_exc()
+                        await reply_with_quick_reply(reply_token, "⚠️ 出門狀態更新失敗，請稍後再試。", MAIN_MENU_QR)
+                        continue
 
                 if postback_data == "action=set_today_arrival_time" and time_value:
                     schedules = get_commute_schedules(db, line_user_id)
@@ -924,7 +995,8 @@ async def line_webhook(
 
             # ── 問候語 ────────────────────────────────────────────────────
             if command_text in {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}:
-                schedule = user.schedule
+                schedules = get_commute_schedules(db, line_user_id)
+                schedule = schedules[0] if schedules else None
                 if schedule and schedule.origin_address:
                     await reply_with_quick_reply(
                         reply_token,

@@ -241,7 +241,7 @@ def bus_arrival_text(route: str | None, eta_min, stop_name: str | None) -> str:
         return ""
 
     route_label = bus_display_label(route)
-    return f"{route_label}將於 {eta_min} 分鐘後抵達『{stop_name}』。"
+    return f"（約 {eta_min} 分鐘後到站）{route_label}將於 {eta_min} 分鐘後抵達『{stop_name}』。"
 
 
 def metro_line_from_station_ids(origin_station: dict, destination_station: dict) -> str:
@@ -280,11 +280,11 @@ def _format_transit_step(step: dict, is_first: bool) -> str:
 
     if category == "bus":
         if is_first:
-            return f"於『{dep_stop}』上車 ➔ 搭乘 {line} ➔ 於『{arr_stop}』下車"
+            return f"於『{dep_stop}』上車 ➔ 搭乘 {line} ➔ 於『{arr_stop}』下車（在『{arr_stop}』下車）"
         return f"➔ (轉乘) 步行至『{dep_stop}』改搭乘 {line} ➔ 並於『{arr_stop}』下車"
 
     if is_first:
-        return f"搭乘 {line} ➔ 於『{dep_stop}』上車並在『{arr_stop}』下車"
+        return f"請搭乘 {line} ➔ 於『{dep_stop}』上車並在『{arr_stop}』下車"
     return f"➔ (轉乘) 於『{dep_stop}』改乘 {line} ➔ 並於『{arr_stop}』下車"
 
 

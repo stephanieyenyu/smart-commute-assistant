@@ -27,6 +27,7 @@ from app.google_maps import geocode_address
 from app.dashboard_view import render_dashboard_html
 from app.dashboard_ws import router as ws_router
 from app.family import router as family_router
+from app.dashboard import router as dashboard_router
 from app.models import User
 from app.schedule_summary import (
     active_schedules_for_date,
@@ -52,6 +53,8 @@ def ensure_runtime_schema() -> None:
                 user_columns = {column["name"] for column in inspector.get_columns("users")}
                 if "display_name" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN display_name VARCHAR"))
+                if "role" not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR DEFAULT 'user' NOT NULL"))
                 if "household_id" not in user_columns:
                     conn.execute(text("ALTER TABLE users ADD COLUMN household_id INTEGER"))
                 if "created_at" not in user_columns:
@@ -151,6 +154,10 @@ def ensure_runtime_schema() -> None:
                     "monitor_five_min_sent_at",
                     "departure_question_sent_at",
                     "departed_at",
+                    "departure_check_sent_at",
+                    "departure_confirmed_at",
+                    "departure_timeout_at",
+                    "departure_snoozed_until",
                 ):
                     if column_name not in override_columns:
                         if dialect == "postgresql":
@@ -159,6 +166,15 @@ def ensure_runtime_schema() -> None:
                             conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} DATETIME"))
                 if "alert_status" not in override_columns:
                     conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN alert_status VARCHAR"))
+                if "nightly_brief_plan_key" not in override_columns:
+                    conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN nightly_brief_plan_key VARCHAR"))
+                if "watchdog_alert_key" not in override_columns:
+                    conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN watchdog_alert_key VARCHAR"))
+                if "departure_timeout_silent" not in override_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN departure_timeout_silent BOOLEAN DEFAULT FALSE NOT NULL"))
+                    else:
+                        conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN departure_timeout_silent BOOLEAN DEFAULT 0 NOT NULL"))
                 if dialect == "postgresql":
                     conn.execute(text(
                         "ALTER TABLE commute_overrides "
@@ -168,6 +184,20 @@ def ensure_runtime_schema() -> None:
                         "CREATE UNIQUE INDEX IF NOT EXISTS uq_commute_overrides_user_date_schedule "
                         "ON commute_overrides (user_id, target_date, schedule_id)"
                     ))
+
+            if "commute_destinations" in tables:
+                destination_columns = {column["name"] for column in inspector.get_columns("commute_destinations")}
+                if "address" not in destination_columns:
+                    conn.execute(text("ALTER TABLE commute_destinations ADD COLUMN address VARCHAR"))
+                if "lat" not in destination_columns:
+                    conn.execute(text("ALTER TABLE commute_destinations ADD COLUMN lat FLOAT"))
+                if "lng" not in destination_columns:
+                    conn.execute(text("ALTER TABLE commute_destinations ADD COLUMN lng FLOAT"))
+                if "is_active" not in destination_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text("ALTER TABLE commute_destinations ADD COLUMN is_active BOOLEAN DEFAULT TRUE NOT NULL"))
+                    else:
+                        conn.execute(text("ALTER TABLE commute_destinations ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL"))
     except Exception as schema_error:
         print(f"[schema] runtime schema repair skipped: {schema_error}")
 
@@ -206,6 +236,7 @@ app.add_middleware(
 app.include_router(webhook_router)
 app.include_router(ws_router)
 app.include_router(family_router)
+app.include_router(dashboard_router)
 
 # ── Static Dashboard 前端 ────────────────────────────────────────────────────
 import os

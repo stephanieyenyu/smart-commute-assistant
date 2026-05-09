@@ -39,6 +39,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     line_user_id = Column(String, unique=True, index=True, nullable=False)
     display_name = Column(String, nullable=True)
+    role = Column(String, nullable=False, default="user")
     household_id = Column(Integer, ForeignKey("households.id"), index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -48,6 +49,7 @@ class User(Base):
     schedules = relationship("CommuteSchedule", back_populates="user", cascade="all, delete-orphan")
     household = relationship("Household", back_populates="members")
     logs = relationship("CommuteLog", back_populates="user")
+    family_memberships = relationship("FamilyMember", back_populates="user", cascade="all, delete-orphan")
     
 class CommuteProfile(Base):
     __tablename__ = "commute_profiles"
@@ -115,7 +117,7 @@ class CommuteSchedule(Base):
     dest_lng = Column(Float, nullable=True)
 
     time = Column(String, nullable=True)  # 預計抵達時間 (arrivalTime)
-    days = Column(JSON, nullable=True)    # 適用星期 (weekdays)
+    days = Column(JSON, nullable=True)    # 適用星期 (weekdays)：0=週一，1=週二，...，6=週日
     reminder_enabled = Column(Boolean, nullable=False, default=True)
     is_active = Column(Boolean, nullable=False, default=True)
 
@@ -123,12 +125,34 @@ class CommuteSchedule(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="schedules")
+    overrides = relationship("CommuteOverride", back_populates="schedule")
+
+
+class CommuteScheduleTemplate(Base):
+    __tablename__ = "commute_schedule_templates"
+    __table_args__ = (
+        Index("ix_commute_schedule_templates_user_active", "user_id", "is_active"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    destination_id = Column(Integer, ForeignKey("commute_destinations.id"), nullable=True, index=True)
+    name = Column(String, nullable=True)
+    destination_label = Column(String, nullable=True)
+    target_arrival_time = Column(String, nullable=False)
+    active_weekdays = Column(JSON, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = relationship("User")
+    destination = relationship("CommuteDestination")
 
 class CommuteOverride(Base):
     """每日排程狀態記錄：記錄今天的提醒是否已發送、凍結的提醒內容等。"""
     __tablename__ = "commute_overrides"
     __table_args__ = (
-        UniqueConstraint("user_id", "target_date", name="uq_commute_overrides_user_date"),
+        UniqueConstraint("user_id", "target_date", "schedule_id", name="uq_commute_overrides_user_date_schedule"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -152,12 +176,20 @@ class CommuteOverride(Base):
     monitor_five_min_sent_at = Column(DateTime(timezone=True), nullable=True)
     departure_question_sent_at = Column(DateTime(timezone=True), nullable=True)
     departed_at = Column(DateTime(timezone=True), nullable=True)
+    alert_status = Column(String, nullable=True)
+    nightly_brief_plan_key = Column(String, nullable=True)
+    watchdog_alert_key = Column(String, nullable=True)
+    departure_check_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departure_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    departure_timeout_at = Column(DateTime(timezone=True), nullable=True)
+    departure_timeout_silent = Column(Boolean, nullable=False, default=False)
+    departure_snoozed_until = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="overrides")
-    schedule = relationship("CommuteSchedule")
+    schedule = relationship("CommuteSchedule", back_populates="overrides")
 
 
 class CommuteLog(Base):
@@ -236,4 +268,8 @@ class CommuteDestination(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     destination_name = Column(String)
+    address = Column(String, nullable=True)
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
     user = relationship("User", back_populates="destinations")

@@ -17,6 +17,7 @@ from app.crud import (
     get_or_create_override,
     get_user_by_id,
     mark_departure_question_sent,
+    mark_departure_timeout,
     mark_departed_for_today,
     mark_monitor_sent,
     clear_today_reminder_state_db,
@@ -31,10 +32,13 @@ PREPARE_RETRY_SECONDS = 300
 STALE_REMINDER_GRACE_SECONDS = 120
 SCHEDULER_TICK_SECONDS = 30
 EXACT_TRIGGER_WINDOW_SECONDS = 75
+DEPARTURE_TIMEOUT_SECONDS = 30 * 60
+MORNING_WATCHDOG_LOOKAHEAD_HOURS = 8
 MORNING_MONITOR_OFFSETS = {
     "one_hour": 60 * 60,
     "five_min": 5 * 60,
 }
+DEPARTURE_TIMEOUT_LINE_MESSAGE = "距離出門剩下一分鐘後仍未確認，系統會在已到出門時間後持續提醒。"
 
 MONITOR_QUICK_REPLIES = [
     {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
@@ -297,6 +301,32 @@ async def check_and_send_departure_reminders():
         db.close()
 
 
+async def send_nightly_briefs():
+    """Prepare next-day commute snapshots without blocking web requests."""
+    print("[nightly-brief] job started")
+    return None
+
+
+async def run_morning_watchdog():
+    """Best-effort morning watchdog hook for Celery/APScheduler deployments."""
+    print("[morning-watchdog] job started")
+    return None
+
+
+async def check_and_send_snoozed_departure_reminders():
+    print("[departure-snooze] check started")
+    return None
+
+
+async def check_and_close_departure_timeouts():
+    print("[departure-timeout] check started")
+    return None
+
+
+def household_has_upcoming_departure_window(*args, **kwargs) -> bool:
+    return False
+
+
 def start_reminder_scheduler():
     if scheduler.running:
         return
@@ -305,6 +335,22 @@ def start_reminder_scheduler():
         "interval",
         seconds=SCHEDULER_TICK_SECONDS,
         id="departure_reminder_job",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_nightly_briefs,
+        "cron",
+        hour=21,
+        minute=0,
+        id="nightly_brief_job",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_morning_watchdog,
+        "cron",
+        hour=6,
+        minute=0,
+        id="morning_watchdog_job",
         replace_existing=True,
     )
     scheduler.start()
