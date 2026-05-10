@@ -504,11 +504,32 @@ def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> Commu
 
     dest_name = _destination_key(data)
     mode = str(data.get("mode") or "create").strip().lower()
-    if mode == "edit":
+    schedule = None
+    
+    # 優先以 scheduleId 精準命中（編輯必走覆蓋）
+    if data.get("scheduleId") is not None:
         schedule = _schedule_by_id(db, user.id, data.get("scheduleId"))
-        if schedule is None or not getattr(schedule, "is_active", True):
+        if schedule is not None and not getattr(schedule, "is_active", True):
+            schedule = None
+
+    # 若前端未傳 scheduleId，或傳了但資料不存在，編輯模式時以 (user_id, destination) 做回退命中
+    if schedule is None and mode == "edit":
+        schedule = db.query(CommuteSchedule).filter(
+            CommuteSchedule.user_id == user.id,
+            CommuteSchedule.is_active == True,
+            CommuteSchedule.dest_name == dest_name,
+        ).order_by(CommuteSchedule.id.desc()).first()
+        if schedule is None and data.get("destAddress"):
+            schedule = db.query(CommuteSchedule).filter(
+                CommuteSchedule.user_id == user.id,
+                CommuteSchedule.is_active == True,
+                CommuteSchedule.dest_address == data.get("destAddress"),
+            ).order_by(CommuteSchedule.id.desc()).first()
+
+    if schedule is None:
+        if mode == "edit" and data.get("scheduleId") is not None:
             raise ValueError("找不到要編輯的排程")
-    else:
+
         schedule = CommuteSchedule(user_id=user.id, dest_name=dest_name, is_active=True)
         db.add(schedule)
 
