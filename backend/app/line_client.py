@@ -132,10 +132,16 @@ async def reply_flex_with_quick_reply(
             await reply_text(reply_token, alt_text)
 
 
-async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dict | list[dict]) -> None:
+async def reply_flex_message(
+    reply_token: str,
+    alt_text: str,
+    flex_contents: dict | list[dict],
+    quick_reply_items: list | None = None,
+) -> None:
     """
     發送 Flex Message。
     flex_contents 可為單張 Flex Bubble dict，或多張 Bubble dict 組成的 Carousel。
+    若提供 quick_reply_items，附加 QuickReply 到 Flex Message。
     """
     if isinstance(flex_contents, dict):
         container_payload = flex_contents
@@ -150,6 +156,7 @@ async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dic
         async with AsyncApiClient(configuration) as api_client:
             line_bot_api = AsyncMessagingApi(api_client)
             flex_container = FlexContainer.from_dict(container_payload)
+            qr = QuickReply(items=_build_quick_reply_items(quick_reply_items)) if quick_reply_items else None
             await line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
@@ -157,6 +164,7 @@ async def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dic
                         FlexMessage(
                             alt_text=alt_text,
                             contents=flex_container,
+                            quick_reply=qr,
                         )
                     ]
                 )
