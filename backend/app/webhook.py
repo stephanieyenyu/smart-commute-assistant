@@ -476,12 +476,15 @@ def topic_title_for_command(command_text: str) -> str | None:
 
 async def reply_topic_quick_reply(reply_token: str, topic_title: str) -> None:
     guide = TOPIC_QUICK_REPLY_GUIDES.get(topic_title)
-    if not guide:
-        topic_card = build_topic_help_card(topic_title)
-        if topic_card:
-            await reply_flex_message(reply_token, topic_title, topic_card)
+    topic_card = build_topic_help_card(topic_title)
+    if topic_card and guide:
+        await reply_flex_with_quick_reply(reply_token, topic_title, [topic_card], guide["items"])
         return
-    await reply_with_quick_reply(reply_token, guide["text"], guide["items"])
+    if topic_card:
+        await reply_flex_message(reply_token, topic_title, topic_card)
+        return
+    if guide:
+        await reply_with_quick_reply(reply_token, guide["text"], guide["items"])
 
 
 # ── Webhook Router ────────────────────────────────────────────────────────────
