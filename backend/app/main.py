@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import inspect, text
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base, engine, SessionLocal
 from app.webhook import router as webhook_router
+from app.liff_routes import router as liff_router
 from app.reminder_scheduler import scheduler as reminder_scheduler, start_reminder_scheduler
 from app.crud import (
     upsert_commute_schedule,
@@ -146,12 +147,17 @@ def ensure_runtime_schema() -> None:
                 override_columns = {column["name"] for column in inspector.get_columns("commute_overrides")}
                 if "schedule_id" not in override_columns:
                     conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN schedule_id INTEGER"))
-                for column_name in (
+                datetime_override_columns = (
                     "monitor_one_hour_sent_at",
                     "monitor_five_min_sent_at",
                     "departure_question_sent_at",
                     "departed_at",
-                ):
+                    "departure_check_sent_at",
+                    "departure_confirmed_at",
+                    "departure_snoozed_until",
+                    "departure_timeout_at",
+                )
+                for column_name in datetime_override_columns:
                     if column_name not in override_columns:
                         if dialect == "postgresql":
                             conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} TIMESTAMP WITH TIME ZONE"))
@@ -159,6 +165,17 @@ def ensure_runtime_schema() -> None:
                             conn.execute(text(f"ALTER TABLE commute_overrides ADD COLUMN {column_name} DATETIME"))
                 if "alert_status" not in override_columns:
                     conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN alert_status VARCHAR"))
+                if "departure_timeout_silent" not in override_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text(
+                            "ALTER TABLE commute_overrides "
+                            "ADD COLUMN departure_timeout_silent BOOLEAN DEFAULT FALSE NOT NULL"
+                        ))
+                    else:
+                        conn.execute(text(
+                            "ALTER TABLE commute_overrides "
+                            "ADD COLUMN departure_timeout_silent BOOLEAN DEFAULT 0 NOT NULL"
+                        ))
                 if dialect == "postgresql":
                     conn.execute(text(
                         "ALTER TABLE commute_overrides "
@@ -204,6 +221,7 @@ app.add_middleware(
 )
 
 app.include_router(webhook_router)
+app.include_router(liff_router)
 app.include_router(ws_router)
 app.include_router(family_router)
 
@@ -449,7 +467,7 @@ def _build_schedule_summary_flex(schedule) -> list[dict]:
 
 SCHEDULE_SAVED_QUICK_REPLIES = [
     {"type": "message", "label": "📊 查看看板",      "text": "查看設定"},
-    {"type": "message", "label": "➕ 新增另一筆",    "text": "重新設定"},
+    {"type": "message", "label": "➕ 新增另一筆",    "text": "新增排程設定"},
     {"type": "message", "label": "🚆 今日通勤建議",  "text": "今天通勤建議"},
 ]
 
@@ -561,6 +579,16 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.options("/api/schedule/submit/", include_in_schema=False)
+async def submit_schedule_trailing_options():
+    return {"ok": True}
+
+
+@app.post("/api/schedule/submit/", include_in_schema=False)
+async def submit_schedule_trailing_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
+    return await submit_schedule(payload, db)
+
+
 @app.post("/liff/schedule/submit", include_in_schema=False)
 async def submit_schedule_liff_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
     return await submit_schedule(payload, db)
@@ -573,6 +601,16 @@ async def submit_schedule_add_options():
 
 @app.post("/api/schedule/add", include_in_schema=False)
 async def submit_schedule_add_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
+    return await submit_schedule(payload, db)
+
+
+@app.options("/api/schedule/add/", include_in_schema=False)
+async def submit_schedule_add_trailing_options():
+    return {"ok": True}
+
+
+@app.post("/api/schedule/add/", include_in_schema=False)
+async def submit_schedule_add_trailing_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
     return await submit_schedule(payload, db)
 
 
@@ -852,7 +890,10 @@ async def get_commute_status(userId: str = Query(...), db: Session = Depends(get
     if not user:
         return {"hasData": False}
 
-    schedule = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user.id).first()
+    schedule = db.query(CommuteSchedule).filter(
+        CommuteSchedule.user_id == user.id,
+        CommuteSchedule.is_active == True,
+    ).order_by(CommuteSchedule.id.asc()).first()
     override = db.query(CommuteOverride).filter(
         CommuteOverride.user_id == user.id,
         CommuteOverride.target_date == today,
@@ -888,6 +929,11 @@ async def get_commute_status(userId: str = Query(...), db: Session = Depends(get
 @app.get("/")
 async def root():
     return {"message": "Smart Commute Assistant is running"}
+
+
+@app.head("/")
+async def root_head():
+    return Response(status_code=200)
 
 
 @app.get("/health")

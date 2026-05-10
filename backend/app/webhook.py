@@ -11,7 +11,13 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, FollowEvent, P
 
 from app.config import LINE_CHANNEL_SECRET
 from app.db import SessionLocal
-from app.line_client import reply_text, reply_with_quick_reply, reply_multi_messages_with_quick_reply, reply_flex_message
+from app.line_client import (
+    reply_text,
+    reply_with_quick_reply,
+    reply_multi_messages_with_quick_reply,
+    reply_flex_message,
+    reply_flex_with_quick_reply,
+)
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
@@ -20,6 +26,7 @@ from app.crud import (
     delete_commute_schedule,
     ensure_household_for_user,
     join_household_by_code,
+    reset_profile_for_reconfigure,
     set_pending_field,
     update_profile_field,
     upsert_override,
@@ -85,6 +92,15 @@ SETTINGS_QR = [
     {"type": "message", "label": "🔕 關閉自動提醒",  "text": "關閉自動提醒"},
     {"type": "message", "label": "📋 查看提醒設定",  "text": "查看提醒設定"},
     {"type": "message", "label": "📊 查看設定",      "text": "查看設定"},
+    {"type": "message", "label": "🔄 重新設定",      "text": "重新設定"},
+]
+
+BASIC_SETTINGS_QR = [
+    {"type": "uri",     "label": "🖥️ 打開 LIFF",     "uri": LIFF_URL},
+    {"type": "message", "label": "📊 查看設定",      "text": "查看設定"},
+    {"type": "message", "label": "🔔 開啟提醒",      "text": "開啟自動提醒"},
+    {"type": "message", "label": "🔕 關閉提醒",      "text": "關閉自動提醒"},
+    {"type": "message", "label": "🔄 重新設定",      "text": "重新設定"},
 ]
 
 OVERRIDE_TODAY_QR = [
@@ -141,19 +157,87 @@ TOPIC_CARD_TITLES = ("通勤選單", "排程設定", "時間設定", "基本設�
 
 TOPIC_CARD_ALIASES = {
     "通勤選單": "通勤選單",
+    "[通勤選單]": "通勤選單",
+    "通勤功能": "通勤選單",
     "通勤建議": "通勤選單",
     "交通方式": "通勤選單",
     "通勤方式": "通勤選單",
     "交通建議": "通勤選單",
     "排程設定": "排程設定",
+    "[排程設定]": "排程設定",
     "設定通勤路線": "排程設定",
     "通勤路線": "排程設定",
+    "日程排程": "排程設定",
+    "週間設定": "排程設定",
     "時間設定": "時間設定",
+    "[時間設定]": "時間設定",
+    "到職時間設定": "時間設定",
     "基本設定": "基本設定",
+    "[基本設定]": "基本設定",
+    "系統設定": "基本設定",
+    "系統設定選單": "基本設定",
+    "設定選單": "基本設定",
+    "提醒設定": "基本設定",
     "看板管理": "看板管理",
+    "[看板管理]": "看板管理",
     "看板": "看板管理",
+    "看板與家庭": "看板管理",
+    "Dashboard管理": "看板管理",
     "Dashboard": "看板管理",
     "dashboard": "看板管理",
+    "[指令說明]": "指令說明",
+    "提示詞說明": "指令說明",
+    "使用說明": "指令說明",
+    "幫助": "指令說明",
+}
+
+TOPIC_QUICK_REPLY_GUIDES = {
+    "通勤選單": {
+        "text": "通勤選單：請選擇今天要怎麼計算或查看通勤建議。",
+        "items": [
+            {"type": "message", "label": "🚆 今日通勤建議", "text": "今天通勤建議"},
+            {"type": "message", "label": "⏰ 明天幾點出門", "text": "明天幾點出門"},
+            {"type": "message", "label": "🚄 最短時間優先", "text": "優先選擇通勤時間短"},
+            {"type": "message", "label": "🚌 今天搭公車", "text": "今天搭公車"},
+            {"type": "message", "label": "🚇 今天搭捷運", "text": "今天搭捷運"},
+        ],
+    },
+    "排程設定": {
+        "text": "排程設定：請選擇要新增、查看、編輯或刪除的排程操作。",
+        "items": SETTINGS_QR[:4] + [{"type": "message", "label": "📊 查看設定", "text": "查看設定"}],
+    },
+    "時間設定": {
+        "text": "時間設定：可臨時調整今天或明天的抵達時間。",
+        "items": [
+            {"type": "message", "label": "✏️ 今天到達時間", "text": "修改今天到公司時間"},
+            {"type": "message", "label": "🗓️ 明天到達時間", "text": "修改明天到公司時間"},
+            {"type": "message", "label": "📋 查看提醒設定", "text": "查看提醒設定"},
+            {"type": "message", "label": "📊 查看設定", "text": "查看設定"},
+        ],
+    },
+    "基本設定": {
+        "text": "基本設定：可查看設定、調整提醒，或按「重新設定」刪除所有既有設定後從無排程開始。",
+        "items": BASIC_SETTINGS_QR,
+    },
+    "看板管理": {
+        "text": "看板管理：請選擇要取得的看板連結或看板說明。",
+        "items": [
+            {"type": "message", "label": "📺 個人看板連結", "text": "個人看板連結"},
+            {"type": "message", "label": "🏠 家庭看板連結", "text": "家庭看板連結"},
+            {"type": "message", "label": "ℹ️ 看板管理說明", "text": "看板管理說明"},
+        ],
+    },
+    "指令說明": {
+        "text": "指令說明：請選擇要查看或操作的主題。",
+        "items": [
+            {"type": "message", "label": "🚆 通勤選單", "text": "通勤選單"},
+            {"type": "message", "label": "📅 排程設定", "text": "排程設定"},
+            {"type": "message", "label": "⏰ 時間設定", "text": "時間設定"},
+            {"type": "message", "label": "⚙️ 基本設定", "text": "基本設定"},
+            {"type": "message", "label": "📺 看板管理", "text": "看板管理"},
+            {"type": "message", "label": "📖 指令說明", "text": "指令說明"},
+        ],
+    },
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -354,6 +438,7 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 ("開啟自動提醒", "啟用每日自動出發提醒"),
                 ("關閉自動提醒", "停用每日自動出發提醒"),
                 ("查看提醒設定", "查看目前提醒開關狀態與啟用排程數"),
+                ("重新設定", "刪除所有既有通勤設定，讓用戶從無排程重新開始"),
             ]
         ),
         "看板管理": bubble("#0f766e", "📺", "看板管理",
@@ -388,6 +473,16 @@ def topic_title_for_command(command_text: str) -> str | None:
     return TOPIC_CARD_ALIASES.get(command_text)
 
 
+async def reply_topic_quick_reply(reply_token: str, topic_title: str) -> None:
+    guide = TOPIC_QUICK_REPLY_GUIDES.get(topic_title)
+    if not guide:
+        topic_card = build_topic_help_card(topic_title)
+        if topic_card:
+            await reply_flex_message(reply_token, topic_title, topic_card)
+        return
+    await reply_with_quick_reply(reply_token, guide["text"], guide["items"])
+
+
 # ── Webhook Router ────────────────────────────────────────────────────────────
 
 @router.post("/webhooks/line")
@@ -419,10 +514,11 @@ async def line_webhook(
             # ── FollowEvent：歡迎 + 引導開啟 LIFF ─────────────────────────
             if isinstance(event, FollowEvent):
                 reply_token = event.reply_token
+                reset_profile_for_reconfigure(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
                     "👋 歡迎使用智慧通勤助理！\n"
-                    "請點擊下方「設定通勤路線」按鈕，在網頁中完成您的通勤設定。\n"
+                    "目前沒有任何排程，請點擊下方「設定通勤路線」按鈕，在網頁中完成您的通勤設定。\n"
                     "設定完成後，每天將自動提醒您最佳出發時間！",
                     [
                         {"type": "uri",     "label": "📝 設定通勤路線", "uri": LIFF_URL},
@@ -677,22 +773,15 @@ async def line_webhook(
             if command_text in COMMAND_ALIASES["basic_settings"]:
                 await reply_with_quick_reply(
                     reply_token,
-                    "⚙️ 基本設定\n請選擇以下操作：",
-                    [
-                        {"type": "uri",     "label": "🖥️ 打開 LIFF Dashboard", "uri": LIFF_URL},
-                        {"type": "message", "label": "📊 查看設定",            "text": "查看設定"},
-                        {"type": "message", "label": "🚆 今日通勤建議",         "text": "今天通勤建議"},
-                        {"type": "message", "label": "🗓️ 明日通勤建議",         "text": "明天幾點出門"},
-                    ],
+                    "⚙️ 基本設定\n可查看設定、調整提醒，或按「重新設定」刪除所有既有設定後從無排程開始。",
+                    BASIC_SETTINGS_QR,
                 )
                 continue
 
             topic_title = topic_title_for_command(command_text)
             if topic_title:
-                topic_card = build_topic_help_card(topic_title)
-                if topic_card:
-                    await reply_flex_message(reply_token, topic_title, topic_card)
-                    continue
+                await reply_topic_quick_reply(reply_token, topic_title)
+                continue
 
             # ── 系統設定 ──────────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["system_settings"]:
@@ -706,7 +795,12 @@ async def line_webhook(
             # ── 指令說明 → Flex Carousel ──────────────────────────────────
             if command_text in COMMAND_ALIASES["help"]:
                 cards = build_help_flex()
-                await reply_flex_message(reply_token, "📖 指令說明", cards)
+                await reply_flex_with_quick_reply(
+                    reply_token,
+                    "📖 指令說明",
+                    cards,
+                    TOPIC_QUICK_REPLY_GUIDES["指令說明"]["items"],
+                )
                 continue
 
             # ── 查看設定 ──────────────────────────────────────────────────
@@ -747,10 +841,11 @@ async def line_webhook(
 
             # ── 重新設定 ──────────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["reset"]:
+                reset_profile_for_reconfigure(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
-                    "🔄 請點擊下方按鈕，在設定頁面中重新設定通勤路線。",
-                    [{"type": "uri", "label": "📝 重新設定通勤路線", "uri": LIFF_URL}],
+                    "🔄 已刪除所有既有通勤設定。\n目前沒有任何排程，請重新建立新的通勤路線。",
+                    [{"type": "uri", "label": "📝 設定通勤路線", "uri": LIFF_URL}],
                 )
                 continue
 
