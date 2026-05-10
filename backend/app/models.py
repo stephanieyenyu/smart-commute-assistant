@@ -124,6 +124,7 @@ class CommuteSchedule(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="schedules")
+    overrides = relationship("CommuteOverride", back_populates="schedule")
 
     @property
     def target_arrival_time(self):
@@ -191,7 +192,7 @@ class CommuteOverride(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="overrides")
-    schedule = relationship("CommuteSchedule")
+    schedule = relationship("CommuteSchedule", back_populates="overrides")
 
 
 class CommuteLog(Base):
