@@ -92,7 +92,7 @@ class CommuteProfile(Base):
     max_walk_mins = Column(Integer, nullable=True)
     pending_field = Column(String, nullable=True)
     reminder_enabled = Column(Boolean, nullable=False, default=True)
-    active_weekdays = Column(JSON, nullable=True)
+    active_weekdays = Column(JSON, nullable=True)  # 0=週一，1=週二，...，6=週日
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -116,7 +116,7 @@ class CommuteSchedule(Base):
     dest_lng = Column(Float, nullable=True)
 
     time = Column(String, nullable=True)  # 預計抵達時間 (arrivalTime)
-    days = Column(JSON, nullable=True)    # 適用星期 (weekdays)
+    days = Column(JSON, nullable=True)    # 適用星期 (weekdays): 0=週一，1=週二，...，6=週日
     reminder_enabled = Column(Boolean, nullable=False, default=True)
     is_active = Column(Boolean, nullable=False, default=True)
 
@@ -125,11 +125,38 @@ class CommuteSchedule(Base):
 
     user = relationship("User", back_populates="schedules")
 
+    @property
+    def target_arrival_time(self):
+        return self.time
+
+    @target_arrival_time.setter
+    def target_arrival_time(self, value):
+        self.time = value
+
+    @property
+    def destination_label(self):
+        return self.dest_name or self.dest_address
+
+    @destination_label.setter
+    def destination_label(self, value):
+        self.dest_name = value
+
+    @property
+    def active_weekdays(self):
+        return self.days
+
+    @active_weekdays.setter
+    def active_weekdays(self, value):
+        self.days = value
+
+
+CommuteScheduleTemplate = CommuteSchedule
+
 class CommuteOverride(Base):
     """每日排程狀態記錄：記錄今天的提醒是否已發送、凍結的提醒內容等。"""
     __tablename__ = "commute_overrides"
     __table_args__ = (
-        UniqueConstraint("user_id", "target_date", name="uq_commute_overrides_user_date"),
+        UniqueConstraint("user_id", "target_date", "schedule_id", name="uq_commute_overrides_user_date_schedule"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -153,6 +180,12 @@ class CommuteOverride(Base):
     monitor_five_min_sent_at = Column(DateTime(timezone=True), nullable=True)
     departure_question_sent_at = Column(DateTime(timezone=True), nullable=True)
     departed_at = Column(DateTime(timezone=True), nullable=True)
+    alert_status = Column(String, nullable=True)
+    departure_check_sent_at = Column(DateTime(timezone=True), nullable=True)
+    departure_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    departure_snoozed_until = Column(DateTime(timezone=True), nullable=True)
+    departure_timeout_at = Column(DateTime(timezone=True), nullable=True)
+    departure_timeout_silent = Column(Boolean, nullable=False, default=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

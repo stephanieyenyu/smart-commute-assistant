@@ -11,13 +11,9 @@ from app.db import SessionLocal
 from app.crud import (
     get_or_create_user,
     get_or_create_profile,
-    get_profile,
-    upsert_destination,
-    create_schedule_template,
-    get_schedule_templates,
+    upsert_commute_schedule,
 )
 from app.line_client import push_text
-from app.models import User
 from app.reminder_scheduler import clear_today_reminder_state_for_user
 
 router = APIRouter(prefix="/liff", tags=["liff"])
@@ -90,28 +86,22 @@ async def submit_schedule(data: ScheduleSubmitRequest):
 
         print(f"[LIFF Submit] user_id={user.id} destination={data.destination} arrival={data.arrivalTime}")
 
-        # 2. 處理目的地
-        destination = upsert_destination(
+        # 2. 建立統一排程資料。LIFF 舊表單只提供地址文字時，由主 API 流程保留原始文字。
+        schedule = upsert_commute_schedule(
             db=db,
-            user_id=user.id,
-            label=data.destination,
-            address=data.originAddress,  # 如果沒有提供出發地，使用 None
-            lat=None,
-            lng=None,
+            line_user_id=data.userId,
+            data={
+                "originName": data.originAddress,
+                "originAddress": data.originAddress,
+                "destName": data.destination,
+                "destAddress": data.destination,
+                "time": data.arrivalTime,
+                "days": data.weekdays,
+                "reminderEnabled": True,
+            },
         )
 
-        # 3. 建立排程模板
-        template = create_schedule_template(
-            db=db,
-            user_id=user.id,
-            target_arrival_time=data.arrivalTime,
-            destination_label=data.destination,
-            active_weekdays=data.weekdays,
-            name=f"{data.destination} {data.arrivalTime}",
-            destination_id=destination.id if destination else None,
-        )
-
-        print(f"[LIFF Submit] template_id={template.id} created successfully")
+        print(f"[LIFF Submit] schedule_id={schedule.id} created successfully")
 
         # 4. 清除今天的提醒狀態（強制重新計算）
         try:
@@ -140,7 +130,7 @@ async def submit_schedule(data: ScheduleSubmitRequest):
         return {
             "ok": True,
             "message": "排程設定成功",
-            "template_id": template.id,
+            "schedule_id": schedule.id,
         }
 
     except ValueError as ve:

@@ -22,6 +22,17 @@ router = APIRouter()
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 
 
+def _override_query(db, user_id: int, today):
+    return db.query(CommuteOverride).filter(
+        CommuteOverride.user_id == user_id,
+        CommuteOverride.target_date == today,
+    )
+
+
+def _latest_override_query(db, user_id: int, today):
+    return _override_query(db, user_id, today).order_by(CommuteOverride.departure_question_sent_at.desc())
+
+
 # ── Connection Manager ────────────────────────────────────────────────────────
 
 class ConnectionManager:
@@ -139,10 +150,7 @@ async def get_alert_status(user_id: str):
         if not user:
             return {"alert_status": None, "departure_time": None}
 
-        override = db.query(CommuteOverride).filter(
-            CommuteOverride.user_id == user.id,
-            CommuteOverride.target_date == today,
-        ).first()
+        override = _latest_override_query(db, user.id, today).first()
 
         if not override:
             return {"alert_status": None, "departure_time": None}
@@ -168,10 +176,9 @@ async def _push_current_alert_status(user_id: str, websocket: WebSocket):
         if not user:
             return
 
-        override = db.query(CommuteOverride).filter(
-            CommuteOverride.user_id == user.id,
-            CommuteOverride.target_date == today,
-        ).first()
+        override = _override_query(db, user.id, today).filter(
+            CommuteOverride.alert_status == "pending",
+        ).order_by(CommuteOverride.departure_question_sent_at.desc()).first()
 
         if override and override.alert_status == "pending":
             await websocket.send_json({
@@ -196,10 +203,9 @@ async def _acknowledge_alert(user_id: str):
         if not user:
             return
 
-        override = db.query(CommuteOverride).filter(
-            CommuteOverride.user_id == user.id,
-            CommuteOverride.target_date == today,
-        ).first()
+        override = _override_query(db, user.id, today).filter(
+            CommuteOverride.alert_status == "pending",
+        ).order_by(CommuteOverride.departure_question_sent_at.desc()).first()
 
         if override:
             override.alert_status = "acknowledged"
@@ -211,7 +217,12 @@ async def _acknowledge_alert(user_id: str):
         db.close()
 
 
-async def trigger_voice_alert(line_user_id: str, reminder_text: str, departure_time: str):
+async def trigger_voice_alert(
+    line_user_id: str,
+    reminder_text: str,
+    departure_time: str,
+    schedule_id: int | None = None,
+):
     """
     由 reminder_scheduler 呼叫：
     更新 alert_status = "pending"，並透過 WebSocket 廣播給已連線的 Dashboard。
@@ -224,10 +235,13 @@ async def trigger_voice_alert(line_user_id: str, reminder_text: str, departure_t
         if not user:
             return
 
-        override = db.query(CommuteOverride).filter(
+        override_query = db.query(CommuteOverride).filter(
             CommuteOverride.user_id == user.id,
             CommuteOverride.target_date == today,
-        ).first()
+        )
+        if schedule_id is not None:
+            override_query = override_query.filter(CommuteOverride.schedule_id == schedule_id)
+        override = override_query.order_by(CommuteOverride.departure_question_sent_at.desc()).first()
 
         if override:
             override.alert_status = "pending"

@@ -5,9 +5,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.db import SessionLocal
 from app.line_client import (
-    build_tts_audio_url,
-    estimate_tts_duration_ms,
-    push_audio_message,
     push_with_quick_reply,
 )
 from app.models import CommuteOverride, CommuteSchedule
@@ -50,6 +47,12 @@ DEPARTURE_CONFIRM_QR = [
 
 def now_taipei() -> datetime:
     return datetime.now(TAIPEI_TZ)
+
+
+def clear_prepare_attempt_cache_for_user(user_id: int):
+    keys = [key for key in _PREPARE_ATTEMPT_CACHE if key[0] == user_id]
+    for key in keys:
+        _PREPARE_ATTEMPT_CACHE.pop(key, None)
 
 
 def hhmm_to_seconds(hhmm: str) -> int:
@@ -142,22 +145,6 @@ async def _send_morning_monitor(
     return True
 
 
-async def _send_departure_voice_notice(user, schedule: CommuteSchedule, departure_time: str) -> None:
-    try:
-        voice_text = (
-            f"出門提醒。建議你現在出門。"
-            f"{schedule.dest_name or '目的地'} 通勤請預留時間。"
-        )
-        await push_audio_message(
-            user.line_user_id,
-            build_tts_audio_url(voice_text),
-            estimate_tts_duration_ms(voice_text),
-        )
-        print(f"[reminder-voice] sent user_id={user.id} schedule_id={schedule.id}")
-    except Exception as voice_error:
-        print(f"[reminder-voice] failed user_id={user.id} schedule_id={schedule.id} error={voice_error}")
-
-
 async def _send_departure_question(
     db,
     *,
@@ -188,13 +175,13 @@ async def _send_departure_question(
     except Exception as text_error:
         print(f"[departure-question] text failed user_id={user.id} schedule_id={schedule.id} error={text_error}")
 
-    await _send_departure_voice_notice(user, schedule, override.frozen_departure_time)
     try:
         from app.dashboard_ws import trigger_voice_alert
         await trigger_voice_alert(
             line_user_id=user.line_user_id,
             reminder_text=override.frozen_reminder_text or question_text,
             departure_time=override.frozen_departure_time,
+            schedule_id=schedule.id,
         )
     except Exception as ws_error:
         print(f"[departure-question] voice alert failed user_id={user.id} schedule_id={schedule.id} error={ws_error}")
@@ -206,7 +193,7 @@ async def check_and_send_departure_reminders():
     只允許三種時間觸發：
     1. 預估出門前 1 小時：刷新 API 後推播一次。
     2. 預估出門前 5 分鐘：刷新 API 後推播一次。
-    3. 預估出門時間到：強制送 LINE「您出門了嗎？」；語音為獨立 best-effort。
+    3. 預估出門時間到：強制送 LINE「您出門了嗎？」並附上「已出門」快捷鍵。
     """
     db = SessionLocal()
     try:

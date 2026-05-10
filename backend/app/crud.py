@@ -1,9 +1,17 @@
 import secrets
 import string
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 
-from app.models import User, Household, CommuteProfile, CommuteOverride, CommuteSchedule
+from app.models import (
+    User,
+    Household,
+    CommuteProfile,
+    CommuteDestination,
+    CommuteLog,
+    CommuteOverride,
+    CommuteSchedule,
+)
 
 
 def _clear_override_reminder_fields(override: CommuteOverride):
@@ -15,6 +23,12 @@ def _clear_override_reminder_fields(override: CommuteOverride):
     override.monitor_five_min_sent_at = None
     override.departure_question_sent_at = None
     override.departed_at = None
+    override.alert_status = None
+    override.departure_check_sent_at = None
+    override.departure_confirmed_at = None
+    override.departure_snoozed_until = None
+    override.departure_timeout_at = None
+    override.departure_timeout_silent = False
 
 
 # ─────────────────────────────────────────────────────────
@@ -278,12 +292,16 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     print(f"[reset-profile] ========== HARD RESET START =========")
     print(f"[reset-profile] Starting reset for user_id={user_id}")
 
-    # 物理刪除所有用戶相關資料
-    deleted_templates = db.query(CommuteScheduleTemplate).filter(CommuteScheduleTemplate.user_id == user_id).delete(synchronize_session=False)
-    deleted_destinations = db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).delete(synchronize_session=False)
+    # 物理刪除所有用戶通勤設定資料，讓重新設定/重新加入都從無排程開始。
     deleted_overrides = db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
     deleted_logs = db.query(CommuteLog).filter(CommuteLog.user_id == user_id).delete(synchronize_session=False)
-    print(f"[reset-profile] Deleted records: templates={deleted_templates}, destinations={deleted_destinations}, overrides={deleted_overrides}, logs={deleted_logs}")
+    deleted_schedules = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user_id).delete(synchronize_session=False)
+    deleted_destinations = db.query(CommuteDestination).filter(CommuteDestination.user_id == user_id).delete(synchronize_session=False)
+    print(
+        "[reset-profile] Deleted records: "
+        f"schedules={deleted_schedules}, destinations={deleted_destinations}, "
+        f"overrides={deleted_overrides}, logs={deleted_logs}"
+    )
     
     # 同時清除 session 狀態，確保不會有殘留狀態
     db.query(User).filter(User.id == user_id).update({"household_id": None})
@@ -319,12 +337,21 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
 
     profile.preferred_mode = None
     profile.preferred_arrival_time = None
+    profile.identity_type = None
+    profile.destination_label = None
+    profile.transport_preference = None
+    profile.max_walk_mins = None
     profile.pending_field = None
     profile.reminder_enabled = True
     profile.active_weekdays = None
 
     db.commit()
     db.refresh(profile)
+    try:
+        from app.reminder_scheduler import clear_prepare_attempt_cache_for_user
+        clear_prepare_attempt_cache_for_user(user_id)
+    except Exception as cache_error:
+        print(f"[reset-profile] cache clear skipped: {cache_error}")
     return profile
 
 
@@ -347,6 +374,90 @@ def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
 # ─────────────────────────────────────────────────────────
 # CommuteSchedule helpers (新統一排程系統)
 # ─────────────────────────────────────────────────────────
+
+def upsert_destination(
+    db: Session,
+    user_id: int,
+    label: str,
+    address: str | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> CommuteDestination:
+    """Compatibility helper for legacy LIFF routes.
+
+    The current schema stores full route details on CommuteSchedule, while
+    CommuteDestination only keeps a reusable destination label.
+    """
+    destination_name = (label or address or "目的地").strip() or "目的地"
+    destination = db.query(CommuteDestination).filter(
+        CommuteDestination.user_id == user_id,
+        CommuteDestination.destination_name == destination_name,
+    ).first()
+    if not destination:
+        destination = CommuteDestination(user_id=user_id, destination_name=destination_name)
+        db.add(destination)
+    else:
+        destination.destination_name = destination_name
+    db.commit()
+    db.refresh(destination)
+    return destination
+
+
+def create_schedule_template(
+    db: Session,
+    user_id: int,
+    target_arrival_time: str,
+    destination_label: str,
+    active_weekdays: list[int],
+    name: str | None = None,
+    destination_id: int | None = None,
+):
+    """Compatibility wrapper that creates a CommuteSchedule record."""
+    schedule = CommuteSchedule(
+        user_id=user_id,
+        dest_name=(destination_label or name or "目的地").strip() or "目的地",
+        time=target_arrival_time,
+        days=active_weekdays or [],
+        reminder_enabled=True,
+        is_active=True,
+    )
+    db.add(schedule)
+    db.commit()
+    db.refresh(schedule)
+    return schedule
+
+
+def get_schedule_templates(db: Session, user_id: int, active_only: bool = False) -> list[CommuteSchedule]:
+    query = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user_id)
+    if active_only:
+        query = query.filter(CommuteSchedule.is_active == True)
+    return query.order_by(CommuteSchedule.id.asc()).all()
+
+
+def undelete_schedule_template(db: Session, user_id: int, template_id: int) -> CommuteSchedule | None:
+    schedule = _schedule_by_id(db, user_id, template_id)
+    if not schedule:
+        return None
+    schedule.is_active = True
+    schedule.reminder_enabled = True
+    db.commit()
+    db.refresh(schedule)
+    return schedule
+
+
+def next_effective_commute_date(db: Session, profile: CommuteProfile, start_date: date, max_days: int = 14) -> date | None:
+    schedules = get_commute_schedules_by_user_id(db, profile.user_id)
+    for day_offset in range(max_days + 1):
+        candidate = start_date + timedelta(days=day_offset)
+        override = get_override_for_date(db, profile.user_id, candidate)
+        if override and override.commute_disabled:
+            continue
+        if override and override.commute_enabled:
+            return candidate
+        for schedule in schedules:
+            if candidate.weekday() in (schedule.days or []):
+                return candidate
+    return None
 
 def _destination_key(data: dict) -> str:
     raw_value = (
@@ -674,6 +785,52 @@ def mark_departure_question_sent(
     return override
 
 
+def mark_departure_check_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    sent_at: datetime,
+    schedule_id: int | None = None,
+):
+    override = get_or_create_override(db, user_id, target_date, schedule_id=schedule_id)
+    override.departure_check_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def mark_departure_confirmed(
+    db: Session,
+    user_id: int,
+    target_date,
+    confirmed_at: datetime,
+    schedule_id: int | None = None,
+):
+    override = get_or_create_override(db, user_id, target_date, schedule_id=schedule_id)
+    override.departure_confirmed_at = confirmed_at
+    override.departed_at = confirmed_at
+    override.alert_status = "acknowledged"
+    db.commit()
+    db.refresh(override)
+    return override
+
+
+def snooze_departure_confirmation(
+    db: Session,
+    user_id: int,
+    target_date,
+    snoozed_until: datetime,
+    schedule_id: int | None = None,
+):
+    override = get_or_create_override(db, user_id, target_date, schedule_id=schedule_id)
+    override.departure_snoozed_until = snoozed_until
+    override.departure_check_sent_at = None
+    override.alert_status = None
+    db.commit()
+    db.refresh(override)
+    return override
+
+
 def mark_departed_for_today(
     db: Session,
     user_id: int,
@@ -695,6 +852,8 @@ def mark_departed_for_today(
     overrides = query.all()
     for override in overrides:
         override.departed_at = departed_at
+        override.departure_confirmed_at = departed_at
+        override.alert_status = "acknowledged"
     if overrides:
         db.commit()
     return overrides
