@@ -265,6 +265,9 @@
     <script>
         // LIFF 初始化
         let userId = null;
+        const urlParams = new URLSearchParams(window.location.search);
+        const formMode = (urlParams.get('mode') || (urlParams.get('edit') ? 'edit' : 'create')).toLowerCase();
+        const scheduleId = urlParams.get('scheduleId') || urlParams.get('edit');
 
         // 頁面載入後立即初始化 LIFF
         window.addEventListener('load', function() {
@@ -292,14 +295,14 @@
                     document.getElementById('mainContainer').style.display = 'block';
 
                     // 取得使用者 ID
-                    liff.getProfile().then(profile => {
+                    liff.getProfile().then(async profile => {
                         userId = profile.userId;
-                        
-                        // 從 URL 參數取得可能的預設值
-                        const urlParams = new URLSearchParams(window.location.search);
-                        const editId = urlParams.get('edit');
-                        if (editId) {
+
+                        if (formMode === 'edit' && scheduleId) {
                             document.querySelector('.header h1').textContent = '✏️ 編輯排程';
+                            document.querySelector('.header p').textContent = '更新既有通勤排程';
+                            document.getElementById('submitBtn').textContent = '💾 更新排程';
+                            await loadScheduleForEdit();
                         }
                     }).catch(err => {
                         console.error('Get Profile Error:', err);
@@ -328,6 +331,36 @@
         const weekdayButtons = document.querySelectorAll('.weekday-btn');
         const presetButtons = document.querySelectorAll('.preset-btn');
         let selectedWeekdays = [];
+
+        function setSelectedWeekdays(days) {
+            const normalizedDays = (Array.isArray(days) ? days : [])
+                .map(day => parseInt(day))
+                .filter(day => Number.isInteger(day) && day >= 0 && day <= 6);
+            selectedWeekdays = [...new Set(normalizedDays)].sort();
+            weekdayButtons.forEach(btn => {
+                const day = parseInt(btn.dataset.day);
+                btn.classList.toggle('active', selectedWeekdays.includes(day));
+            });
+            presetButtons.forEach(pb => pb.classList.remove('active'));
+        }
+
+        async function loadScheduleForEdit() {
+            try {
+                const response = await fetch(`/api/schedule?userId=${encodeURIComponent(userId)}&scheduleId=${encodeURIComponent(scheduleId)}`);
+                const result = await response.json();
+                if (!response.ok || !result.hasData) {
+                    showMessage(result.detail || '找不到要編輯的排程', 'error');
+                    return;
+                }
+                document.getElementById('originAddress').value = result.originAddress || result.originName || '';
+                document.getElementById('destination').value = result.destinationName || result.destinationAddress || '';
+                document.getElementById('arrivalTime').value = result.arrivalTime || '';
+                setSelectedWeekdays(result.weekdays || []);
+            } catch (error) {
+                console.error('讀取排程失敗:', error);
+                showMessage('讀取既有排程失敗，請重新開啟編輯頁面', 'error');
+            }
+        }
 
         weekdayButtons.forEach(btn => {
             btn.addEventListener('click', function() {
@@ -422,6 +455,8 @@
                     },
                     body: JSON.stringify({
                         userId: userId,
+                        mode: formMode === 'edit' ? 'edit' : 'create',
+                        scheduleId: formMode === 'edit' ? scheduleId : null,
                         destination: destination,
                         arrivalTime: arrivalTime,
                         originAddress: originAddress || null,
@@ -432,7 +467,7 @@
                 const result = await response.json();
 
                 if (response.ok && result.ok) {
-                    showMessage('✅ 排程設定成功！', 'success');
+                    showMessage(formMode === 'edit' ? '✅ 排程更新成功！' : '✅ 排程設定成功！', 'success');
                     setTimeout(() => {
                         liff.closeWindow();
                     }, 1500);
@@ -453,6 +488,7 @@
             const messageEl = document.getElementById('message');
             messageEl.textContent = text;
             messageEl.className = 'message ' + type;
+            messageEl.style.display = 'block';
         }
 
         function hideMessage() {

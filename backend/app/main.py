@@ -619,6 +619,7 @@ async def submit_schedule_add_trailing_alias(payload: ScheduleSubmitPayload, db:
 def _schedule_response_list(schedules):
     return [
         {
+            "displayIndex": index,
             "scheduleId": s.id,
             "originName": s.origin_name,
             "originAddress": s.origin_address,
@@ -632,7 +633,7 @@ def _schedule_response_list(schedules):
             "weekdays": s.days,
             "reminderEnabled": s.reminder_enabled,
         }
-        for s in schedules
+        for index, s in enumerate(schedules, start=1)
     ]
 
 
@@ -651,9 +652,11 @@ async def get_schedule(
     schedule = next((s for s in schedules if s.id == scheduleId), None) if scheduleId else schedules[0]
     if not schedule:
         raise HTTPException(status_code=404, detail="找不到指定排程")
+    display_index = schedules.index(schedule) + 1
     return {
         "hasData":           True,
         "userId":            userId,
+        "displayIndex":      display_index,
         "scheduleId":        schedule.id,
         "originName":        schedule.origin_name,
         "originAddress":     schedule.origin_address,

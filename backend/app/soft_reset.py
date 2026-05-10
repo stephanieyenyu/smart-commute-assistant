@@ -2,7 +2,7 @@ import threading
 import time
 from typing import Dict, Tuple
 
-from app.crud import reset_profile_for_reconfigure
+from app.crud import clear_user_data
 
 # In-memory registry of pending soft resets: user_id -> (timer, expire_ts)
 _PENDING_RESETS: Dict[int, Tuple[threading.Timer, float]] = {}
@@ -15,7 +15,7 @@ def schedule_soft_reset(db, user_id: int, delay_minutes: int = 15) -> float:
     """
     def _do_reset():
         try:
-            reset_profile_for_reconfigure(db, user_id)
+            clear_user_data(db, user_id)
             print(f"[soft_reset] executed reset for user {user_id}")
         except Exception as e:
             print(f"[soft_reset] failed to reset user {user_id}: {e}")
