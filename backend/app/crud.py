@@ -623,6 +623,13 @@ def delete_commute_schedule(db: Session, line_user_id: str, schedule_id: int) ->
     db.commit()
     return deleted
 
+def delete_all_user_data(db: Session, user_id: int) -> int:
+    """Physically delete all schedules and overrides for a user (full reset). Returns schedule count."""
+    from app.models import CommuteOverride
+    db.query(CommuteOverride).filter(CommuteOverride.user_id == user_id).delete(synchronize_session=False)
+    count = db.query(CommuteSchedule).filter(CommuteSchedule.user_id == user_id).delete(synchronize_session=False)
+    db.commit()
+    return count
 
 def get_all_schedules_for_day(db: Session, day_of_week: int) -> list[CommuteSchedule]:
     """取得今天需要提醒的所有排程（day_of_week: 0=週一, 1=週二, ..., 6=週日）。"""
