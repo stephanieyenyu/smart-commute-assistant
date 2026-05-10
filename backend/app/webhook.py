@@ -24,6 +24,7 @@ from app.crud import (
     get_profile,
     get_commute_schedules,
     delete_commute_schedule,
+    delete_all_user_data,
     ensure_household_for_user,
     join_household_by_code,
     clear_user_data,
@@ -438,7 +439,7 @@ def _build_help_cards_by_title() -> dict[str, dict]:
                 ("開啟自動提醒", "啟用每日自動出發提醒"),
                 ("關閉自動提醒", "停用每日自動出發提醒"),
                 ("查看提醒設定", "查看目前提醒開關狀態與啟用排程數"),
-                ("重新設定", "刪除所有既有通勤設定，讓用戶從無排程重新開始"),
+                ("重新設定", "物理清除所有排程與覆寫資料，回到初始無排程狀態"),,
             ]
         ),
         "看板管理": bubble("#0f766e", "📺", "看板管理",
@@ -511,10 +512,14 @@ async def line_webhook(
             user = get_or_create_user(db, line_user_id=line_user_id)
             get_or_create_profile(db, user.id)
 
-            # ── FollowEvent：歡迎 + 引導開啟 LIFF ─────────────────────────
+            # ── FollowEvent：完整清除舊資料後歡迎 ────────────────────────
             if isinstance(event, FollowEvent):
                 reply_token = event.reply_token
-                clear_user_data(db, user.id)
+                try:
+                    delete_all_user_data(db, user.id)
+                    clear_today_reminder_state_for_user(user.id)
+                except Exception as e:
+                    print(f"[follow] reset error user_id={user.id}: {e}")
                 await reply_with_quick_reply(
                     reply_token,
                     "👋 歡迎使用智慧通勤助理！\n"
@@ -640,7 +645,11 @@ async def line_webhook(
                     continue
 
                 if delete_schedule_id is not None:
-                    target_schedule = schedules[delete_schedule_id - 1] if 1 <= delete_schedule_id <= len(schedules) else None
+                    # Index-first lookup: buttons send display index (1-based), not DB ID
+                    if 1 <= delete_schedule_id <= len(schedules):
+                        target_schedule = schedules[delete_schedule_id - 1]
+                    else:
+                        target_schedule = next((s for s in schedules if s.id == delete_schedule_id), None)
                     if target_schedule is None:
                         await reply_with_quick_reply(
                             reply_token,
@@ -837,13 +846,18 @@ async def line_webhook(
                 )
                 continue
 
-            # ── 重新設定 ──────────────────────────────────────────────────
+            # ── 重新設定：物理刪除所有排程與覆寫，回歸無排程狀態 ─────────
             if command_text in COMMAND_ALIASES["reset"]:
-                clear_user_data(db, user.id)
+                try:
+                    delete_all_user_data(db, user.id)
+                    clear_today_reminder_state_for_user(user.id)
+                except Exception as e:
+                    print(f"[reset] error user_id={user.id}: {e}")
                 await reply_with_quick_reply(
                     reply_token,
-                    "🔄 已刪除所有既有通勤設定。\n目前沒有任何排程，請重新建立新的通勤路線。",
-                    [{"type": "uri", "label": "📝 設定通勤路線", "uri": LIFF_URL}],
+                    "🔄 已清除所有排程資料，回到初始狀態。\n"
+                    "請點擊下方按鈕重新設定通勤路線。",
+                    [{"type": "uri", "label": "📝 重新設定通勤路線", "uri": LIFF_URL}],
                 )
                 continue
 
@@ -987,9 +1001,8 @@ async def line_webhook(
 
             # ── 問候語 ────────────────────────────────────────────────────
             if command_text in {"嗨", "你好", "哈囉", "哈喽", "Hi", "Hello", "hello", "hi"}:
-                schedules = get_commute_schedules(db, line_user_id)
-                schedule = first_schedule_for_date(schedules, today_date) or (schedules[0] if schedules else None)
-                if schedule and schedule.origin_address:
+                _greeting_schedules = get_commute_schedules(db, line_user_id)
+                if _greeting_schedules and _greeting_schedules[0].origin_address:
                     await reply_with_quick_reply(
                         reply_token,
                         "你好！我是智慧通勤助理 🤖\n需要什麼幫助嗎？",
