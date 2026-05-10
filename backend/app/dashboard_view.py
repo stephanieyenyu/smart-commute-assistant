@@ -52,6 +52,19 @@ def render_dashboard_html() -> str:
       font-size: 14px;
       text-align: right;
     }
+    .voice-button {
+      margin-top: 10px;
+      padding: 9px 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .voice-button:hover {
+      border-color: var(--blue);
+    }
     .dashboard-section {
       margin-top: 20px;
     }
@@ -166,6 +179,7 @@ def render_dashboard_html() -> str:
       <div class="meta">
         <div id="viewLabel">個人看板</div>
         <div id="updatedAt">尚未更新</div>
+        <button id="voiceReminderTest" class="voice-button" type="button">語音提醒</button>
       </div>
     </header>
 
@@ -193,6 +207,18 @@ def render_dashboard_html() -> str:
     const refreshMs = 30000;
     let countdownTimer = null;
     const text = (id, value) => { document.getElementById(id).textContent = value || "尚未設定"; };
+
+    document.getElementById("voiceReminderTest").addEventListener("click", () => {
+      if (!("speechSynthesis" in window)) {
+        text("connection", "此瀏覽器不支援語音提醒");
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance("這是語音提醒測試。看板語音功能可以正常觸發。");
+      utterance.lang = "zh-TW";
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+      window.speechSynthesis.speak(utterance);
+    });
 
     function renderMembers(members) {
       const container = document.getElementById("members");

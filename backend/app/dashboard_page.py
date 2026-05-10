@@ -562,6 +562,7 @@ def render_dashboard_html_for_paths(
     <footer class="footer">
       <span id="connection">正在更新</span>
       <button id="soundToggle" class="sound-button" type="button">聲音提醒</button>
+      <button id="voiceTestButton" class="sound-button" type="button">語音提醒</button>
       <span id="updatedAt">尚未更新</span>
     </footer>
   </main>
@@ -587,6 +588,7 @@ def render_dashboard_html_for_paths(
     const updatedAt = document.getElementById("updatedAt");
     const clock = document.getElementById("clock");
     const soundToggle = document.getElementById("soundToggle");
+    const voiceTestButton = document.getElementById("voiceTestButton");
 
     const stateLabels = {{
       safe: "時間還很充裕",
@@ -807,6 +809,19 @@ def render_dashboard_html_for_paths(
       updateSoundToggle();
       if (soundEnabled) {{
         speakReminder("聲音提醒已開啟。", `dashboardSoundReady:${{userId}}:${{Date.now()}}`);
+      }}
+    }});
+
+    voiceTestButton.addEventListener("click", () => {{
+      soundEnabled = true;
+      localStorage.setItem(`dashboardSoundEnabled:${{userId}}`, "true");
+      updateSoundToggle();
+      const result = speakReminder(
+        "這是語音提醒測試。看板語音功能可以正常觸發。",
+        `dashboardVoiceTest:${{userId}}:${{Date.now()}}`
+      );
+      if (result === "unavailable") {{
+        connection.textContent = "此瀏覽器不支援語音提醒";
       }}
     }});
 

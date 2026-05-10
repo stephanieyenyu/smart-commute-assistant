@@ -26,7 +26,7 @@ from app.crud import (
     delete_commute_schedule,
     ensure_household_for_user,
     join_household_by_code,
-    reset_profile_for_reconfigure,
+    clear_user_data,
     set_pending_field,
     update_profile_field,
     upsert_override,
@@ -98,6 +98,7 @@ SETTINGS_QR = [
 BASIC_SETTINGS_QR = [
     {"type": "uri",     "label": "🖥️ 打開 LIFF",     "uri": LIFF_URL},
     {"type": "message", "label": "📊 查看設定",      "text": "查看設定"},
+    {"type": "message", "label": "📋 查看提醒設定",  "text": "查看提醒設定"},
     {"type": "message", "label": "🔔 開啟提醒",      "text": "開啟自動提醒"},
     {"type": "message", "label": "🔕 關閉提醒",      "text": "關閉自動提醒"},
     {"type": "message", "label": "🔄 重新設定",      "text": "重新設定"},
@@ -211,7 +212,6 @@ TOPIC_QUICK_REPLY_GUIDES = {
         "items": [
             {"type": "message", "label": "✏️ 今天到達時間", "text": "修改今天到公司時間"},
             {"type": "message", "label": "🗓️ 明天到達時間", "text": "修改明天到公司時間"},
-            {"type": "message", "label": "📋 查看提醒設定", "text": "查看提醒設定"},
             {"type": "message", "label": "📊 查看設定", "text": "查看設定"},
         ],
     },
@@ -514,7 +514,7 @@ async def line_webhook(
             # ── FollowEvent：歡迎 + 引導開啟 LIFF ─────────────────────────
             if isinstance(event, FollowEvent):
                 reply_token = event.reply_token
-                reset_profile_for_reconfigure(db, user.id)
+                clear_user_data(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
                     "👋 歡迎使用智慧通勤助理！\n"
@@ -640,13 +640,11 @@ async def line_webhook(
                     continue
 
                 if delete_schedule_id is not None:
-                    target_schedule = next((s for s in schedules if s.id == delete_schedule_id), None)
-                    if target_schedule is None and 1 <= delete_schedule_id <= len(schedules):
-                        target_schedule = schedules[delete_schedule_id - 1]
+                    target_schedule = schedules[delete_schedule_id - 1] if 1 <= delete_schedule_id <= len(schedules) else None
                     if target_schedule is None:
                         await reply_with_quick_reply(
                             reply_token,
-                            "找不到這筆排程，請重新選擇要刪除的排程。",
+                            "找不到這個顯示編號，請重新選擇要刪除的排程。",
                             MAIN_MENU_QR,
                         )
                         continue
@@ -679,7 +677,7 @@ async def line_webhook(
                         delete_buttons.append({
                             "type": "message",
                             "label": f"🗑️ 刪除 {index}",
-                            "text": f"刪除排程 {schedule.id}",
+                            "text": f"刪除排程 {index}",
                         })
                 await reply_with_quick_reply(
                     reply_token,
@@ -841,7 +839,7 @@ async def line_webhook(
 
             # ── 重新設定 ──────────────────────────────────────────────────
             if command_text in COMMAND_ALIASES["reset"]:
-                reset_profile_for_reconfigure(db, user.id)
+                clear_user_data(db, user.id)
                 await reply_with_quick_reply(
                     reply_token,
                     "🔄 已刪除所有既有通勤設定。\n目前沒有任何排程，請重新建立新的通勤路線。",

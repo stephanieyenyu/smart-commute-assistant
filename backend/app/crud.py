@@ -1,6 +1,7 @@
 import secrets
 import string
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -355,6 +356,11 @@ def reset_profile_for_reconfigure(db: Session, user_id: int):
     return profile
 
 
+def clear_user_data(db: Session, user_id: int):
+    """Total user wipe used by reset/unblock flows before rebuilding schedules."""
+    return reset_profile_for_reconfigure(db, user_id)
+
+
 def set_reminder_enabled(db: Session, user_id: int, enabled: bool):
     profile = get_profile(db, user_id)
     profile.reminder_enabled = enabled
@@ -497,15 +503,16 @@ def upsert_commute_schedule(db: Session, line_user_id: str, data: dict) -> Commu
     get_or_create_profile(db, user.id)
 
     dest_name = _destination_key(data)
-    mode = data.get("mode")
-    schedule = _schedule_by_id(db, user.id, data.get("scheduleId"))
-    if schedule is None and mode == "edit":
-        raise ValueError("找不到要編輯的排程")
-    if not schedule:
+    mode = str(data.get("mode") or "create").strip().lower()
+    if mode == "edit":
+        schedule = _schedule_by_id(db, user.id, data.get("scheduleId"))
+        if schedule is None or not getattr(schedule, "is_active", True):
+            raise ValueError("找不到要編輯的排程")
+    else:
         schedule = CommuteSchedule(user_id=user.id, dest_name=dest_name, is_active=True)
         db.add(schedule)
 
-    partial = bool(data.get("partial"))
+    partial = mode == "edit" and bool(data.get("partial"))
 
     def apply_if_present(attr: str, key: str, default=None):
         if partial and data.get(key) is None:
@@ -585,18 +592,36 @@ def get_commute_schedules_by_user_id(db: Session, user_id: int) -> list[CommuteS
 
 
 def delete_commute_schedule(db: Session, line_user_id: str, schedule_id: int) -> CommuteSchedule | None:
-    """Soft delete a user's schedule so old records stay auditable but no longer trigger reminders."""
+    """Physically delete a user's schedule and its reminder/voice state."""
     user = db.query(User).filter(User.line_user_id == line_user_id).first()
     if not user:
         return None
     schedule = _schedule_by_id(db, user.id, schedule_id)
     if not schedule or not getattr(schedule, "is_active", True):
         return None
-    schedule.is_active = False
-    schedule.reminder_enabled = False
+    deleted = SimpleNamespace(
+        id=schedule.id,
+        user_id=schedule.user_id,
+        origin_name=schedule.origin_name,
+        origin_address=schedule.origin_address,
+        origin_lat=schedule.origin_lat,
+        origin_lng=schedule.origin_lng,
+        dest_name=schedule.dest_name,
+        dest_address=schedule.dest_address,
+        dest_lat=schedule.dest_lat,
+        dest_lng=schedule.dest_lng,
+        time=schedule.time,
+        days=schedule.days,
+        reminder_enabled=schedule.reminder_enabled,
+        is_active=schedule.is_active,
+    )
+    db.query(CommuteOverride).filter(
+        CommuteOverride.user_id == user.id,
+        CommuteOverride.schedule_id == schedule.id,
+    ).delete(synchronize_session=False)
+    db.delete(schedule)
     db.commit()
-    db.refresh(schedule)
-    return schedule
+    return deleted
 
 
 def get_all_schedules_for_day(db: Session, day_of_week: int) -> list[CommuteSchedule]:
