@@ -604,6 +604,8 @@ def render_dashboard_html_for_paths(
     let soundEnabled = localStorage.getItem(`dashboardSoundEnabled:${{userId}}`) === "true";
     let activeSpeechKeys = new Set();
     let activeDepartureCheckKeys = new Set();
+    let speechUnlocked = false;
+    let pendingSpeechQueue = [];
     let currentState = "error";
     let layoutClass = "layout-wide";
 
@@ -707,10 +709,41 @@ def render_dashboard_html_for_paths(
       await notifyDepartureCheck(payload, "voice-complete");
     }}
 
+    function flushPendingSpeechQueue() {{
+      if (!speechUnlocked || !pendingSpeechQueue.length) return;
+      const queue = pendingSpeechQueue.slice();
+      pendingSpeechQueue = [];
+      queue.forEach((item) => {{
+        speakReminder(item.message, item.storageKey, item.onDone, item.attempt || 0);
+      }});
+    }}
+
+    function unlockSpeechByGesture() {{
+      if (!("speechSynthesis" in window)) return;
+      if (speechUnlocked) {{
+        flushPendingSpeechQueue();
+        return;
+      }}
+      speechUnlocked = true;
+      try {{
+        const unlockUtterance = new SpeechSynthesisUtterance("");
+        unlockUtterance.volume = 0;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(unlockUtterance);
+      }} catch (error) {{
+        console.warn("speech unlock failed", error);
+      }}
+      flushPendingSpeechQueue();
+    }}
+
+
     function speakReminder(message, storageKey, onDone, attempt = 0) {{
       if (!soundEnabled || !("speechSynthesis" in window)) return "unavailable";
       if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return "duplicate";
-
+      if (!speechUnlocked) {{
+        pendingSpeechQueue.push({{ message, storageKey, onDone, attempt }});
+        return "queued";
+      }}
       const speakNow = () => {{
         if (localStorage.getItem(storageKey) === "true" || activeSpeechKeys.has(storageKey)) return;
 
@@ -804,6 +837,7 @@ def render_dashboard_html_for_paths(
     }}
 
     soundToggle.addEventListener("click", () => {{
+      unlockSpeechByGesture();
       soundEnabled = !soundEnabled;
       localStorage.setItem(`dashboardSoundEnabled:${{userId}}`, soundEnabled ? "true" : "false");
       updateSoundToggle();
@@ -813,6 +847,7 @@ def render_dashboard_html_for_paths(
     }});
 
     voiceTestButton.addEventListener("click", () => {{
+      unlockSpeechByGesture();
       soundEnabled = true;
       localStorage.setItem(`dashboardSoundEnabled:${{userId}}`, "true");
       updateSoundToggle();
@@ -824,6 +859,8 @@ def render_dashboard_html_for_paths(
         connection.textContent = "此瀏覽器不支援語音提醒";
       }}
     }});
+      window.addEventListener("pointerdown", unlockSpeechByGesture, {{ once: true }});
+      window.addEventListener("keydown", unlockSpeechByGesture, {{ once: true }});
 
     function pad(value) {{
       return String(value).padStart(2, "0");
