@@ -10,7 +10,7 @@ LINE 智慧通勤助理是一個以 FastAPI 為後端核心的個人化通勤決
 - LINE webhook entry point
 - Commute decision engine with shared route formatter
 - API health logs and commute plan logs prepared for ML feedback
-- Nightly brief, morning watchdog, and departure reminder scheduler
+- Nightly brief (21:00 Asia/Taipei, tomorrow's commute preview) and departure reminder scheduler (1hr/5min pre-departure alerts with commute time + weather, "已出門" confirmation)
 - Dashboard REST/WebSocket API for kiosk status displays
 - Browser dashboard view for external monitors
 - Docker Compose local development stack
