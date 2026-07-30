@@ -450,6 +450,33 @@ async def choose_commute_option_with_override(
             allowed_travel_modes=allowed_travel_modes,
         ), timeout_seconds=4.2)
     )
+    # 「最短時間優先」需要公平比較「堅持搭公車」跟「堅持搭捷運」各自實際要花多久，
+    # 不限交通方式的那份 Google 路線只代表 Google 自己覺得最好的單一組合，
+    # 沒辦法拿來直接當作公車或捷運各自的耗時估計，所以這裡額外多打兩支限定模式的查詢。
+    google_bus_only_task = (
+        asyncio.create_task(
+            safe_call(estimate_transit_minutes_detailed(
+                profile.home_lat, profile.home_lng,
+                profile.office_lat, profile.office_lng,
+                arrival_dt,
+                allowed_travel_modes=["BUS"],
+            ), timeout_seconds=4.2)
+        )
+        if requested_mode == "shortest"
+        else None
+    )
+    google_metro_only_task = (
+        asyncio.create_task(
+            safe_call(estimate_transit_minutes_detailed(
+                profile.home_lat, profile.home_lng,
+                profile.office_lat, profile.office_lng,
+                arrival_dt,
+                allowed_travel_modes=["SUBWAY", "TRAIN", "RAIL", "LIGHT_RAIL"],
+            ), timeout_seconds=4.2)
+        )
+        if requested_mode == "shortest"
+        else None
+    )
     bus_task = (
         asyncio.create_task(safe_call(get_bus_realtime_snapshot(profile), timeout_seconds=2.5))
         if requested_mode in {"auto", "shortest", "bus"}
@@ -457,11 +484,13 @@ async def choose_commute_option_with_override(
     )
     metro_task = (
         asyncio.create_task(safe_call(get_metro_snapshot(profile), timeout_seconds=3.5))
-        if requested_mode in {"auto", "metro"}
+        if requested_mode in {"auto", "shortest", "metro"}
         else None
     )
 
     google_detailed = await google_task
+    google_bus_only_detailed = await google_bus_only_task if google_bus_only_task else None
+    google_metro_only_detailed = await google_metro_only_task if google_metro_only_task else None
     bus_snapshot = await bus_task if bus_task else None
     metro_snapshot = await metro_task if metro_task else None
 
@@ -529,7 +558,33 @@ async def choose_commute_option_with_override(
         }
 
     if requested_mode == "shortest":
-        return {"best_option": google_option, "selection_source": "manual"}
+        general_minutes = (google_detailed or {}).get("duration_minutes")
+        bus_only_minutes = (google_bus_only_detailed or {}).get("duration_minutes")
+        metro_only_minutes = (google_metro_only_detailed or {}).get("duration_minutes")
+
+        scored_candidates = []
+        if general_minutes is not None:
+            scored_candidates.append((general_minutes, google_option))
+        if bus_option and bus_only_minutes is not None:
+            scored_candidates.append((bus_only_minutes, bus_option))
+        if metro_option and metro_only_minutes is not None:
+            scored_candidates.append((metro_only_minutes, metro_option))
+
+        if not scored_candidates:
+            # 三個都查不到耗時資料（例如 API 逾時），保底回傳 Google 的建議。
+            return {"best_option": google_option, "selection_source": "manual"}
+
+        scored_candidates.sort(key=lambda pair: pair[0])
+        fastest_total_minutes, fastest_option = scored_candidates[0]
+        fastest_option = dict(fastest_option)
+        mode_label = {"google_transit": "Google 大眾運輸", "bus": "公車", "metro": "捷運"}.get(
+            fastest_option.get("mode"), fastest_option.get("mode", "")
+        )
+        fastest_option["summary"] = (
+            f"已比較公車／捷運／Google 大眾運輸各自的實際通勤時間，"
+            f"目前最快為「{mode_label}」（約 {fastest_total_minutes} 分鐘）。{fastest_option.get('summary', '')}"
+        )
+        return {"best_option": fastest_option, "selection_source": "manual"}
 
     if requested_mode == "bus":
         if bus_option:
