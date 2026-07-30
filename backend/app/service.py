@@ -774,6 +774,25 @@ async def _compute_today_plan(
     if not profile.home_address or not profile.office_address or not profile.preferred_arrival_time:
         return {"ok": False, "reason": "setup_incomplete", "next_step": "schedule"}
 
+    # 地址文字存在，不代表地理編碼（轉成經緯度）有成功——沒有座標的話後面所有交通方式
+    # API 都無法計算，過去這裡沒檢查，會導致悄悄失敗、最後只顯示籠統的 Google 建議。
+    if profile.home_lat is None or profile.home_lng is None or profile.office_lat is None or profile.office_lng is None:
+        missing_side = []
+        if profile.home_lat is None or profile.home_lng is None:
+            missing_side.append("住家")
+        if profile.office_lat is None or profile.office_lng is None:
+            missing_side.append("目的地")
+        missing_text = "、".join(missing_side)
+        return {
+            "ok": False,
+            "reason": "coords_missing",
+            "next_step": "schedule",
+            "text": (
+                f"⚠️ {missing_text}地址沒有成功轉換成地圖座標，無法計算通勤方式。\n"
+                "請重新設定，並在地圖上直接選點（而不是只打字輸入地址），確保有正確定位。"
+            ),
+        }
+
     effective_arrival_time = profile.preferred_arrival_time
     override = get_override_for_date(db, user_id, target_date, schedule_id=getattr(schedule, "id", None))
     if override is None and getattr(schedule, "id", None) is not None:
