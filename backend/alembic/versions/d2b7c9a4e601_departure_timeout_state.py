@@ -51,8 +51,9 @@ def upgrade() -> None:
             )
 
     if "users" in tables:
+        user_columns = _column_names("users")
         user_indexes = _index_names("users")
-        if "ix_users_household_id_id" not in user_indexes:
+        if "household_id" in user_columns and "ix_users_household_id_id" not in user_indexes:
             op.create_index("ix_users_household_id_id", "users", ["household_id", "id"], unique=False)
 
 

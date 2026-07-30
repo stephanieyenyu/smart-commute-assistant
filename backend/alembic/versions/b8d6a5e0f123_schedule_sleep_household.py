@@ -25,10 +25,9 @@ def _column_names(table_name: str) -> set[str]:
 
 
 def upgrade() -> None:
-    user_columns = _column_names("users")
-    if "household_id" not in user_columns:
-        op.add_column("users", sa.Column("household_id", sa.String(), nullable=True))
-        op.create_index(op.f("ix_users_household_id"), "users", ["household_id"], unique=False)
+    # 注意：household_id 欄位改由 b2c3d4e5f6a7_restore_multi_schedule_family_dashboard
+    # 以 Integer + FK(households.id) 的正確型別建立（與 models.py 及 production 實際 schema 一致）。
+    # 這裡原本會先以 String 型別建立同名欄位，導致合併分支後 FK 建立時型別衝突，故移除。
 
     profile_columns = _column_names("commute_profiles")
     if "active_weekdays" not in profile_columns:
@@ -51,8 +50,3 @@ def downgrade() -> None:
     profile_columns = _column_names("commute_profiles")
     if "active_weekdays" in profile_columns:
         op.drop_column("commute_profiles", "active_weekdays")
-
-    user_columns = _column_names("users")
-    if "household_id" in user_columns:
-        op.drop_index(op.f("ix_users_household_id"), table_name="users")
-        op.drop_column("users", "household_id")

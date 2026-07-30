@@ -3,9 +3,15 @@ import asyncio
 from app.celery_app import celery_app
 from app.reminder_scheduler import (
     check_and_send_departure_reminders,
-    run_morning_watchdog,
     send_nightly_briefs,
 )
+
+# NOTE: there is no standalone "morning watchdog" task anymore. Its job
+# (1hr/5min pre-departure alerts with commute time + weather) already runs
+# inside check_and_send_departure_reminders, which check_departure_reminders
+# below wraps. This module is only exercised by local `docker compose up`
+# (celery_worker / celery_beat); Render production runs uvicorn only, and
+# uses the APScheduler jobs registered in start_reminder_scheduler() instead.
 
 
 def _run_async_task(coro) -> None:
@@ -20,8 +26,3 @@ def check_departure_reminders() -> None:
 @celery_app.task(name="app.tasks.send_nightly_briefs")
 def celery_send_nightly_briefs() -> None:
     _run_async_task(send_nightly_briefs())
-
-
-@celery_app.task(name="app.tasks.run_morning_watchdog")
-def celery_run_morning_watchdog() -> None:
-    _run_async_task(run_morning_watchdog())
