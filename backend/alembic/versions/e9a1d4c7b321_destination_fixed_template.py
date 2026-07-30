@@ -62,7 +62,7 @@ def upgrade() -> None:
             )
             op.create_index(op.f("ix_commute_schedule_templates_destination_id"), "commute_schedule_templates", ["destination_id"], unique=False)
         if "is_fixed" not in template_columns:
-            op.add_column("commute_schedule_templates", sa.Column("is_fixed", sa.Boolean(), nullable=False, server_default=sa.text("1")))
+            op.add_column("commute_schedule_templates", sa.Column("is_fixed", sa.Boolean(), nullable=False, server_default=sa.text("true")))
 
 
 def downgrade() -> None:

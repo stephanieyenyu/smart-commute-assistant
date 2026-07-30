@@ -824,6 +824,23 @@ def mark_monitor_sent(
     return override
 
 
+def mark_nightly_brief_sent(
+    db: Session,
+    user_id: int,
+    target_date,
+    schedule_id: int | None,
+    plan_key: str,
+    sent_at: datetime,
+):
+    """記錄「明日通勤預報」已送出，避免同一晚重複推播同一份計畫。"""
+    override = get_or_create_override(db, user_id, target_date, schedule_id=schedule_id)
+    override.nightly_brief_plan_key = plan_key
+    override.nightly_brief_sent_at = sent_at
+    db.commit()
+    db.refresh(override)
+    return override
+
+
 def mark_departure_question_sent(
     db: Session,
     user_id: int,

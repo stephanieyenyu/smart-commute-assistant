@@ -187,6 +187,8 @@ class CommuteOverride(Base):
     departure_snoozed_until = Column(DateTime(timezone=True), nullable=True)
     departure_timeout_at = Column(DateTime(timezone=True), nullable=True)
     departure_timeout_silent = Column(Boolean, nullable=False, default=False)
+    nightly_brief_plan_key = Column(String, nullable=True)
+    nightly_brief_sent_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

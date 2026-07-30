@@ -73,6 +73,8 @@ def ensure_runtime_schema() -> None:
                     "selected_metro_station_id",
                     "selected_metro_station_name",
                     "preferred_mode",
+                    "identity_type",
+                    "destination_label",
                 )
                 profile_float_columns = (
                     "selected_bus_stop_lat",
@@ -176,6 +178,13 @@ def ensure_runtime_schema() -> None:
                             "ALTER TABLE commute_overrides "
                             "ADD COLUMN departure_timeout_silent BOOLEAN DEFAULT 0 NOT NULL"
                         ))
+                if "nightly_brief_plan_key" not in override_columns:
+                    conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN nightly_brief_plan_key VARCHAR"))
+                if "nightly_brief_sent_at" not in override_columns:
+                    if dialect == "postgresql":
+                        conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN nightly_brief_sent_at TIMESTAMP WITH TIME ZONE"))
+                    else:
+                        conn.execute(text("ALTER TABLE commute_overrides ADD COLUMN nightly_brief_sent_at DATETIME"))
                 if dialect == "postgresql":
                     conn.execute(text(
                         "ALTER TABLE commute_overrides "

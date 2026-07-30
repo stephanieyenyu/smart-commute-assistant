@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import hashlib
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.db import SessionLocal
 from app.line_client import (
@@ -16,9 +18,10 @@ from app.crud import (
     mark_departure_question_sent,
     mark_departed_for_today,
     mark_monitor_sent,
+    mark_nightly_brief_sent,
     clear_today_reminder_state_db,
 )
-from app.service import freeze_today_reminder_payload
+from app.service import freeze_today_reminder_payload, build_today_commute_payload
 
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
@@ -28,6 +31,8 @@ PREPARE_RETRY_SECONDS = 300
 STALE_REMINDER_GRACE_SECONDS = 120
 SCHEDULER_TICK_SECONDS = 30
 EXACT_TRIGGER_WINDOW_SECONDS = 75
+NIGHTLY_BRIEF_HOUR = 21
+NIGHTLY_BRIEF_MINUTE = 0
 MORNING_MONITOR_OFFSETS = {
     "one_hour": 60 * 60,
     "five_min": 5 * 60,
@@ -43,6 +48,12 @@ MONITOR_QUICK_REPLIES = [
 DEPARTURE_CONFIRM_QR = [
     {"type": "message", "label": "✅ 已出門", "text": "已出門"},
 ]
+
+NIGHTLY_BRIEF_QUICK_REPLIES = [
+    {"type": "message", "label": "📋 今日通勤建議", "text": "今天通勤建議"},
+    {"type": "message", "label": "🗓 查看排程設定", "text": "查看排程設定"},
+]
+
 
 
 def now_taipei() -> datetime:
@@ -294,6 +305,12 @@ def start_reminder_scheduler():
         id="departure_reminder_job",
         replace_existing=True,
     )
+    scheduler.add_job(
+        send_nightly_briefs,
+        CronTrigger(hour=NIGHTLY_BRIEF_HOUR, minute=NIGHTLY_BRIEF_MINUTE, timezone="Asia/Taipei"),
+        id="nightly_brief_job",
+        replace_existing=True,
+    )
     scheduler.start()
     print("[reminder] scheduler started (Asia/Taipei)")
 
@@ -321,5 +338,66 @@ def mark_user_departed_for_today(user_id: int, schedule_id: int | None = None):
         )
         print(f"[departed] user_id={user_id} schedules={len(departed)}")
         return departed
+    finally:
+        db.close()
+
+
+async def send_nightly_briefs():
+    """
+    每晚固定時間（預設 21:00 Asia/Taipei）針對明天有排程的使用者，
+    推播明日通勤預報（預估到達時間、建議出發時間、交通方式），
+    並用 nightly_brief_plan_key 避免同一份計畫被重複推播。
+    """
+    db = SessionLocal()
+    try:
+        now_dt = now_taipei()
+        tomorrow = (now_dt + timedelta(days=1)).date()
+        tomorrow_weekday = tomorrow.weekday()  # 0=週一, ..., 6=週日
+
+        schedules_tomorrow = get_all_schedules_for_day(db, tomorrow_weekday)
+        print(f"[nightly-brief] tomorrow={tomorrow.isoformat()} schedules={len(schedules_tomorrow)}")
+
+        for schedule in schedules_tomorrow:
+            try:
+                user = get_user_by_id(db, schedule.user_id)
+                if not user or not user.line_user_id:
+                    continue
+
+                payload = await build_today_commute_payload(
+                    db=db,
+                    user_id=user.id,
+                    target_date=tomorrow,
+                    force_mode_override=None,
+                    header="🌙 明日通勤預報：",
+                    schedule_id=schedule.id,
+                )
+                if not payload.get("ok"):
+                    print(f"[nightly-brief] plan failed user_id={user.id} schedule_id={schedule.id} reason={payload.get('reason')}")
+                    continue
+
+                plan_key = hashlib.sha1(
+                    f"{tomorrow.isoformat()}|{payload.get('effective_arrival_time')}|"
+                    f"{payload.get('final_departure_time')}|{payload.get('recommended_mode')}|"
+                    f"{payload['text']}".encode("utf-8")
+                ).hexdigest()
+                override = get_override_for_date(db, user.id, tomorrow, schedule_id=schedule.id)
+                if override and override.nightly_brief_plan_key == plan_key:
+                    continue
+
+                text = f"{payload['text']}\n\n可用下方按鈕查看今日通勤建議或調整排程。"
+                await push_with_quick_reply(user.line_user_id, text, NIGHTLY_BRIEF_QUICK_REPLIES)
+                mark_nightly_brief_sent(
+                    db=db,
+                    user_id=user.id,
+                    target_date=tomorrow,
+                    schedule_id=schedule.id,
+                    plan_key=plan_key,
+                    sent_at=now_dt,
+                )
+                print(f"[nightly-brief] sent user_id={user.id} schedule_id={schedule.id} target_date={tomorrow.isoformat()}")
+            except Exception as e:
+                import traceback
+                print(f"[nightly-brief] failed user_id={schedule.user_id} schedule_id={schedule.id} error={e}")
+                print(traceback.format_exc())
     finally:
         db.close()

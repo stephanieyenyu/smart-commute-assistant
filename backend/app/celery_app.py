@@ -22,9 +22,5 @@ celery_app.conf.update(
             "task": "app.tasks.send_nightly_briefs",
             "schedule": crontab(minute=0, hour=21),
         },
-        "run_morning_watchdog": {
-            "task": "app.tasks.run_morning_watchdog",
-            "schedule": crontab(minute="*/5"),
-        },
     }
 )
