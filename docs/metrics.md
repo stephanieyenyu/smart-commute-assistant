@@ -66,6 +66,7 @@ every time a script is added, which happened once already.
 | Application source files | 53 | `git ls-files "backend/*.py" \| wc -l` |
 | Application Python LOC | 12,315 | `git ls-files "backend/*.py" \| xargs wc -l` |
 | Test LOC | 1,451 across 4 files | `wc -l tests/test_*.py` |
+| Tests passing | **26 of 50** | `python -m unittest discover -s tests` — see [D-8](known-issues.md#d-824-of-50-tests-fail-and-did-before-this-work-began) |
 | Documentation tooling | 4 scripts | `scripts/*.py`, `docs/diagrams/gen_diagrams.py` — excluded above |
 | HTTP routes declared | 37 distinct paths | Route inventory, `docs/api.md` |
 | HTTP routes mounted | 34 + 3 WebSocket | Declared minus the one unmounted router, `docs/api.md` |

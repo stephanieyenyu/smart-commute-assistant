@@ -220,6 +220,18 @@ async def lifespan(app: FastAPI):
             reminder_scheduler.shutdown()
 
 
+# Fail fast if the api_health persistence path is not wired up. Provider-call
+# logging is tolerant by design, so a missing crud function produced nothing but a
+# stdout line that Render discards on spin-down — leaving api_health_logs empty for
+# months while all 17 call sites appeared instrumented. Checking here means a
+# recurrence stops the deploy. See docs/known-issues.md A-6.
+from app import crud as _crud
+if not hasattr(_crud, "record_api_health_log"):
+    raise RuntimeError(
+        "app.crud.record_api_health_log is missing; api_health_logs would silently "
+        "never be written. See docs/known-issues.md A-6."
+    )
+
 app = FastAPI(title="Smart Commute Assistant", lifespan=lifespan)
 
 app.add_middleware(
