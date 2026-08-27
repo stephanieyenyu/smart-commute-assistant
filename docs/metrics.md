@@ -40,27 +40,32 @@ UNION ALL SELECT 'commute_schedules', COUNT(*) FROM commute_schedules;
 Collected from the repository, not the database. Regenerate with
 `python scripts/collect_repo_stats.py --markdown`.
 
+Figures below count `backend/` only. The four scripts under `scripts/` and `docs/diagrams/` are
+documentation tooling rather than part of the system; counting them would make the figure move
+every time a script is added, which happened once already.
+
 | Figure | Value | Derivation |
 |---|---|---|
-| Commits | 187 | `git rev-list --count HEAD` |
+| Commits | 194 | `git rev-list --count HEAD` at `80ee635` |
 | Development window | 2026-04-22 → 2026-07-30 | `git log --format=%ad --date=short` |
-| Source files | 59 | `git ls-files "*.py" "*.js" "*.html" \| wc -l` |
-| Python LOC | 13,766 | `git ls-files "*.py" \| xargs wc -l` |
+| Application source files | 53 | `git ls-files "backend/*.py" \| wc -l` |
+| Application Python LOC | 12,315 | `git ls-files "backend/*.py" \| xargs wc -l` |
 | Test LOC | 1,451 across 4 files | `wc -l tests/test_*.py` |
+| Documentation tooling | 4 scripts | `scripts/*.py`, `docs/diagrams/gen_diagrams.py` — excluded above |
 | HTTP routes declared | 37 distinct paths | Route inventory, `docs/api.md` |
-| HTTP routes mounted | 34 + 3 WebSocket | Declared minus the 10 unmounted, `docs/api.md` |
+| HTTP routes mounted | 34 + 3 WebSocket | Declared minus the one unmounted router, `docs/api.md` |
 | Database tables | 10 | `grep -c "__tablename__" backend/app/models.py` |
 | Alembic revisions | 15 | `ls backend/alembic/versions/*.py \| wc -l` |
 | Scheduled jobs | 2 | `scheduler.add_job` registrations |
 | Instrumented provider endpoints | 6 | Distinct first arguments to `log_api_health()` |
 | `log_api_health` call sites | 17 | `grep -rc "log_api_health(" backend/app` |
 | LINE command keys | 25 | `COMMAND_ALIASES` keys in `webhook.py` |
-| LINE postback actions | 3 | `action=` literals |
+| LINE postback actions | 2 | `postback_data ==` comparisons in `webhook.py` |
 
-**Declared and mounted differ by ten routes.** Nine belong to `dashboard.py` and one to
-`liff_routes.py:api_router`, neither of which is included in the app. Quoting 37 without that
-distinction would overstate the reachable surface. See
-[`api.md`](api.md#unreachable-routes).
+**Declared and mounted differ by three routes.** `dashboard.py` was unmounted until `76859d9`
+and accounted for nine of them; the remainder belong to `liff_routes.py:api_router`, which is
+still not included and whose one route is declared again in `main.py`. Quoting 37 without that
+distinction would overstate the reachable surface. See [`api.md`](api.md#unreachable-routes).
 
 **Two scheduled jobs, not three.** The three reminder stages are branches inside one 30-second
 tick. Counting them as three jobs would be wrong.
@@ -258,4 +263,4 @@ is consistent with the rest of this document in a way that a thin number is not.
 
 ---
 
-**Source** `scripts/collect_metrics.sql`, `scripts/collect_repo_stats.py` · repository figures @ `e10e6d9`
+**Source** `scripts/collect_metrics.sql`, `scripts/collect_repo_stats.py` · repository figures @ `80ee635`

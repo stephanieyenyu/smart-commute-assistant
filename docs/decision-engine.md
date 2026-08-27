@@ -280,4 +280,4 @@ Current fill rates are reported in [`metrics.md`](metrics.md).
 
 ---
 
-**Source** `backend/app/service.py`, `backend/app/weather.py` @ `e10e6d9` — verified line by line
+**Source** `backend/app/service.py`, `backend/app/weather.py` @ `80ee635` — verified line by line
