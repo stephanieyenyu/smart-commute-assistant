@@ -26,6 +26,7 @@ from app.crud import (
 )
 from app.google_maps import geocode_address
 from app.dashboard_view import render_dashboard_html
+from app.dashboard import router as dashboard_router
 from app.dashboard_ws import router as ws_router
 from app.family import router as family_router
 from app.models import User
@@ -233,6 +234,7 @@ app.include_router(webhook_router)
 app.include_router(liff_router)
 app.include_router(ws_router)
 app.include_router(family_router)
+app.include_router(dashboard_router)
 
 # ── Static Dashboard 前端 ────────────────────────────────────────────────────
 import os

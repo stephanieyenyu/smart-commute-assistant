@@ -1,0 +1,180 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Decision Flow" id="Decision Flow">
+    <mxGraphModel dx="1675" dy="772" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1440" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="c1" value="Decision Flow　決策流程　_compute_today_plan()" style="text;html=1;align=left;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="800" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" value="規則式行為政策，不含任何學習元件。每個對外呼叫都包在 safe_call(timeout) 中，逾時或例外一律回傳 None。" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="52" width="1000" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" value="" style="ellipse;html=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#333333,#cccccc);strokeWidth=2;centerRadius=4;centerColor=light-dark(#9370DB,#cccccc);" vertex="1" parent="1">
+          <mxGeometry x="293.0" y="100" width="14" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="c4" value="解析排程
+依星期與 is_active 篩選，再取 schedule_id 或第一筆" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="140" width="300" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="c5" value="找到排程？" style="rhombus;whiteSpace=wrap;html=1;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="220" y="220" width="160" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="c6" value="no_schedule_for_date
+依日期回覆今天／明天／該日無排程" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fdf0ef;strokeColor=#b23b3b;fontColor=#b23b3b;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="550" y="228" width="280" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="c7" value="以排程座標覆蓋 profile
+排程剛編輯過的值必須贏過 profile 的舊快取" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="320" width="300" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="c8" value="起點、終點、
+抵達時間齊全？" style="rhombus;whiteSpace=wrap;html=1;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="210" y="400" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="c9" value="setup_incomplete
+next_step ＝ schedule" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fdf0ef;strokeColor=#b23b3b;fontColor=#b23b3b;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="550" y="418" width="280" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="c10" value="四個座標
+皆非 NULL？" style="rhombus;whiteSpace=wrap;html=1;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="210" y="510" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="c11" value="coords_missing
+指出是住家還是目的地失敗，並要求在地圖上選點而非打字" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fdf0ef;strokeColor=#b23b3b;fontColor=#b23b3b;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="550" y="520" width="280" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c12" value="決定當日意圖
+抵達時間 ← override ?? 排程　模式 ← 強制 ?? 當日設定 ?? auto" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="620" width="300" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="c13" value="asyncio.gather　外層並行
+天氣 2.2 秒　路線與班次 4.8 秒" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="700" width="300" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="c14" value="內層並行　依模式決定送出哪幾支
+一律　Google 路線（allowed_travel_modes）4.2 秒
+shortest 另加　限公車 4.2 秒 · 限捷運 4.2 秒
+auto／shortest／bus　TDX 公車即時 2.5 秒
+auto／shortest／metro　TDX 捷運 3.5 秒" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="780" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="c15" value="模式選擇" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="906" width="300" height="34" as="geometry" />
+        </mxCell>
+        <mxCell id="c16" value="shortest
+以 duration_minutes 排序三個候選取最小
+三者皆缺 → 退回 Google 建議" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="60" y="970" width="240" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="c17" value="auto
+捷運 → 公車 → Google，取第一個能建立的
+不比較、不評分" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="320" y="970" width="240" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="c18" value="bus／metro
+強制。快照不可用時回傳只帶懲罰常數的空殼
+bus_to_metro 未實作，直接回 Google" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="580" y="970" width="240" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="c19" value="天氣緩衝
+降雨機率 ≥80 → +10　≥60 → +8　≥40 → +5
+否則描述含 雨／雷／陣雨／雷雨／豪雨／大雨 → +6　其餘 0" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="1080" width="300" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="c20" value="出發時間
+latest_on_time ＝ 抵達 −（路線時間 ＋ 天氣緩衝）" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="1180" width="300" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="c21" value="寫入 frozen_departure_time / frozen_reminder_text / frozen_plan_key
+並回覆 LINE　→ 見 reminder-state-machine" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=2.5;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="150" y="1260" width="300" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="c22" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c3" target="c4">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c23" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c4" target="c5">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c24" value="否" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);dashed=1;" edge="1" parent="1" source="c5" target="c6">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c25" value="是" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c5" target="c7">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c26" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c7" target="c8">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c27" value="否" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);dashed=1;" edge="1" parent="1" source="c8" target="c9">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c28" value="是" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c8" target="c10">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c29" value="否" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);dashed=1;" edge="1" parent="1" source="c10" target="c11">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c30" value="是" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c10" target="c12">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c31" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c12" target="c13">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c32" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c13" target="c14">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c33" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c14" target="c15">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c34" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c15" target="c16">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c35" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c15" target="c17">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c36" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c15" target="c18">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c37" value="best_option" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c17" target="c19">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c38" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c19" target="c20">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c39" value="" style="curved=1;startArrow=none;endArrow=classic;endSize=9;fillColor=none;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=12;labelBackgroundColor=#E8E8E88D;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);" edge="1" parent="1" source="c20" target="c21">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c40" value="&lt;b&gt;這道守衛之所以存在，是因為它曾經不存在&lt;/b&gt;&lt;br&gt;&lt;br&gt;地址字串有值，不代表地理編碼成功。Google Geocoding&lt;br&gt;在免費試用到期後停止運作，home_lat／home_lng 回傳&lt;br&gt;None，一路帶進下游的格式字串，而每一次失敗都被&lt;br&gt;safe_call 吞掉。使用者看到的是一則看起來合理的&lt;br&gt;Google 通用建議，沒有任何東西表現得像壞掉。&lt;br&gt;&lt;br&gt;修法不是把地理編碼的錯誤處理寫好，而是在這個前提&lt;br&gt;真正成為必要條件的位置明確檢查、並在那裡大聲失敗。&lt;br&gt;記於 docs/known-issues.md A-1。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fbfbf5;strokeColor=#b8b39a;fontSize=10;size=12;align=left;verticalAlign=top;spacingLeft=4;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="870" y="500" width="380" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="c41" value="&lt;b&gt;「最短時間」為什麼要打三支而不是一支&lt;/b&gt;&lt;br&gt;&lt;br&gt;不限交通方式的 Google 路線查詢，回傳的是 Google 自己&lt;br&gt;認為最好的那一組行程，並不會告訴你「堅持搭公車」要多&lt;br&gt;久、「堅持搭捷運」要多久——其他模式根本不在回應裡。&lt;br&gt;&lt;br&gt;要比較模式，就得用不同的 allowed_travel_modes 把同一個&lt;br&gt;問題問三次。回傳 Google 的預設再標成「最短」會是一支&lt;br&gt;呼叫，而且是錯的。&lt;br&gt;&lt;br&gt;三支並行送出，所以誠實的版本與偷懶的版本牆鐘時間相同，&lt;br&gt;約 4.2 秒而非 12.6 秒。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fbfbf5;strokeColor=#b8b39a;fontSize=10;size=12;align=left;verticalAlign=top;spacingLeft=4;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="870" y="800" width="380" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="c42" value="&lt;b&gt;降級：各分支收到 None 時代表什麼&lt;/b&gt;&lt;br&gt;&lt;br&gt;safe_call 會攔下 TimeoutError 與所有例外，印一行後回傳 None，&lt;br&gt;不往上拋。因此「拿不到答案」的意義由各呼叫端各自決定：&lt;br&gt;&lt;br&gt;&lt;b&gt;天氣 → None&lt;/b&gt;　代入 { 緩衝 0, 天氣「未知」}。&lt;br&gt;　下雨天的建議會比應有的更趕。&lt;font color='#b23b3b'&gt;降級方向偏向樂觀，是錯的方向。&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;b&gt;模式選擇 → None&lt;/b&gt;　代入 { mode: google_transit, source: auto }。&lt;br&gt;&lt;br&gt;&lt;b&gt;Google 路線 → None&lt;/b&gt;　沒有路段也沒有時長，&lt;br&gt;　路線時間退回常數 DEFAULT_COMMUTE_MINUTES。使用者不會被告知&lt;br&gt;　這個估計值是預設值。&lt;br&gt;&lt;br&gt;&lt;b&gt;TDX 公車／捷運快照 → None&lt;/b&gt;　該選項不會被建立，auto 靜默落到&lt;br&gt;　下一順位。與「這裡本來就沒有公車路線」無法區分。&lt;br&gt;&lt;br&gt;&lt;b&gt;地理編碼 → None&lt;/b&gt;　在步驟三被攔下並顯示。&lt;br&gt;　&lt;font color='#2f6096'&gt;五條路徑中唯一會產生可見錯誤，而不是一個較安靜答案的分支。&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color='#b23b3b'&gt;&lt;b&gt;值得命名的模式。&lt;/b&gt;五條降級路徑有四條會產出一個看起來合理、&lt;br&gt;但建立在缺失資料上的答案。系統不會倒，使用者也看不出來。&lt;br&gt;每次呼叫都寫進 api_health_logs，所以失敗在資料裡是看得見的——&lt;br&gt;只是目前沒有任何東西在回應當下讀那些列來標註答案。&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fbfbf5;strokeColor=#b8b39a;fontSize=10;size=12;align=left;verticalAlign=top;spacingLeft=4;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="870" y="1010" width="460" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="c43" value="來源：backend/app/service.py、weather.py @ e10e6d9（已逐項比對程式碼）" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#888888;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1380" width="900" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
