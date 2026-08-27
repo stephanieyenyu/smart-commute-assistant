@@ -1,0 +1,258 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Component Diagram" id="Component Diagram">
+    <mxGraphModel dx="1675" dy="772" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1560" pageHeight="1420" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="c1" value="Component Diagram — Smart Commute Assistant　元件圖" style="text;html=1;align=left;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="800" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" value="球＋插槽＝介面：球端提供，插槽端需要。介面名稱標於符號旁。　灰色虛線框＝程式碼中存在但未佈署。" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="52" width="1000" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;LINE 使用者端&lt;br&gt;文字指令 · Quick Reply" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="60" y="150" width="200" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="c4" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;LINE Platform&lt;br&gt;Messaging API v3 · LIFF · Webhook" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="60" y="268" width="200" height="76" as="geometry" />
+        </mxCell>
+        <mxCell id="c5" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;看板瀏覽器&lt;br&gt;WebSocket · 語音提示" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="60" y="398" width="200" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="c6" value="smart-commute-assistant　單一 uvicorn 行程" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fbfcfe;strokeColor=#2f6096;strokeWidth=2;verticalAlign=top;align=left;spacingLeft=16;spacingTop=10;fontSize=15;fontStyle=1;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="300" y="110" width="620" height="620" as="geometry" />
+        </mxCell>
+        <mxCell id="c7" value="&lt;b&gt;«component»　介面層&lt;/b&gt;&lt;br&gt;webhook.py（驗簽 · 25 個文字指令 · 3 個 postback）&lt;br&gt;liff_routes.py · dashboard_ws.py · family.py&lt;br&gt;main.py（37 條路由）· 看板靜態檔" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="340" y="168" width="540" height="88" as="geometry" />
+        </mxCell>
+        <mxCell id="c8" value="&lt;b&gt;«component»　決策核心&lt;/b&gt;&lt;br&gt;service.py&lt;br&gt;_compute_today_plan&lt;br&gt;choose_commute_option_with_override&lt;br&gt;calculate_departure_time_by_mode_fast" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="340" y="300" width="300" height="112" as="geometry" />
+        </mxCell>
+        <mxCell id="c9" value="&lt;b&gt;«component»　排程器&lt;/b&gt;&lt;br&gt;reminder_scheduler.py&lt;br&gt;reminder_timing.py&lt;br&gt;APScheduler · Asia/Taipei&lt;br&gt;30 秒 tick · 21:00 cron" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="680" y="300" width="200" height="112" as="geometry" />
+        </mxCell>
+        <mxCell id="c10" value="&lt;b&gt;«component»　對外通訊&lt;/b&gt;&lt;br&gt;maps_client.py · tdx_bus.py&lt;br&gt;metro_basic.py · weather.py&lt;br&gt;全部經 safe_call(timeout)" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="340" y="470" width="300" height="88" as="geometry" />
+        </mxCell>
+        <mxCell id="c11" value="&lt;b&gt;«component»　觀測&lt;/b&gt;&lt;br&gt;integrations/&lt;br&gt;api_health.py&lt;br&gt;&lt;font color='#2f6096'&gt;對外呼叫的唯一紀錄點&lt;/font&gt;" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="680" y="470" width="200" height="88" as="geometry" />
+        </mxCell>
+        <mxCell id="c12" value="&lt;b&gt;«component»　資料存取&lt;/b&gt;　models.py · db.py · crud.py · schema_guard.py" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="340" y="610" width="540" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="c13" value="PostgreSQL（Render）&lt;br&gt;10 張表 · 15 個 Alembic 版本" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#ffffff;strokeColor=#666666;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="480" y="790" width="260" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="c14" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;Google Routes API&lt;br&gt;google.routes.transit · walk" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="150" width="280" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="c15" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;Google Geocoding API&lt;br&gt;google.geocode" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="240" width="280" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="c16" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;TDX 公車&lt;br&gt;tdx.bus.auth" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="322" width="280" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="c17" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;TDX 捷運&lt;br&gt;tdx.metro.auth" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="404" width="280" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="c18" value="&lt;b&gt;«external»&lt;/b&gt;&lt;br&gt;中央氣象署 CWA&lt;br&gt;cwa.weather.city" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#efefef;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="486" width="280" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="c19" value="&lt;b&gt;«component»　未佈署&lt;/b&gt;&lt;br&gt;celery_app.py · tasks.py&lt;br&gt;redis_cache.py&lt;br&gt;render.yaml 未宣告 worker 與 Redis 服務&lt;br&gt;REDIS_URL 落回 localhost，實際走行程內快取" style="shape=module;jettyWidth=10;jettyHeight=5;whiteSpace=wrap;html=1;fillColor=#f7f7f7;strokeColor=#bbbbbb;dashed=1;fontSize=11;align=left;verticalAlign=top;spacingLeft=18;spacingTop=6;fontColor=#888888;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="590" width="280" height="88" as="geometry" />
+        </mxCell>
+        <mxCell id="c20" value="&lt;b&gt;IWebhook&lt;/b&gt;　POST /webhooks/line 驗簽" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="264" y="256" width="240" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c21" value="&lt;b&gt;ILinePush&lt;/b&gt;　推播 · Quick Reply" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="100" y="356" width="220" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c22" value="&lt;b&gt;IDashboardWS&lt;/b&gt;　狀態廣播" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="264" y="386" width="200" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c23" value="&lt;b&gt;IPlan&lt;/b&gt;　凍結今日計畫" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="646" y="288" width="160" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c24" value="&lt;b&gt;IProvider&lt;/b&gt;　路線 · 公車 · 捷運 · 天氣" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="646" y="458" width="240" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c25" value="&lt;b&gt;IRepository&lt;/b&gt;　SQLAlchemy Session" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#2f6096;" vertex="1" parent="1">
+          <mxGeometry x="600" y="686" width="240" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="c26" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c3" target="c4">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c27" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c4" target="c7">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c28" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c5" target="c7">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c29" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c7" target="c8">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c30" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c9" target="c8">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c31" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c9" target="c7">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c32" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c8" target="c10">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c33" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c8" target="c12">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="330" y="356" />
+              <mxPoint x="330" y="635" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c34" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c10" target="c11">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c35" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c11" target="c12">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="780" y="584" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c36" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#2f6096;strokeWidth=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="c12" target="c13">
+          <mxGeometry relative="1" as="geometry">
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c37" value="並行送出" style="endArrow=open;endSize=8;html=1;rounded=0;strokeColor=#999999;dashed=1;edgeStyle=orthogonalEdgeStyle;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="c10" target="c14">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="950" y="514" />
+              <mxPoint x="950" y="182" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c38" value="" style="endArrow=open;endSize=8;html=1;rounded=0;strokeColor=#999999;dashed=1;edgeStyle=orthogonalEdgeStyle;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="c10" target="c15">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="960" y="514" />
+              <mxPoint x="960" y="268" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c39" value="" style="endArrow=open;endSize=8;html=1;rounded=0;strokeColor=#999999;dashed=1;edgeStyle=orthogonalEdgeStyle;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="c10" target="c16">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="970" y="514" />
+              <mxPoint x="970" y="350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c40" value="" style="endArrow=open;endSize=8;html=1;rounded=0;strokeColor=#999999;dashed=1;edgeStyle=orthogonalEdgeStyle;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="c10" target="c17">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="940" y="514" />
+              <mxPoint x="940" y="432" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c41" value="" style="endArrow=open;endSize=8;html=1;rounded=0;strokeColor=#999999;dashed=1;edgeStyle=orthogonalEdgeStyle;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="c10" target="c18">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="930" y="514" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c42" value="每次呼叫寫一列" style="endArrow=open;endSize=8;html=1;rounded=0;strokeColor=#999999;dashed=1;edgeStyle=orthogonalEdgeStyle;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="c11" target="c13">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="900" y="514" />
+              <mxPoint x="900" y="822" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c43" value="&lt;b&gt;圖例&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;b&gt;«component»&lt;/b&gt;　元件（模組圖示）&lt;br&gt;實線　組裝連接器&lt;br&gt;灰虛線　依賴（外部呼叫）&lt;br&gt;灰虛線框　程式碼中存在但未佈署&lt;br&gt;&lt;br&gt;來源檔名標於元件內。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fbfbf5;strokeColor=#b8b39a;fontSize=10;size=12;align=left;verticalAlign=top;spacingLeft=4;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="60" y="490" width="200" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="c44" value="&lt;b&gt;兩個設計選擇&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;b&gt;對外呼叫只有一個紀錄點。&lt;/b&gt;&lt;br&gt;四個供應商的呼叫全部經過&lt;br&gt;log_api_health（6 個端點標籤 ·&lt;br&gt;23 個呼叫點），因此每次失敗都&lt;br&gt;留下一列。docs/metrics.md 的&lt;br&gt;數字由這些列推導，而非讀應用&lt;br&gt;程式日誌。&lt;br&gt;&lt;br&gt;&lt;b&gt;排程器與 web 同一行程。&lt;/b&gt;&lt;br&gt;沒有鎖也沒有領導者選舉，第二&lt;br&gt;個 Render 實例會讓每則提醒送&lt;br&gt;兩次。現階段接受，不是已解決。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fbfbf5;strokeColor=#b8b39a;fontSize=10;size=12;align=left;verticalAlign=top;spacingLeft=4;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="60" y="660" width="200" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="c45" value="元件與檔案對照" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="970" width="400" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="c46" value="&lt;b&gt;元件&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1004" width="190" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="c47" value="&lt;b&gt;職責&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1004" width="300" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="c48" value="&lt;b&gt;對應程式碼&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1004" width="960" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="c49" value="介面層" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1036" width="190" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c50" value="webhook 驗簽、指令分派、LIFF、WebSocket" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1036" width="300" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c51" value="webhook.py（COMMAND_ALIASES 25 鍵）、liff_routes.py、dashboard_ws.py、family.py、main.py" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1036" width="960" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c52" value="決策核心" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1068" width="190" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c53" value="排程解析 → 座標守衛 → 並行查詢 → 模式選擇 → 出發時間" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1068" width="300" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c54" value="service.py — _compute_today_plan、choose_commute_option_with_override、calculate_departure_time_by_mode_fast" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1068" width="960" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c55" value="排程器" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1100" width="190" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c56" value="30 秒 tick 推進三階段提醒；21:00 每日簡報" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1100" width="300" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c57" value="reminder_scheduler.py（2 個 job）、reminder_timing.py（WAIT／SEND／SKIP_STALE／ALREADY_SENT）" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1100" width="960" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c58" value="對外通訊" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1132" width="190" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c59" value="四個供應商客戶端，逐一設逾時" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1132" width="300" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c60" value="maps_client.py、tdx_bus.py、metro_basic.py、weather.py；全部包在 service.safe_call(timeout)" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1132" width="960" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c61" value="觀測" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1164" width="190" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c62" value="對外呼叫的延遲、狀態碼、錯誤訊息" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1164" width="300" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c63" value="integrations/api_health.py — log_api_health()；6 個端點標籤、23 個呼叫點" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1164" width="960" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c64" value="資料存取" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1196" width="190" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c65" value="ORM、連線、啟動時結構檢查" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1196" width="300" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c66" value="models.py（10 張表）、db.py、crud.py、schema_guard.py（ensure_runtime_schema，與 Alembic 職責重疊）" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1196" width="960" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c67" value="來源：backend/app/ @ e10e6d9（已逐項比對程式碼）　·　README 舊版描述的 api/ core/ models/ schemas/ services/ worker/ 六層目錄並不存在，實際為平鋪結構" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#888888;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1242" width="1200" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

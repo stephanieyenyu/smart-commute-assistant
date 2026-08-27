@@ -1,23 +1,34 @@
 name: Keep Render service awake
 
+# Render's free tier spins a service down after ~15 minutes idle, and a cold
+# start delays the first request enough to miss a reminder trigger window.
+# Pinging every 10 minutes leaves margin: GitHub's scheduler is best-effort and
+# can run several minutes late at peak times.
+#
+# Set the target once, in Settings > Secrets and variables > Actions > Variables:
+#   RENDER_SERVICE_URL = https://<your-service>.onrender.com
+# If it is unset the job exits successfully rather than failing, so a fork or a
+# fresh clone does not show a red Actions tab.
+
 on:
   schedule:
-    # 每 10 分鐘打一次。Render 免費方案通常閒置 15 分鐘會 spin down，
-    # 10 分鐘的間隔留了緩衝，避免剛好卡在邊界上沒打到。
-    # 注意：GitHub Actions 的 schedule 是「盡力而為」，尖峰時段可能會延遲幾分鐘，
-    # 不是絕對精準的 cron，但拿來防止 spin down 已經足夠。
     - cron: "*/10 * * * *"
-  workflow_dispatch: {}   # 允許在 GitHub 網頁上手動觸發，方便測試
+  workflow_dispatch: {}
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
       - name: Ping health endpoint
+        env:
+          SERVICE_URL: ${{ vars.RENDER_SERVICE_URL }}
         run: |
           set -e
-          URL="https://YOUR-RENDER-SERVICE.onrender.com/health"
-          echo "Pinging $URL"
-          # -f 讓非 2xx 回應視為失敗，這樣 workflow 會標紅，妳才會注意到服務掛了
-          # --max-time 30 避免 Render 冷啟動時卡住整個 job 太久
-          curl -f --max-time 30 "$URL"
+          if [ -z "$SERVICE_URL" ]; then
+            echo "RENDER_SERVICE_URL is not set; skipping."
+            exit 0
+          fi
+          echo "Pinging ${SERVICE_URL}/health"
+          # -f treats a non-2xx response as failure so the run goes red when the
+          # service is actually down. --max-time bounds a cold start.
+          curl -f --max-time 30 "${SERVICE_URL}/health"
