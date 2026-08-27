@@ -44,7 +44,9 @@ except ImportError:
     print("pip install sqlalchemy pg8000", file=sys.stderr)
     raise SystemExit(1)
 
-OUT_DIR = Path(__file__).resolve().parent / "data"
+# Repo root is one level up from scripts/, so data/ lands beside docs/.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+OUT_DIR = REPO_ROOT / "data"
 
 # --------------------------------------------------------------------------
 # Scrub policy.
@@ -90,6 +92,24 @@ def pseudonymise(column: str, value: object) -> object:
         seen = sum(1 for k in _pseudo_map if k[0] == column)
         _pseudo_map[key] = f"{prefix}_{seen + 1}"
     return _pseudo_map[key]
+
+
+def normalise(url: str) -> str:
+    """Render hands out postgres://; SQLAlchemy needs a driver in the scheme."""
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://"):
+        for driver in ("psycopg2", "pg8000"):
+            try:
+                __import__(driver)
+                return url.replace("postgresql://", f"postgresql+{driver}://", 1)
+            except ImportError:
+                continue
+        print("No PostgreSQL driver found.\n"
+              "  pip install psycopg2-binary   (or, if it will not compile:  pip install pg8000)",
+              file=sys.stderr)
+        raise SystemExit(1)
+    return url
 
 
 def json_safe(value: object) -> object:
@@ -182,7 +202,16 @@ def main() -> int:
         return 1
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(url)
+    engine = create_engine(normalise(url))
+
+    try:
+        with engine.connect() as c:
+            c.execute(text("SELECT 1"))
+    except Exception as exc:                                    # noqa: BLE001
+        print(f"Cannot connect: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("Check DATABASE_URL is the *External* URL from Render.", file=sys.stderr)
+        return 1
+
     snapshot = datetime.now().isoformat(timespec="seconds")
 
     print(f"Snapshot {snapshot}")
@@ -203,11 +232,13 @@ def main() -> int:
         "tables": {},
     }
 
+    failed = False
     for table, filename in targets.items():
         try:
             rows = export_table(engine, table)
         except Exception as exc:  # noqa: BLE001
-            print(f"  {table:<22} SKIPPED — {exc}")
+            print(f"  {table:<22} FAILED — {type(exc).__name__}: {exc}")
+            failed = True
             continue
         path = OUT_DIR / filename
         path.write_text(
@@ -226,6 +257,9 @@ def main() -> int:
     )
 
     print()
+    if failed or not manifest["tables"]:
+        print("NO TABLES EXPORTED. Nothing usable was written.", file=sys.stderr)
+        return 1
     print(f"Written to {OUT_DIR}")
     print()
     print("Before committing:")
