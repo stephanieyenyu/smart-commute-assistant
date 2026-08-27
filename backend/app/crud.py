@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
 from app.models import (
+    ApiHealthLog,
     User,
     Household,
     CommuteProfile,
@@ -975,3 +976,35 @@ def undelete_destination(db: Session, user_id: int, destination_id: int):
            db.commit()
            db.refresh(dest)
        return dest
+
+
+# ─────────────────────────────────────────────────────────
+# 外部 API 觀測
+# ─────────────────────────────────────────────────────────
+
+def record_api_health_log(
+    db: Session,
+    endpoint: str,
+    timestamp: datetime,
+    latency_ms: int | None = None,
+    status_code: int | None = None,
+    error_message: str | None = None,
+) -> ApiHealthLog:
+    """Persist one outbound provider call.
+
+    Called by app.integrations.api_health._persist_api_health_log on its own
+    short-lived Session, so it commits rather than leaving the row pending.
+    The error_message column is a plain String; long provider tracebacks are
+    truncated here rather than at the call site.
+    """
+    row = ApiHealthLog(
+        endpoint=endpoint,
+        timestamp=timestamp,
+        latency_ms=latency_ms,
+        status_code=status_code,
+        error_message=(error_message[:500] if error_message else None),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row

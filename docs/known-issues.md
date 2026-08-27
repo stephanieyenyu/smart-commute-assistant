@@ -5,14 +5,16 @@ still unconfirmed. Nothing is quietly deleted once resolved — the classificati
 the document.
 
 **Verified against source** @ `80ee635`
-**Verified against database** `PENDING` — B-class entries stay open until
-`scripts/collect_metrics.sql` is run
+**Verified against database** 2026-08-27 — one user, one profile, one override, zero of everything
+else. Row counts too small for the B-class checks to be conclusive, so they stay open.
 
 | # | Issue | Class | Disposition |
 |---|---|---|---|
 | A-1 | Geocoding returned NULL coordinates and every failure was swallowed | Resolved defect | Fixed, guard added |
 | A-2 | Compressed timing constants fire all three stages on one tick | Not a defect | Documented constraint |
-| B-1 | `commute_logs` outcome fill rate unknown | Unverified | Open |
+| A-6 | `api_health_logs` was never written to | Resolved defect | **Fixed** — crud function added |
+| C-9 | `commute_logs` has no producer | Defect | Not implemented |
+| B-1 | `commute_logs` outcome fill rate unknown | Unverified | **Closed** — superseded by C-9 |
 | B-2 | Duplicate `commute_overrides` and `commute_logs` rows | Unverified | Open |
 | B-3 | `created_at` and `date` may disagree near midnight | Unverified | Open |
 | C-1 | The dashboard router is never mounted | Defect | **Fixed** — router now included |
@@ -97,20 +99,87 @@ Documented in the demo storyboard.
 
 ---
 
+### A-6　`api_health_logs` was never written to
+
+**Symptom.** The table was empty. Not sparse — zero rows, against a deployment that had been
+running for months and making provider calls on every plan.
+
+**Cause.** `app/integrations/api_health.py` persists through
+`from app.crud import record_api_health_log`. **That function did not exist in `crud.py`.** The
+import raised `ImportError` on every call, which was caught by a bare `except Exception` and
+printed as `[api-health] persist skipped`. The provider call itself succeeded, so nothing
+downstream noticed.
+
+**Why it stayed hidden for so long.** The failure notice went to `print()`. On Render's free tier
+the process spins down and stdout does not survive the restart, so the message was gone within
+hours of each occurrence — which is the exact failure mode this table was introduced to eliminate.
+The bare `except` swallowed the repair itself.
+
+**Fix.** `record_api_health_log()` added to `crud.py`, with `ApiHealthLog` imported at module level
+and a 500-character truncation on `error_message`. `ImportError` is now re-raised as a
+`RuntimeError` rather than caught: a missing crud function is a wiring defect and should stop the
+process, not print a line. Database errors are still caught, because a logging failure must not
+break the provider call that triggered it.
+
+**Assessment.** The general lesson is the same as A-1 and it was not learned the first time. A bare
+`except Exception` around a persistence path converts a permanent structural defect into a
+recoverable-looking runtime condition. The two cases differ only in what got swallowed.
+
+**Consequence for the record.** Rows accumulate from the deploy that carries this fix onward. There
+is no history to recover, and every provider-reliability figure in
+[`metrics.md`](metrics.md) therefore has an observation window that starts at that deploy rather
+than at first use.
+
+---
+
+### C-9　`commute_logs` has no producer
+
+> **Not implemented.** Recorded because the schema is presented as a deliberate artifact, and a
+> reader should be able to find out from the documentation that nothing writes it.
+
+**Finding.** `CommuteLog` appears exactly twice outside `models.py`: an import in `crud.py` and a
+`.delete()` in `reset_profile_for_reconfigure()`. Across 61 crud functions there is no constructor,
+no `db.add(CommuteLog(...))`, and no raw insert anywhere in `backend/`.
+
+The table can only ever be empty. It is a schema definition with a delete path and no write path.
+
+**What is still true.** The column layout is deliberate and is the substantive design claim:
+features at decision time, the action chosen, the outcome. `_compute_today_plan()` already computes
+every feature, and `mark_departed_for_today()` already receives the outcome signal. The two halves
+exist and are not joined.
+
+**What is not true.** Any statement that the system records its decisions. It computes them and
+discards them.
+
+**Fix, if adopted.** Two write points. Insert a row at the end of `_compute_today_plan()` carrying
+the features and the action, keyed on `(user_id, date)`. Update that row in
+`mark_departed_for_today()` with `actual_departure_time`, and again if an arrival is ever
+confirmed. The awkward part is not the insert — it is that `is_late` has no producer either, since
+nothing asks the user whether they arrived on time.
+
+**Severity.** High as a documentation matter, low as a runtime one. Nothing malfunctions. But the
+dataset the project describes does not exist, and that had to be found by querying the database
+rather than by reading the code.
+
+---
+
 ## B. Unverified
 
 ### B-1　`commute_logs` outcome fill rate unknown
 
-**Observation.** `actual_departure_time`, `actual_arrival_time` and `is_late` are written only when
-the user taps 「已出門」 and completes the follow-up. What fraction of rows carry them has not been
-measured.
+> **Closed, superseded by [C-9](#c-9commute_logs-has-no-producer).** The question assumed rows
+> exist. They do not, and cannot: the table has no producer. Kept because the reasoning below is
+> what the figure would have to be read against once C-9 is implemented.
+
+**Observation.** `actual_departure_time`, `actual_arrival_time` and `is_late` would be written only
+when the user taps 「已出門」 and completes a follow-up that does not exist.
 
 **Why it matters.** It decides whether the README carries an Evaluation section or an Evaluation
 Protocol section. A low fill rate does not mean a small dataset — it means a biased one, because
 the mornings least likely to be recorded are the rushed ones, which is the class the label is
 about.
 
-**Check.** `scripts/collect_metrics.sql` Q2.
+**Check.** `scripts/run_metrics.py` Q2. Ran 2026-08-27: 0 rows, all columns.
 
 **Impact.** Gates every outcome-derived figure in [`metrics.md`](metrics.md).
 
@@ -123,7 +192,8 @@ about.
 applies to `(user_id, date)` on `commute_logs`.
 
 **Hypothesis.** The single-process deployment means concurrent creation is unlikely, so duplicates
-probably do not exist. This has not been checked.
+probably do not exist. Checked 2026-08-27: zero duplicate groups — against one override row and zero
+log rows, which is too little data for the result to mean anything.
 
 **Check.**
 ```sql

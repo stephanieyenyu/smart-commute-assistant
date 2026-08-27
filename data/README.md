@@ -2,7 +2,7 @@ Scrubbed exports backing docs/metrics.md.
 
 Produce with:
 
-    export DATABASE_URL="postgresql+psycopg2://..."
+    set DATABASE_URL=<External Database URL from Render>
     python scripts/export_data_scrubbed.py
     python scripts/export_data_scrubbed.py --verify
 

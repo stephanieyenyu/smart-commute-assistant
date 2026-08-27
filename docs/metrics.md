@@ -1,15 +1,16 @@
 # Metrics
 
-Every figure quoted in the README is derived here, with the query or command that produced it, so
-it can be checked rather than accepted. Figures that have not been collected yet are marked
-`PENDING` alongside the query that will fill them; none of them is estimated or carried over from
-elsewhere.
+Every figure quoted in the README is derived here, with the query or command that produced it, so it
+can be checked rather than accepted.
 
-**Snapshot date** `PENDING` — set when `scripts/collect_metrics.sql` is first run against production
-**Observation window** `PENDING`
-**Raw export** `PENDING` — [`data/commute_logs.json`](../data/commute_logs.json) and
-[`data/api_health_logs.json`](../data/api_health_logs.json), produced by
-`scripts/export_data_scrubbed.py` with home addresses, coordinates and LINE User IDs removed
+**The database figures are all zero, and the zeroes are the finding.** Both tables this project
+treats as evidence were structurally unwritable. Nothing below is estimated, and nothing absent is
+presented as merely uncollected.
+
+**Snapshot date** 2026-08-27
+**Observation window** none yet — see below
+**Raw export** not produced. `scripts/export_data_scrubbed.py` runs and writes empty arrays,
+so nothing is committed under `data/`.
 
 The deployment is a single user — me — on one origin–destination pair in Taipei. Nothing in this
 document generalises beyond that, and the [Interpretation](#interpretation) section says so per
@@ -19,12 +20,26 @@ figure rather than once at the end.
 
 ## Sources
 
-| Table | Rows | What it holds |
+Measured 2026-08-27 against the production instance.
+
+| Table | Rows | Note |
 |---|---|---|
-| `commute_logs` | `PENDING` | One row per commute: features at decision time, the action chosen, the outcome |
-| `api_health_logs` | `PENDING` | Append-only record of every outbound provider call |
-| `commute_overrides` | `PENDING` | Per-day state, including the five delivery guard timestamps |
-| `commute_schedules` | `PENDING` | Recurring commutes |
+| `commute_logs` | **0** | No producer exists — [C-9](known-issues.md#c-9commute_logs-has-no-producer) |
+| `api_health_logs` | **0** | Persistence was broken until 2026-08-27 — [A-6](known-issues.md#a-6api_health_logs-was-never-written-to) |
+| `commute_overrides` | 1 | |
+| `commute_profiles` | 1 | |
+| `users` | 1 | |
+| `commute_schedules` | 0 | |
+| `households`, `family_groups`, `family_members`, `commute_destinations` | 0 | |
+
+**Both zeroes are structural, not empty-database artifacts.** `commute_logs` is never constructed
+anywhere in `backend/`. `api_health_logs` was written through a crud function that did not exist,
+and the resulting `ImportError` was caught by a bare `except` and printed to stdout, which does not
+survive a Render restart. The second is fixed; the first is not implemented.
+
+Everything below is therefore a protocol rather than a result. The queries are written and correct;
+they have been run and returned zero. **No figure in this document is estimated, and none is
+presented as measured when it is not.**
 
 ```sql
 SELECT 'commute_logs' AS t, COUNT(*) FROM commute_logs
@@ -74,9 +89,12 @@ tick. Counting them as three jobs would be wrong.
 
 ## Dataset fill rate
 
-**This is the first figure to read, and it gates everything below it.** Row count is not the
-relevant number: a `commute_logs` row exists for every commute the engine planned, but the outcome
-columns are only populated when the user tapped 「已出門」.
+**Not applicable.** This section assumed a `commute_logs` row per planned commute with the outcome
+columns populated on confirmation. Neither half exists: the table has no producer, and `is_late` has
+no producer even if it did, since nothing asks the user whether they arrived on time.
+
+The query is kept because it is the first thing to run once C-9 is implemented, and because the
+reasoning below is what the figure would have to be read against.
 
 ```sql
 SELECT
@@ -88,26 +106,21 @@ SELECT
 FROM commute_logs;
 ```
 
-| Column | Populated | Share |
-|---|---|---|
-| `suggested_departure_time` | `PENDING` | |
-| `suggested_transport` | `PENDING` | |
-| `actual_departure_time` | `PENDING` | |
-| `actual_transport` | `PENDING` | |
-| `actual_arrival_time` | `PENDING` | |
-| `is_late` | `PENDING` | |
+All columns: 0 of 0 rows.
 
-**What a low fill rate would mean.** Not that the dataset is small — that it is *biased*. A missing
-row is a morning the user did not tap, and the mornings most likely to go unrecorded are the
-rushed ones. The label is missing-not-at-random with respect to the thing being labelled. A model
-trained on the populated rows would be trained on the calm mornings.
+**What a low fill rate would mean, once there is one.** Not that the dataset is small — that it is
+*biased*. A missing row would be a morning the user did not tap, and the mornings least likely to be
+recorded are the rushed ones. The label would be missing-not-at-random with respect to the thing
+being labelled: a model trained on the populated rows would be trained on the calm mornings.
 
 ---
 
 ## External provider reliability
 
-The measurement that this project can actually make. Derived entirely from `api_health_logs`,
-which exists because every outbound call is routed through one function.
+The measurement this project is built to make, and the one it did not make. Every outbound call is
+routed through `log_api_health()`, but until 2026-08-27 that function's persistence path raised
+`ImportError` on every invocation and the exception was swallowed. **Rows accumulate from that deploy
+onward; there is no earlier history to recover.**
 
 ```sql
 SELECT endpoint,
@@ -123,12 +136,10 @@ FROM api_health_logs GROUP BY endpoint ORDER BY calls DESC;
 
 | Endpoint | Calls | Failures | Failure % | p50 ms | p95 ms |
 |---|---|---|---|---|---|
-| `google.routes.transit` | `PENDING` | | | | |
-| `google.routes.walk` | `PENDING` | | | | |
-| `google.geocode` | `PENDING` | | | | |
-| `tdx.bus.auth` | `PENDING` | | | | |
-| `tdx.metro.auth` | `PENDING` | | | | |
-| `cwa.weather.city` | `PENDING` | | | | |
+| all six | 0 | — | — | — | — |
+
+Re-run once the table has accumulated. The six endpoint labels are listed in
+[`database.md`](database.md#api_health_logs).
 
 ### The failure rate will be an upper bound
 
@@ -152,10 +163,11 @@ SELECT DATE(timestamp) AS day, COUNT(*) AS calls,
 FROM api_health_logs GROUP BY 1 ORDER BY 1;
 ```
 
-`PENDING`. Reported per day with a denominator, because a failure count without a call count is
-not interpretable — and because the geocoding outage in
+No data. Reported per day with a denominator once there is any, because a failure count without a
+call count is not interpretable — and because the geocoding outage in
 [`known-issues.md` A-1](known-issues.md#a-1geocoding-returned-null-coordinates-and-every-failure-was-swallowed)
-is expected to show as a contiguous block rather than as background noise.
+would have shown as a contiguous block rather than as background noise. It predates the fix, so it
+will not appear.
 
 ---
 
@@ -172,15 +184,12 @@ FROM commute_logs
 WHERE suggested_transport IS NOT NULL AND actual_transport IS NOT NULL;
 ```
 
-| Figure | Value |
-|---|---|
-| Comparable rows | `PENDING` |
-| Agreement | `PENDING` |
+Not computable: 0 rows.
 
 **A high agreement rate would be close to meaningless here.** The user and the author are the same
-person, and `actual_transport` is self-reported after seeing the suggestion. Anchoring alone would
-produce agreement. It is reported because omitting it would be worse, not because it demonstrates
-anything.
+person, and `actual_transport` would be self-reported after seeing the suggestion. Anchoring alone
+would produce agreement. The query is kept for when C-9 is implemented, with that caveat attached in
+advance.
 
 ---
 
@@ -199,12 +208,7 @@ SELECT COUNT(*), ROUND(AVG(delta_min)::numeric, 1),
 FROM parsed;
 ```
 
-| Figure | Value |
-|---|---|
-| Rows parsed | `PENDING` |
-| Mean delta | `PENDING` |
-| Median delta | `PENDING` |
-| Rows excluded by the regex guard | `PENDING` |
+Not computable: 0 rows.
 
 The regex guard is necessary because these columns are `VARCHAR`, not `TIME`
 ([`database.md`](database.md#conventions-that-apply-throughout)). **Excluded rows are reported
@@ -239,27 +243,39 @@ between what the system claims and what it demonstrates.
 Only provider latency is recorded. End-to-end response time — webhook received to LINE reply sent
 — is not instrumented anywhere, so no such figure appears in this project.
 
-### Duplicate rows are not yet ruled out
+### Duplicate rows
 
 `(user_id, schedule_id, target_date)` on `commute_overrides` is not declared unique; uniqueness is
-enforced by `get_or_create_override()` in application code only. Whether duplicates exist is
-checked by query Q13 and recorded as
-[`known-issues.md` B-2](known-issues.md#b-2duplicate-commute_overrides-and-commute_logs-rows).
-Any per-day aggregate below is provisional until that returns empty.
+enforced by `get_or_create_override()` in application code only. Q13 returned zero duplicate groups
+on 2026-08-27, against one override row — which is too few rows for the check to mean anything yet.
+[`known-issues.md` B-2](known-issues.md#b-2duplicate-commute_overrides-and-commute_logs-rows)
+stays open.
+
+### The two empty tables are the headline result
+
+A reader looking for numbers here will find none, and the reason is worth more than the numbers
+would have been. Both of this project's evidence tables were unwritable, one because a crud function
+was missing and the `ImportError` was swallowed by a bare `except`, the other because no producer was
+ever written. Neither failed loudly. Both were found by querying the database rather than by reading
+the code — which is exactly the class of defect
+[`known-issues.md` A-1](known-issues.md#a-1geocoding-returned-null-coordinates-and-every-failure-was-swallowed)
+describes, arrived at a second time by the same route.
 
 ---
 
 ## Filling this document
 
 ```bash
-psql "$DATABASE_URL" -f scripts/collect_metrics.sql > metrics_raw.txt
+set DATABASE_URL=<External Database URL from Render>
+python scripts/run_metrics.py > metrics_raw.txt
 python scripts/export_data_scrubbed.py && python scripts/export_data_scrubbed.py --verify
 python scripts/collect_repo_stats.py --markdown
 ```
 
-Replace each `PENDING` with the returned value and set the snapshot date at the top. If a query
-returns too few rows to support a figure, **write that instead of the figure** — a stated absence
-is consistent with the rest of this document in a way that a thin number is not.
+`scripts/run_metrics.py` needs no `psql`; `scripts/collect_metrics.sql` holds the same queries for
+reference. Re-run once `api_health_logs` has accumulated. If a query returns too few rows to support
+a figure, **write that instead of the figure** — a stated absence is consistent with the rest of this
+document in a way that a thin number is not.
 
 ---
 

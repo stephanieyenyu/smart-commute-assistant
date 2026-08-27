@@ -34,10 +34,15 @@ is correct against a database that has already booted the app once. Recorded in
 
 ## `commute_logs`
 
-The decision record, and the reason the schema is shaped the way it is. Every field the engine
-consulted at decision time is stored alongside what it chose and what actually happened, laid out
-as (features, action, outcome). The rule-based engine was always intended to be replaceable by a
-learned policy, and this table is the artifact that makes that possible.
+**Nothing writes to this table.** `CommuteLog` is imported by `crud.py` and used once, in a
+`.delete()`. There is no constructor and no insert anywhere in `backend/`, so the table is empty and
+can only stay empty. It is recorded here as a schema, not as a data source. See
+[`known-issues.md` C-9](known-issues.md#c-9commute_logs-has-no-producer).
+
+The layout is nonetheless the substantive design claim, and it is why the column groups below are
+labelled the way they are: every field the engine consults at decision time, alongside the action it
+chose and the outcome. `_compute_today_plan()` already computes every feature and
+`mark_departed_for_today()` already receives the outcome signal; the two are not joined.
 
 ### Identity
 
@@ -77,17 +82,22 @@ learned policy, and this table is the artifact that makes that possible.
 | `is_late` | BOOLEAN | **The label** |
 | `created_at` | DATETIME | `server_default=func.now()` |
 
-**What this table does not give you.** The outcome fields are self-reported, not observed. A user
-who forgets to tap produces a NULL, not a negative example, so missingness is correlated with the
-behaviour being measured — the days most likely to go unrecorded are exactly the rushed ones.
-`is_late` is a user's own judgement against a target they set themselves. **Fill rate, not row
-count, is the figure that matters**, and it is the first thing [`metrics.md`](metrics.md) reports.
+**What this table would not give you even once written.** The outcome fields are self-reported, not
+observed. A user who forgets to tap would produce a NULL, not a negative example, so missingness
+would correlate with the behaviour being measured — the days least likely to be recorded are the
+rushed ones. `is_late` has no producer at all: nothing in the system asks whether the user arrived
+on time. **Fill rate, not row count, would be the figure that matters.**
 
 ---
 
 ## `api_health_logs`
 
 Every outbound provider call, written by `log_api_health()` at 17 call sites. Append-only.
+
+**Empty until recently, for a structural reason.** `_persist_api_health_log()` imported a crud
+function that did not exist; the `ImportError` was caught by a bare `except` and printed. Rows
+accumulate only from the deploy that fixed it onward, so the observation window starts there rather
+than at first use. See [`known-issues.md` A-6](known-issues.md#a-6api_health_logs-was-never-written-to).
 
 | Column | Type | Constraint | Notes |
 |---|---|---|---|
@@ -107,10 +117,10 @@ Every outbound provider call, written by `log_api_health()` at 17 call sites. Ap
 | `tdx.metro.auth` | `metro_basic.py` |
 | `cwa.weather.city` | `weather.py` |
 
-**No foreign key, deliberately.** The table carries no user reference, so it survives user
-deletion and can be published without de-identification. Every external-reliability figure in
-this project derives from it. Before it existed, provider failures went to `print()` and vanished
-on the next Render restart.
+**No foreign key, deliberately.** The table carries no user reference, so it survives user deletion
+and can be published without de-identification. Every external-reliability figure in this project
+derives from it. Before it existed, provider failures went to `print()` and vanished on the next
+Render restart — and, because of A-6, they continued to do so for months after it existed.
 
 **A failure row and a genuine outage are not the same thing.** A row with `error_message` set
 records that the call as issued did not return usable data. It does not distinguish a provider
