@@ -63,15 +63,19 @@ which also means there was no code review, and that is recorded under
 | **Termination and sleep** | Departure confirmation as the stop signal; sleep/wake poll tiers so the dashboard is not computing when nobody is leaving |
 | **Household handoff** | Members ranked by time-to-departure, recomputed on every poll. Stateless re-derivation rather than a queue with pointers, so a missed transition cannot leave the pointer stranded |
 | **Provider integration** | Four services across six instrumented endpoints — Google Routes, Google Geocoding, TDX bus, TDX metro, CWA weather. Every call time-bounded, concurrent, and recorded |
-| **LINE integration** | Messaging API v3 — webhook signature verification, 25 command keys over 60-odd surface spellings, Quick Reply, Flex Messages, 3 datetime-picker postbacks |
+| **LINE integration** | Messaging API v3 — webhook signature verification, 25 command keys over 60-odd surface spellings, Quick Reply, Flex Messages, 2 datetime-picker postbacks |
 | **LIFF application** | Embedded schedule form with map-based origin and destination selection |
 | **Dashboard** | Kiosk-oriented front end with a WebSocket channel carrying departure alerts and speech synthesis for the voice prompt |
 | **Data model** | 10 tables, 15 Alembic revisions. `commute_logs` laid out as a supervised dataset by construction; `api_health_logs` as an append-only provider record with no user reference |
 | **Deployment** | Render web service and PostgreSQL, single process, scheduler in-process |
 
-187 commits · 59 source files · 13,766 Python LOC · 34 mounted HTTP routes · 3 WebSocket endpoints ·
-25 LINE command keys · 2 scheduled jobs · 6 instrumented provider endpoints · 10 tables ·
-15 migrations · 1,451 lines of tests.
+194 commits · 53 application source files · 12,315 Python LOC · 34 mounted HTTP routes ·
+3 WebSocket endpoints · 25 LINE command keys · 2 scheduled jobs · 6 instrumented provider
+endpoints · 10 tables · 15 migrations · 1,451 lines of tests across 4 files.
+
+Figures count `backend/` only. The four scripts under `scripts/` and `docs/diagrams/` are
+documentation tooling, not part of the system, and are excluded — see
+[`docs/metrics.md`](docs/metrics.md#scale).
 
 Development ran 22 April to 30 July 2026.
 

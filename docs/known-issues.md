@@ -4,7 +4,7 @@ Each entry states whether it was checked against source code or against the data
 still unconfirmed. Nothing is quietly deleted once resolved — the classification is the point of
 the document.
 
-**Verified against source** @ `e10e6d9`
+**Verified against source** @ `80ee635`
 **Verified against database** `PENDING` — B-class entries stay open until
 `scripts/collect_metrics.sql` is run
 
@@ -28,6 +28,7 @@ the document.
 | D-3 | Two parallel grouping mechanisms exist | Documentation | Fix recommended |
 | D-4 | Duplicate route spellings | Documentation | Fix recommended |
 | D-5 | Two dashboard front ends are now both reachable | Documentation | Fix recommended |
+| D-6 | LIFF ID hardcoded in two source files | Configuration | Fix recommended |
 
 ---
 
@@ -488,6 +489,23 @@ the live one once this is done.
 
 ---
 
-**Source** `backend/app/` @ `e10e6d9` — C and D entries verified against source; A-1 and A-2
+### D-6　LIFF ID hardcoded in two source files
+
+`backend/app/webhook.py:55` declares `LIFF_URL = "https://liff.line.me/2009982765-aKb3T2ca"`, and
+`backend/static/schedule_form.html:285` passes the same identifier to `liff.init()`.
+
+**Not a secret.** A LIFF ID appears in the URL every user taps, so publishing it discloses nothing.
+This is a configuration-hygiene issue, not a security one.
+
+**Impact.** Anyone forking this repository points at my LIFF application rather than their own, and
+the value cannot be changed without editing source in two places. `.env.example` documents every
+other externally-supplied identifier.
+
+**Fix.** Read it from an environment variable in `webhook.py`, and pass it into the template from
+the route handler rather than baking it into the HTML. Add `LIFF_ID` to `.env.example`.
+
+---
+
+**Source** `backend/app/` @ `80ee635` — C and D entries verified against source; A-1 and A-2
 verified against source and observed behaviour; B entries await
 [`metrics.md`](metrics.md) collection
