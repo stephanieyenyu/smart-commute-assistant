@@ -14,9 +14,10 @@ to stop**, because a system that polls for a departure that already happened is 
 stops running.
 
 This repository contains a rule-based decision engine, a three-stage reminder scheduler that
-terminates on human confirmation, a shared household dashboard that hands off to the next member
-automatically, and a decision log structured as (features, action, outcome). **It does not contain
-any learning components.**
+terminates on human confirmation, and a shared household dashboard that hands off to the next member
+automatically. **It does not contain any learning components**, and the decision log that was meant
+to make replacing the rules possible is a schema with no producer — see
+[Evaluation Protocol](#evaluation-protocol).
 
 ---
 
@@ -66,7 +67,7 @@ which also means there was no code review, and that is recorded under
 | **LINE integration** | Messaging API v3 — webhook signature verification, 25 command keys over 60-odd surface spellings, Quick Reply, Flex Messages, 2 datetime-picker postbacks |
 | **LIFF application** | Embedded schedule form with map-based origin and destination selection |
 | **Dashboard** | Kiosk-oriented front end with a WebSocket channel carrying departure alerts and speech synthesis for the voice prompt |
-| **Data model** | 10 tables, 15 Alembic revisions. `commute_logs` laid out as a supervised dataset by construction; `api_health_logs` as an append-only provider record with no user reference |
+| **Data model** | 10 tables, 15 Alembic revisions. `commute_logs` laid out as a supervised dataset by construction, though nothing writes to it; `api_health_logs` as an append-only provider record with no user reference |
 | **Deployment** | Render web service and PostgreSQL, single process, scheduler in-process |
 
 194 commits · 53 application source files · 12,315 Python LOC · 34 mounted HTTP routes ·
@@ -107,8 +108,8 @@ from the production PostgreSQL instance and are collected by
 [`scripts/collect_metrics.sql`](scripts/collect_metrics.sql); every derivation appears in
 [`docs/metrics.md`](docs/metrics.md).
 
-**Snapshot** `PENDING` · **Observation window** `PENDING` · **Raw export** [`data/`](data/) —
-`commute_logs` and `api_health_logs`, with home addresses, coordinates and LINE User IDs removed
+**Snapshot** 2026-08-27 · **Observation window** none — both evidence tables were empty when
+measured, for the reasons given below
 
 | Measurement | Value | Nature |
 |---|---|---|
@@ -116,30 +117,35 @@ from the production PostgreSQL instance and are collected by
 | Instrumented provider endpoints | 6 across 17 call sites | Observed |
 | Scheduled jobs | 2 | Observed |
 | Provider calls per plan, `shortest` mode | 5 concurrent | Observed — design parameter |
-| `commute_logs` rows | `PENDING` | Complete table at snapshot |
-| Outcome-column fill rate | `PENDING` | **Observed, biased** — see Threats to Validity |
-| Provider call failure rate | `PENDING` | Property of these accounts over this window, **upper bound** |
-| Provider latency p50 / p95 | `PENDING` | Property of the test environment |
-| Mode agreement, suggested vs actual | `PENDING` | **Observed, confounded** — user and author are the same person |
+| `commute_logs` rows | **0** | No producer exists in `backend/` |
+| `api_health_logs` rows | **0** | Persistence raised `ImportError` on every call until 2026-08-27 |
+| Provider call failure rate | not measured | Would be an **upper bound**, not a rate |
+| Provider latency p50 / p95 | not measured | Would be a property of the test environment |
+| Mode agreement, suggested vs actual | not measurable | Would be **confounded** — user and author are the same person |
 
-Four qualifications govern how these should be read.
+**Both zeroes are structural.** `commute_logs` is never constructed anywhere in `backend/` — the
+class appears twice outside `models.py`, an import and a `.delete()`. `api_health_logs` was written
+through a crud function that did not exist; the resulting `ImportError` was caught by a bare
+`except` and printed to stdout, which does not survive a Render restart. The second is fixed and
+rows accumulate from that deploy onward. The first is not implemented. Full accounts as A-6 and C-9
+in [`docs/known-issues.md`](docs/known-issues.md).
 
-**The provider failure rate will be an upper bound, and it measures this client as much as the
-provider.** A call counts as failed when `error_message` is set or the status is 4xx or higher. That
-conflates a genuine provider outage with a timeout this system imposed — `safe_call` raises at
-between 2.2 and 4.8 seconds depending on the call, which is a policy of this codebase — and with
-quota errors, which are a billing state. The instrumentation does not separate them.
+**The system works; the record of it does not exist.** Nothing above says the commute assistant
+malfunctions. It computes plans, compares modes, delivers three reminders and stops on confirmation,
+daily. What it does not do is retain any evidence that it did, which is a different failure and a
+more embarrassing one for a project whose stated design is to be measurable.
 
-**Fill rate is not a sample-size figure, it is a bias figure.** Outcome columns are populated only
-when the user taps 「已出門」. A missed tap produces NULL, not a negative example, and the mornings
-least likely to be recorded are the rushed ones — precisely the class the `is_late` label is about.
+**Nothing measures the scheduler either.** No table records reminder delivery. The exactly-once
+property argued below is a code-level argument, not a measured result — and unlike the two above,
+that was true by design rather than by defect.
 
-**Mode agreement is confounded and is reported anyway.** `actual_transport` is self-reported by the
-same person who wrote the rules, after seeing the suggestion. Anchoring alone would produce
-agreement. It appears because omitting it would be worse than reporting it with this caveat.
-
-**Nothing measures the scheduler.** Every provider call writes a row; no reminder delivery does. The
-exactly-once property below is a code-level argument, not a measured result.
+**When these figures do arrive, three qualifications will govern them.** The provider failure rate
+will be an upper bound rather than a rate, because a call counts as failed when `error_message` is
+set or the status is 4xx, which conflates provider outages with this client's own 2.2–4.8 second
+timeouts and with quota errors. Fill rate will be a bias figure rather than a sample-size figure,
+because a missed tap produces NULL and the mornings least likely to be recorded are the rushed ones.
+Mode agreement will be confounded, because the user is the author and reports after seeing the
+suggestion. These are stated now so the criteria cannot be chosen after seeing the numbers.
 
 ---
 
@@ -294,13 +300,27 @@ external answer produces a visible error rather than a plausible one. Full accou
 
 ## Evaluation Protocol
 
-**Results are pending.** The queries are written, the collection script exists, and the snapshot has
-not been taken. What follows is the protocol and the decision it gates, stated in advance so the
-criterion cannot be chosen after seeing the numbers.
+**There are no results, and the reason is the most useful thing this project produced.**
 
-The gating question is the fill rate of the outcome columns in `commute_logs`. If
-`actual_arrival_time` and `is_late` are populated across a usable share of rows, this section becomes
-an evaluation with three parts:
+The queries were written, the collection script exists, and running it on 2026-08-27 returned zero
+rows from both tables the design depends on. Neither zero was a data-loss event. `commute_logs` has
+no producer: `CommuteLog` is never constructed anywhere in `backend/`. `api_health_logs` had a
+producer that could not run: it imported a crud function that did not exist, and the `ImportError`
+was caught by a bare `except Exception` and printed to stdout — which, on Render's free tier, is
+discarded on the next spin-down.
+
+That second one is worth stating plainly, because it repeats a mistake this repository already
+documents. `api_health_logs` exists *because* provider failures were being lost to `print()` on
+restart. The persistence layer built to fix that was itself silently disabled by a bare `except`,
+and the notice went to `print()`, and was lost on restart. The same swallowing pattern, one layer
+up, undetected for months.
+
+Both were found by querying the database. Neither would have been found by reading the code, running
+the tests, or using the system — which is the point.
+
+The crud function is now in place and rows accumulate from that deploy onward. `commute_logs`
+remains unimplemented and is recorded as C-9. When the tables have content, this section becomes an
+evaluation with three parts:
 
 | Measure | Derivation | What it would show |
 |---|---|---|
@@ -308,9 +328,9 @@ an evaluation with three parts:
 | Failure clustering | Daily failure counts against daily call counts | Whether outages are bursty or background |
 | Departure delta | `actual_departure_time − suggested_departure_time`, cast from `VARCHAR` with a regex guard | How far the suggestion was from the behaviour |
 
-If the fill rate is low, this section stays a protocol and says so. **A stated absence is a better
-result than a thin number**, and the collection script runs the fill-rate query first and gates the
-rest on it.
+**A stated absence is a better result than a thin number.** That principle was written into this
+document before the tables were queried, and it is why this section reads the way it does rather
+than quoting something assembled after the fact.
 
 Two measures will not appear regardless of the data. There is no end-to-end latency figure, because
 request handling is not instrumented — only provider calls are. And there is no empirical verification
@@ -331,21 +351,23 @@ accounts. The provider figures characterise those accounts over that window from
 this system's timeouts applied; they are not a statement about Google, TDX or the CWA. The household
 handoff has been exercised with a small number of schedules, not with a household under load.
 
-**Construct validity — the outcome is self-reported, not observed.** `actual_departure_time` comes
-from a tap on a Quick Reply. `is_late` is the user's own judgement against a target they set
-themselves. Neither is measured independently, and both are recorded by the person who wrote the rules
-being evaluated.
+**Construct validity — the outcome is neither observed nor, currently, recorded.**
+`actual_departure_time` would come from a tap on a Quick Reply, and `is_late` from a judgement
+nothing in the system asks for. Neither is measured independently, and as of C-9 neither is written
+at all.
 
-**Internal validity — the user is the author.** Mode agreement compares a suggestion against a
-behaviour by someone who saw the suggestion and wrote the rule that produced it. There was also no
-code review at any point, and two of the defects in `known-issues.md` — an entire unmounted router
-carrying the household and voice features, and a tested module the running code does not import — are
-the kind that review catches cheaply.
+**Internal validity — the user is the author, and no one else read the code.** Mode agreement would
+compare a suggestion against a behaviour by someone who saw the suggestion and wrote the rule that
+produced it. More consequentially, there was no code review at any point, and three of the defects in
+`known-issues.md` are the kind review catches in minutes: an entire unmounted router carrying the
+household and voice features, a tested module the running code does not import, and a persistence
+function that was called but never written.
 
-**Instrumentation — the scheduler is unmeasured.** Every provider call is recorded; no reminder
-delivery is. The exactly-once argument rests on two constants and a set of guard columns, verified by
-reading the code, and nothing in the deployment confirms it empirically. The same is true of the
-termination behaviour: the dashboard visibly stops, and nothing records that it did.
+**Instrumentation — almost nothing was actually recorded.** The scheduler was never instrumented by
+design: no table records reminder delivery, so the exactly-once argument rests on two constants and a
+set of guard columns verified by reading the code. Provider calls *were* instrumented, at 17 call
+sites, and none of it reached the database until 2026-08-27. Between design and defect, this project
+ran for months producing no retained evidence of its own behaviour.
 
 **Configuration — degradation runs toward optimism.** When the weather call fails, the buffer becomes
 zero and the system advises leaving later than the rules would otherwise produce, silently. The

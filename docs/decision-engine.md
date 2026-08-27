@@ -4,9 +4,9 @@
 was chosen by judgement rather than fitted to data. This document states each rule explicitly so
 that claim can be checked rather than taken on trust.
 
-The engine is a behaviour policy: it maps the state of a morning to an action — a departure time
-and a transport mode — and records both alongside the outcome. What makes it worth documenting is
-not the rules themselves but the fact that they are instrumented to be replaceable; see
+The engine is a behaviour policy: it maps the state of a morning to an action — a departure time and
+a transport mode. A schema exists to record the action alongside the features and the outcome, and
+**nothing writes to it**; the design is real and the write path is not implemented. See
 [Why this is shaped like a dataset](#why-this-is-shaped-like-a-dataset).
 
 **Source** `backend/app/service.py`, `backend/app/weather.py`
@@ -248,7 +248,7 @@ to annotate the reply, which is the smallest available fix and is not implemente
 
 ## Why this is shaped like a dataset
 
-`commute_logs` stores (features, action, outcome) per commute:
+`commute_logs` is laid out to hold (features, action, outcome) per commute:
 
 | Role | Columns |
 |---|---|
@@ -256,8 +256,12 @@ to annotate the reply, which is the smallest available fix and is not implemente
 | Action | `suggested_departure_time`, `suggested_transport` |
 | Outcome | `actual_departure_time`, `actual_transport`, `actual_arrival_time`, `is_late` |
 
-Everything the rules consult at decision time appears in the feature set — including `temp`, which
-no rule uses, recorded because it was cheap to store and might matter later.
+Everything the rules consult at decision time appears in the feature set — including `temp`, which no
+rule uses, included because it was cheap and might matter later.
+
+**No row has ever been written.** `CommuteLog` is never constructed anywhere in `backend/`
+([`known-issues.md` C-9](known-issues.md#c-9commute_logs-has-no-producer)). Everything below
+describes what the schema is for, not what it contains.
 
 The obvious supervised formulation is: given the features, predict the buffer that would have
 produced `is_late = false` with the least excess waiting. That is a regression on one number, with
@@ -275,8 +279,12 @@ needs.
 Actions were never randomised. Every row records what this policy chose, so the data supports
 evaluating counterfactuals only under assumptions nothing here establishes.
 
+A fourth reason sits before all of them: there is no data. The features are computed on every plan
+and discarded, the action is rendered into a message and discarded, and the outcome signal reaches
+`mark_departed_for_today()` and is used only to stop the scheduler. Joining those three write points
+is the smallest change that would turn this section from a design into a dataset.
+
 These are stated because they are the actual research questions, not caveats attached to a result.
-Current fill rates are reported in [`metrics.md`](metrics.md).
 
 ---
 
