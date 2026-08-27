@@ -31,6 +31,8 @@ else. Row counts too small for the B-class checks to be conclusive, so they stay
 | D-4 | Duplicate route spellings | Documentation | Fix recommended |
 | D-5 | Two dashboard front ends are now both reachable | Documentation | Fix recommended |
 | D-6 | LIFF ID hardcoded in two source files | Configuration | Fix recommended |
+| D-7 | `/dashboard/family` returns 404 | Defect | Fix recommended |
+| D-8 | 24 of 50 tests fail, and did before this work began | Testing | Open |
 
 ---
 
@@ -573,6 +575,50 @@ other externally-supplied identifier.
 
 **Fix.** Read it from an environment variable in `webhook.py`, and pass it into the template from
 the route handler rather than baking it into the HTML. Add `LIFF_ID` to `.env.example`.
+
+---
+
+### D-7　`/dashboard/family` returns 404
+
+`main.py` declares `@app.get("/dashboard/family")`, and the route is unreachable.
+`app.mount("/dashboard", StaticFiles(html=True))` is registered at line 250, before that handler is
+declared at line 763. Starlette matches in registration order, so the mount claims everything below
+`/dashboard/` and looks for a file named `family` in `app/static/dashboard/`, which holds only
+`index.html`.
+
+`GET /dashboard` is unaffected — a `Mount` does not claim its own prefix path — which is why this
+went unnoticed: the dashboard works, one alias of it does not.
+
+**Blast radius: none in practice.** `dashboard_links.py` builds `/api/v1/dashboard/...` URLs and
+`webhook.py` builds `/dashboard?userId=…&view=family`. No LINE message ever links to
+`/dashboard/family`. `/family-dashboard`, declared after the mount but not below it, works.
+
+**Fix.** Move the `app.mount(...)` call below the route declarations, or delete the
+`/dashboard/family` route and keep `/family-dashboard`. The second is smaller and loses nothing.
+
+**Verified** with `TestClient` on 2026-08-27. An earlier version of `api.md` asserted the opposite —
+that registration order favoured the handlers — which was wrong about the order and was not checked
+against a running app.
+
+---
+
+### D-8　24 of 50 tests fail, and did before this work began
+
+**Finding.** `python -m unittest discover -s tests` reports 24 failures out of 50. The same suite at
+`e10e6d9`, before any of the changes in this repository's recent history, reported 25.
+
+**Nature.** These are not behavioural tests. They assert on source text — `assertIn("reply_weekday_picker", webhook_py)`,
+`assertIn("PERSISTENT_QUICK_REPLIES", line_client_py)`, `assertIn("class CommuteScheduleTemplate", models_py)`.
+Each names an identifier that no longer exists. The suite documents an earlier design and was not
+updated as the code moved; nothing it asserts about is broken, and the failures indicate drift
+rather than regression.
+
+**Impact.** The README quotes 1,451 lines of tests as a scale figure without qualification, which
+overstates what they establish. Adding CI would turn the Actions tab red on the first run.
+
+**Fix.** Either update the assertions to the current identifiers, or delete the ones testing removed
+features. Both are mechanical. This should be done before any `tests.yml` workflow is added — a red
+badge on a portfolio repository is worse than no badge.
 
 ---
 

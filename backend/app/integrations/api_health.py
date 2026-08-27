@@ -54,15 +54,10 @@ def _persist_api_health_log(
             )
         finally:
             db.close()
-    except ImportError as e:
-        # A missing crud function is a wiring defect, not a runtime condition.
-        # This was silent for months: the ImportError was caught here, printed to
-        # stdout, and lost on the next Render restart — leaving api_health_logs
-        # permanently empty while every call site appeared to be instrumented.
-        # See docs/known-issues.md A-6.
-        raise RuntimeError(
-            f"api_health persistence is not wired up: {e}"
-        ) from e
     except Exception as e:
-        # A database error must not break the provider call that triggered it.
+        # Deliberately tolerant: a logging failure must never break the provider
+        # call that triggered it. The wiring defect this path once hid — a crud
+        # function that did not exist, so every write raised ImportError and was
+        # swallowed here for months — is now caught at startup in main.py instead,
+        # where it stops the process. See docs/known-issues.md A-6.
         print(f"[api-health] persist failed endpoint={endpoint} error={e}")

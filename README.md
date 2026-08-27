@@ -72,11 +72,15 @@ which also means there was no code review, and that is recorded under
 
 194 commits · 53 application source files · 12,315 Python LOC · 34 mounted HTTP routes ·
 3 WebSocket endpoints · 25 LINE command keys · 2 scheduled jobs · 6 instrumented provider
-endpoints · 10 tables · 15 migrations · 1,451 lines of tests across 4 files.
+endpoints · 10 tables · 15 migrations · 1,451 lines of tests across 4 files, 24 of which fail.
 
 Figures count `backend/` only. The four scripts under `scripts/` and `docs/diagrams/` are
 documentation tooling, not part of the system, and are excluded — see
-[`docs/metrics.md`](docs/metrics.md#scale).
+[`docs/metrics.md`](docs/metrics.md#scale). The test figure is quoted with its failure count because
+quoting the line count alone would overstate what the suite establishes: the failing assertions
+check for identifiers that were renamed or removed, and the suite documents an earlier design rather
+than the current one. Recorded as
+[D-8](docs/known-issues.md#d-824-of-50-tests-fail-and-did-before-this-work-began).
 
 Development ran 22 April to 30 July 2026.
 
