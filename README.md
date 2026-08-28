@@ -16,13 +16,13 @@ stops running.
 What is here is a rule-based decision engine, a three-stage reminder scheduler with no lock and no
 queue, and a shared household dashboard that recomputes whose turn it is on every poll instead of
 advancing a pointer. Both of the latter two were built that way to avoid state that can get stuck,
-and both are argued in Design. **It contains no learning components.**
+and both are argued in Design. **It contains no learned components.**
 
 ---
 
 ![Full commute cycle](docs/images/demo.gif)
 
-*schedule setup → dashboard opens → T−60 reminder → T−5 countdown → departure confirmed → monitoring stops.*
+*Schedule setup → dashboard opens → T−60 reminder → T−5 countdown → departure confirmed → monitoring stops.*
 
 ---
 
@@ -78,8 +78,8 @@ documentation tooling, not part of the system, and are excluded — see
 [`docs/metrics.md`](docs/metrics.md#scale). The test count is 35, not the 1,451 lines the files
 contain: fourteen tests were removed because they grepped source for identifiers belonging to
 removed features, which establishes nothing. Two of the remaining tests are marked
-`expectedFailure` and document behaviour that is specified but not implemented
-([C-11](docs/known-issues.md#c-11multi-leg-transfers-are-not-formatted)).
+`expectedFailure` and document behaviour that is specified but not implemented, recorded as C-11 in
+[`docs/known-issues.md`](docs/known-issues.md).
 
 Development ran 22 April to 30 July 2026.
 
@@ -125,6 +125,7 @@ measured, for the reasons given below
 | Provider call failure rate | not measured | Would be an **upper bound**, not a rate |
 | Provider latency p50 / p95 | not measured | Would be a property of the test environment |
 | Mode agreement, suggested vs actual | not measurable | Would be **confounded** — user and author are the same person |
+| Reminder delivery timing | not measured | No table records whether a stage fired inside its window |
 
 **Both zeroes are structural.** `commute_logs` is never constructed anywhere in `backend/` — the
 class appears twice outside `models.py`, an import and a `.delete()`. `api_health_logs` was written
@@ -233,12 +234,13 @@ message.
 guaranteed one. The guard columns are therefore load-bearing rather than defensive, and this is why
 delivery is exactly-once without a lock, a queue, or an exact-time trigger.
 
-The constraint this creates is easy to violate. Compressing the offsets to shorten a demonstration —
-say `one_hour → 90 s` and `five_min → 30 s` — while leaving the window at 75 makes the three windows
-overlap, and all three stages fire on the same tick. The window is not an independent constant; it is
-bounded below by the tick interval and above by the minimum offset spacing.
+The accepted cost is that the window stops being an independent constant. It is bounded below by the
+tick interval and above by the minimum offset spacing, so any change to the three offsets requires
+re-deriving it. Compressing them to shorten a demonstration — say `one_hour → 90 s` and
+`five_min → 30 s` — while leaving the window at 75 makes the three windows overlap, and all three
+stages fire on the same tick.
 
-### Human confirmation as the termination condition
+### Termination has to come from the user, because no provider reports a departure
 
 The scheduler ticks every 30 seconds against every active schedule. Nothing in the transport data
 tells the system that a user has left — a departure is not an event any provider reports. Without a
@@ -299,6 +301,10 @@ The fix is a precondition check at the point where coordinates become load-beari
 external answer produces a visible error rather than a plausible one. Full account as A-1 in
 [`docs/known-issues.md`](docs/known-issues.md).
 
+The accepted cost is that the degradation model is no longer uniform. Every other provider fails soft
+and this one fails hard, so anyone reading the pipeline has to know which inputs are preconditions and
+which are enrichments — a distinction the code states in one place and nowhere else.
+
 ---
 
 ## Evaluation
@@ -334,6 +340,10 @@ quoting something assembled afterwards.
 Two measures will not appear regardless of the data. There is no end-to-end latency figure, because
 request handling is not instrumented — only provider calls are. And there is no empirical verification
 of the exactly-once property, because no table records whether a reminder fired inside its window.
+
+One thing anyone picking this up should check first: whether `api_health_logs` has actually
+accumulated rows since 2026-08-27. The fix was deployed but never verified against the running
+instance, and the failure mode it corrects is precisely the kind that fails silently.
 
 Full derivations, including the queries and the rows each one excludes, are in
 [`docs/metrics.md`](docs/metrics.md).
@@ -481,6 +491,10 @@ behaviour rather than a failure to configure.
 `db.py` uses `sqlalchemy.create_engine`, which is synchronous — an async driver will not work. On
 Python 3.14 without build tooling, `psycopg2` fails to compile; install `pg8000` and use
 `postgresql+pg8000://` instead.
+
+Run a single instance. The scheduler lives in the web process with no lock, so a second replica
+would run a second tick and the guard columns would not stop double delivery — the check and the
+write are not atomic (C-8).
 
 ---
 
