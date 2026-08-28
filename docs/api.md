@@ -52,7 +52,7 @@ to find in the documentation rather than in the source.
 | POST | `/webhooks/line` | `X-Line-Signature` | Single entry point for every LINE event |
 
 Dispatches on event type. `message` events are normalised and matched against `COMMAND_ALIASES`;
-`postback` events are matched against two action strings. See [section F](#f-line-conversation-interface).
+`postback` events are matched against two action strings. See [section G](#g-line-conversation-interface).
 
 ---
 
