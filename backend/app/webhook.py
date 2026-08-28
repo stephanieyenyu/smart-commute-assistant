@@ -9,7 +9,7 @@ from linebot.v3.webhook import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, FollowEvent, PostbackEvent
 
-from app.config import LINE_CHANNEL_SECRET
+from app.config import LINE_CHANNEL_SECRET, LIFF_URL
 from app.db import SessionLocal
 from app.line_client import (
     reply_text,
@@ -52,7 +52,6 @@ from app.schedule_summary import (
 
 router = APIRouter()
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
-LIFF_URL = "https://liff.line.me/2009982765-aKb3T2ca"
 
 
 def today_taipei() -> date:

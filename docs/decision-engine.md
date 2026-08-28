@@ -122,6 +122,11 @@ is scored only if both its option object and its duration exist. Sort ascending,
 If no candidate has a duration, the unrestricted Google option is returned unchanged. The user is
 told the comparison was made either way.
 
+**Ties resolve to the unrestricted Google option**, because it is appended to the candidate list
+first and the sort is stable. That is list order rather than a decision; no rule prefers it. A
+defensible tie-break would favour bus or metro, since those carry a live ETA and stop names the
+generic answer does not.
+
 ### `auto`
 
 Fixed priority, no scoring: **metro → bus → Google transit**. The first option that could be
@@ -131,6 +136,13 @@ predictable; that is a judgement, not a measurement, and no data in this project
 An option is "constructible" when either its TDX snapshot reports `available`, or the Google
 response contains a matching transit step. So `auto` can select `metro` on the strength of a
 Google step alone, with no live TDX data behind it.
+
+### Heavy rail
+
+`vehicle_type` values containing `HEAVY_RAIL`, or equal to `RAIL`, are TRA intercity and regional
+services and are labelled 🚆 建議搭鐵路. They were previously matched by the metro test, because it
+checked for `"RAIL"` as a substring — see
+[`known-issues.md` C-10](known-issues.md#c-10tra-heavy-rail-was-announced-as-metro).
 
 ### `bus` / `metro`
 

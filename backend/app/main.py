@@ -249,10 +249,11 @@ app.include_router(family_router)
 app.include_router(dashboard_router)
 
 # ── Static Dashboard 前端 ────────────────────────────────────────────────────
-import os
-_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static", "dashboard")
-if os.path.isdir(_STATIC_DIR):
-    app.mount("/dashboard", StaticFiles(directory=_STATIC_DIR, html=True), name="dashboard")
+# Mounted at the very bottom of this module, after every @app.get is declared.
+# Starlette matches in registration order, so mounting here would claim every
+# path below /dashboard/ and make GET /dashboard/family return 404 — the mount
+# would look for a file called "family" that does not exist.
+# See docs/known-issues.md D-7.
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -965,3 +966,10 @@ async def root_head():
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+
+# ── Static Dashboard 前端（掛載順序見上方說明）─────────────────────────────
+import os as _os
+_STATIC_DIR = _os.path.join(_os.path.dirname(__file__), "static", "dashboard")
+if _os.path.isdir(_STATIC_DIR):
+    app.mount("/dashboard", StaticFiles(directory=_STATIC_DIR, html=True), name="dashboard")

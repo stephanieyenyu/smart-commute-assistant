@@ -903,9 +903,22 @@ def _is_bus_step(step: dict) -> bool:
     return "BUS" in vehicle_type or "BUS" in line_text or "公車" in line_text
 
 
+def _is_heavy_rail_step(step: dict) -> bool:
+    """TRA intercity and regional rail.
+
+    Kept separate from metro because "RAIL" as a substring matched HEAVY_RAIL, so a
+    TRA 區間車 between two cities without a metro system was announced as 建議搭捷運.
+    See docs/known-issues.md C-10.
+    """
+    vehicle_type = str(step.get("vehicle_type", "")).upper()
+    return "HEAVY_RAIL" in vehicle_type or vehicle_type == "RAIL"
+
+
 def _is_metro_step(step: dict) -> bool:
     vehicle_type = str(step.get("vehicle_type", "")).upper()
-    return any(kind in vehicle_type for kind in ("SUBWAY", "RAIL", "LIGHT_RAIL", "TRAM"))
+    if _is_heavy_rail_step(step):
+        return False
+    return any(kind in vehicle_type for kind in ("SUBWAY", "METRO_RAIL", "LIGHT_RAIL", "TRAM", "MONORAIL"))
 
 
 def _select_transit_step(steps: list[dict], recommended_mode: str) -> dict | None:
@@ -916,7 +929,15 @@ def _select_transit_step(steps: list[dict], recommended_mode: str) -> dict | Non
     if recommended_mode == "bus":
         return next((step for step in transit_steps if _is_bus_step(step)), None)
     if recommended_mode == "metro":
-        return next((step for step in transit_steps if _is_metro_step(step)), None)
+        metro = next((step for step in transit_steps if _is_metro_step(step)), None)
+        if metro is not None:
+            return metro
+        # Google answered a rail-restricted query with something that is not metro
+        # — TRA heavy rail where no metro exists, or a bus leg. Returning None here
+        # fell through to the metro snapshot branch, which announced a metro line
+        # and stations taken from the user's cached nearest-station lookup rather
+        # than from the route actually returned. See docs/known-issues.md C-10.
+        return transit_steps[0]
     return transit_steps[0]
 
 
@@ -1040,8 +1061,13 @@ def _format_transport_line(plan: dict) -> str:
 
         dep_stop = matched_step.get("departure_stop") or "最近站點"
         arr_stop = matched_step.get("arrival_stop") or "目的地站點"
-        v_emoji = "🚌" if is_bus else "🚇"
-        mode_text = "搭公車" if is_bus else "搭捷運"
+        is_heavy_rail = _is_heavy_rail_step(matched_step)
+        if is_bus:
+            v_emoji, mode_text = "🚌", "搭公車"
+        elif is_heavy_rail:
+            v_emoji, mode_text = "🚆", "搭鐵路"
+        else:
+            v_emoji, mode_text = "🚇", "搭捷運"
         exit_info = "" if is_bus else (_exit_info_from_steps(steps, matched_step) or _exit_info_from_snapshot(snapshot))
 
         eta_str = ""

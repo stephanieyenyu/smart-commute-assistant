@@ -14,6 +14,8 @@ else. Row counts too small for the B-class checks to be conclusive, so they stay
 | A-2 | Compressed timing constants fire all three stages on one tick | Not a defect | Documented constraint |
 | A-6 | `api_health_logs` was never written to | Resolved defect | **Fixed** — crud function added |
 | C-9 | `commute_logs` has no producer | Defect | Not implemented |
+| C-10 | TRA heavy rail was announced as metro | Defect | **Fixed** |
+| C-11 | Multi-leg transfers are not formatted | Defect | Not implemented |
 | B-1 | `commute_logs` outcome fill rate unknown | Unverified | **Closed** — superseded by C-9 |
 | B-2 | Duplicate `commute_overrides` and `commute_logs` rows | Unverified | Open |
 | B-3 | `created_at` and `date` may disagree near midnight | Unverified | Open |
@@ -30,9 +32,9 @@ else. Row counts too small for the B-class checks to be conclusive, so they stay
 | D-3 | Two parallel grouping mechanisms exist | Documentation | Fix recommended |
 | D-4 | Duplicate route spellings | Documentation | Fix recommended |
 | D-5 | Two dashboard front ends are now both reachable | Documentation | Fix recommended |
-| D-6 | LIFF ID hardcoded in two source files | Configuration | Fix recommended |
-| D-7 | `/dashboard/family` returns 404 | Defect | Fix recommended |
-| D-8 | 24 of 50 tests fail, and did before this work began | Testing | Open |
+| D-6 | LIFF ID hardcoded in two source files | Configuration | **Fixed** — moved to `LIFF_ID` |
+| D-7 | `/dashboard/family` returns 404 | Defect | **Fixed** — mount moved |
+| D-8 | 24 of 50 tests fail, and did before this work began | Testing | **Fixed** — suite green, CI added |
 
 ---
 
@@ -162,6 +164,52 @@ nothing asks the user whether they arrived on time.
 **Severity.** High as a documentation matter, low as a runtime one. Nothing malfunctions. But the
 dataset the project describes does not exist, and that had to be found by querying the database
 rather than by reading the code.
+
+---
+
+### C-10　TRA heavy rail was announced as metro
+
+**Symptom.** A route whose only transit leg was a TRA 區間車 — 新竹 to 竹北, where no metro system
+exists — produced 🚇 建議搭捷運, naming a Taipei metro line and two Taipei stations.
+
+**Cause.** Two compounding errors. `_is_metro_step()` tested `"RAIL" in vehicle_type`, and
+`HEAVY_RAIL` contains `RAIL`. And when no metro step was found at all, `_select_transit_step()`
+returned `None`, which fell through to a branch that formats the message from the user's cached
+nearest-station lookup rather than from the route Google actually returned. So a forced-metro query
+answered with a bus leg also produced a fabricated metro line.
+
+**Fix.** `_is_heavy_rail_step()` added and excluded from `_is_metro_step()`, which now matches
+`SUBWAY`, `METRO_RAIL`, `LIGHT_RAIL`, `TRAM`, `MONORAIL` exactly. `_select_transit_step()` falls back
+to the first transit step rather than `None`, and `_format_transport_line()` labels heavy rail
+🚆 建議搭鐵路.
+
+**How it was found.** Two tests in `tests/test_phase0_regression.py` asserted the correct behaviour
+and had been failing. They were read as stale expectations during the D-8 cleanup; they were not.
+The tests were right and the code was wrong.
+
+**Severity.** Medium. Wrong output rather than degraded output — the only defect in this document
+where the system stated something untrue about the physical world.
+
+---
+
+### C-11　Multi-leg transfers are not formatted
+
+> **Not implemented.** Two tests in `test_phase0_regression.py` carry
+> `@unittest.expectedFailure` and document the intended behaviour.
+
+**Finding.** `_format_transport_line()` selects one transit step and formats it.
+A journey requiring a transfer — bus to bus, or metro to bus — is announced as its first leg only.
+The user is told to board route 307 and is not told to change.
+
+**What exists.** `build_transport_detail_lines()` emits a 轉乘站名 line with the first leg's
+endpoints, so the word appears in the detail block, but no second leg is ever named.
+
+**Fix, if adopted.** Iterate the transit steps rather than selecting one, and emit
+`(轉乘) 步行至『X』改搭乘 Y` per additional leg. The two expected-failure tests specify the exact
+format and would pass unchanged.
+
+**Severity.** Medium for a transfer journey, none otherwise. Not fixed here because it changes
+user-facing output on every multi-leg route and could not be checked against live data.
 
 ---
 
@@ -573,8 +621,10 @@ This is a configuration-hygiene issue, not a security one.
 the value cannot be changed without editing source in two places. `.env.example` documents every
 other externally-supplied identifier.
 
-**Fix.** Read it from an environment variable in `webhook.py`, and pass it into the template from
-the route handler rather than baking it into the HTML. Add `LIFF_ID` to `.env.example`.
+**Fix applied.** `LIFF_ID` and `LIFF_URL` moved to `app/config.py`, read from the environment with
+the current value as the default so nothing breaks without the variable set. `webhook.py` imports
+it. `backend/static/schedule_form.html` still hardcodes it — the page is served statically and has
+no template context, so passing it in requires making that route a template render. Left as is.
 
 ---
 
@@ -593,8 +643,9 @@ went unnoticed: the dashboard works, one alias of it does not.
 `webhook.py` builds `/dashboard?userId=…&view=family`. No LINE message ever links to
 `/dashboard/family`. `/family-dashboard`, declared after the mount but not below it, works.
 
-**Fix.** Move the `app.mount(...)` call below the route declarations, or delete the
-`/dashboard/family` route and keep `/family-dashboard`. The second is smaller and loses nothing.
+**Fix applied.** The `app.mount(...)` call moved to the bottom of `main.py`, after every `@app.get`
+is declared. Verified with `TestClient`: `/dashboard`, `/dashboard/family` and `/family-dashboard`
+all return 200, and the static bundle still serves under `/dashboard/`.
 
 **Verified** with `TestClient` on 2026-08-27. An earlier version of `api.md` asserted the opposite —
 that registration order favoured the handlers — which was wrong about the order and was not checked
@@ -616,9 +667,27 @@ rather than regression.
 **Impact.** The README quotes 1,451 lines of tests as a scale figure without qualification, which
 overstates what they establish. Adding CI would turn the Actions tab red on the first run.
 
-**Fix.** Either update the assertions to the current identifiers, or delete the ones testing removed
-features. Both are mechanical. This should be done before any `tests.yml` workflow is added — a red
-badge on a portfolio repository is worse than no badge.
+**Fix applied.** The suite is 35 tests and green.
+
+Fourteen tests were removed. Each asserted on source text for a feature that no longer exists —
+an onboarding wizard, audio reminders, a soft-delete flag, a `role` column, a morning watchdog, a
+weekday picker, several renamed quick-reply constants. Grepping source for an identifier is not a
+test, and keeping the assertion after the feature is gone documents nothing.
+
+Six assertions were updated where the feature survived under a new name — `TOPIC_CARD_TITLES`
+contents, `household_dashboard_link` → `family_dashboard_link`, `CommuteScheduleTemplate` becoming
+an alias rather than a class.
+
+Seven behavioural assertions in `test_phase0_regression.py` were updated for wording drift the code
+had moved past. **Two were not stale**: they had been failing because the code was wrong, and are
+recorded as [C-10](#c-10tra-heavy-rail-was-announced-as-metro). Two more are left failing under
+`expectedFailure` as [C-11](#c-11multi-leg-transfers-are-not-formatted).
+
+**The lesson.** An earlier version of this entry said all 24 failures were identifier drift. That was
+wrong, and it was wrong in the direction that would have let a real defect be deleted along with the
+noise. A failing test is a claim about the system; it has to be read before it is dismissed.
+
+`.github/workflows/tests.yml` runs the suite on push and pull request.
 
 ---
 
