@@ -13,11 +13,10 @@ comes from a relationship between two timing constants rather than from a lock. 
 to stop**, because a system that polls for a departure that already happened is a system that never
 stops running.
 
-This repository contains a rule-based decision engine, a three-stage reminder scheduler that
-terminates on human confirmation, and a shared household dashboard that hands off to the next member
-automatically. **It does not contain any learning components**, and the decision log that was meant
-to make replacing the rules possible is a schema with no producer — see
-[Evaluation Protocol](#evaluation-protocol).
+What is here is a rule-based decision engine, a three-stage reminder scheduler with no lock and no
+queue, and a shared household dashboard that recomputes whose turn it is on every poll instead of
+advancing a pointer. Both of the latter two were built that way to avoid state that can get stuck,
+and both are argued in Design. **It contains no learning components.**
 
 ---
 
@@ -222,6 +221,23 @@ Because the three run concurrently under `asyncio.gather`, alongside the TDX and
 honest version costs the same wall clock as the dishonest one: about 4.2 seconds rather than 12.6.
 The accepted cost is three times the quota consumption, on a mode the user selects explicitly.
 
+### Exactly-once from two mechanisms, neither sufficient alone
+
+**At least once** comes from `EXACT_TRIGGER_WINDOW_SECONDS` (75) being greater than
+`SCHEDULER_TICK_SECONDS` (30): at least one tick necessarily lands inside every window, so no stage
+can be missed. **At most once** comes from the corresponding `*_sent_at` column, checked before
+sending and written on send, so the two or three ticks that do land inside a window produce one
+message.
+
+`75 / 30 = 2.5`, so a window is sampled two or three times depending on phase — never zero, never a
+guaranteed one. The guard columns are therefore load-bearing rather than defensive, and this is why
+delivery is exactly-once without a lock, a queue, or an exact-time trigger.
+
+The constraint this creates is easy to violate. Compressing the offsets to shorten a demonstration —
+say `one_hour → 90 s` and `five_min → 30 s` — while leaving the window at 75 makes the three windows
+overlap, and all three stages fire on the same tick. The window is not an independent constant; it is
+bounded below by the tick interval and above by the minimum offset spacing.
+
 ### Human confirmation as the termination condition
 
 The scheduler ticks every 30 seconds against every active schedule. Nothing in the transport data
@@ -266,23 +282,6 @@ below checkable at all.
 The accepted cost is staleness. A frozen plan does not react to traffic that develops after it was
 computed. A missing plan is refreshed, throttled by `PREPARE_RETRY_SECONDS`; a merely old one is not.
 
-### Exactly-once from two mechanisms, neither sufficient alone
-
-**At least once** comes from `EXACT_TRIGGER_WINDOW_SECONDS` (75) being greater than
-`SCHEDULER_TICK_SECONDS` (30): at least one tick necessarily lands inside every window, so no stage
-can be missed. **At most once** comes from the corresponding `*_sent_at` column, checked before
-sending and written on send, so the two or three ticks that do land inside a window produce one
-message.
-
-`75 / 30 = 2.5`, so a window is sampled two or three times depending on phase — never zero, never a
-guaranteed one. The guard columns are therefore load-bearing rather than defensive, and this is why
-delivery is exactly-once without a lock, a queue, or an exact-time trigger.
-
-The constraint this creates is easy to violate. Compressing the offsets to shorten a demonstration —
-say `one_hour → 90 s` and `five_min → 30 s` — while leaving the window at 75 makes the three windows
-overlap, and all three stages fire on the same tick. The window is not an independent constant; it is
-bounded below by the tick interval and above by the minimum offset spacing.
-
 ### Fail loudly where the precondition is load-bearing
 
 Uniform degradation is wrong when the inputs are not uniformly optional. Weather is an enrichment — a
@@ -302,29 +301,25 @@ external answer produces a visible error rather than a plausible one. Full accou
 
 ---
 
-## Evaluation Protocol
+## Evaluation
 
-**There are no results, and the reason is the most useful thing this project produced.**
+Running the collection script on 2026-08-27 returned zero rows from both tables the design depends
+on. Neither zero was a data-loss event, and finding out why produced the most transferable result in
+this project.
 
-The queries were written, the collection script exists, and running it on 2026-08-27 returned zero
-rows from both tables the design depends on. Neither zero was a data-loss event. `commute_logs` has
-no producer: `CommuteLog` is never constructed anywhere in `backend/`. `api_health_logs` had a
-producer that could not run: it imported a crud function that did not exist, and the `ImportError`
-was caught by a bare `except Exception` and printed to stdout — which, on Render's free tier, is
-discarded on the next spin-down.
+`api_health_logs` had a producer that could not run. It imported a crud function that did not exist;
+the `ImportError` was caught by a bare `except Exception` and printed to stdout, which Render's free
+tier discards on the next spin-down. That table exists *because* provider failures were being lost to
+`print()` on restart. The persistence layer built to fix that was disabled by the same pattern one
+layer up, and the notice announcing it went to the same place, and was lost the same way.
 
-That second one is worth stating plainly, because it repeats a mistake this repository already
-documents. `api_health_logs` exists *because* provider failures were being lost to `print()` on
-restart. The persistence layer built to fix that was itself silently disabled by a bare `except`,
-and the notice went to `print()`, and was lost on restart. The same swallowing pattern, one layer
-up, undetected for months.
+`commute_logs` has no producer at all — `CommuteLog` is never constructed anywhere in `backend/`.
 
-Both were found by querying the database. Neither would have been found by reading the code, running
-the tests, or using the system — which is the point.
+Both were found by querying the database. Neither would have surfaced from reading the code, running
+the tests, or using the system daily, which I had been doing for three months.
 
-The crud function is now in place and rows accumulate from that deploy onward. `commute_logs`
-remains unimplemented and is recorded as C-9. When the tables have content, this section becomes an
-evaluation with three parts:
+The crud function is now in place and rows accumulate from that deploy onward. `commute_logs` remains
+unimplemented and is recorded as C-9. When the tables have content, this section gains three parts:
 
 | Measure | Derivation | What it would show |
 |---|---|---|
@@ -333,8 +328,8 @@ evaluation with three parts:
 | Departure delta | `actual_departure_time − suggested_departure_time`, cast from `VARCHAR` with a regex guard | How far the suggestion was from the behaviour |
 
 **A stated absence is a better result than a thin number.** That principle was written into this
-document before the tables were queried, and it is why this section reads the way it does rather
-than quoting something assembled after the fact.
+document before the tables were queried, which is why this section reads the way it does rather than
+quoting something assembled afterwards.
 
 Two measures will not appear regardless of the data. There is no end-to-end latency figure, because
 request handling is not instrumented — only provider calls are. And there is no empirical verification
@@ -383,36 +378,33 @@ request time to annotate the reply. That is the smallest available fix and it is
 
 ## Open Problems
 
-Three questions came out of this work that I could not resolve inside it.
+The first is whether a decision log can be used to replace the policy that generated it.
+`commute_logs` stores (features, action, outcome) by construction, and the obvious formulation is a
+regression on one number — predict the buffer that would have produced on-time arrival with the least
+excess waiting, with the current hand-written rule table as the baseline. What makes it non-trivial is
+that the actions were never randomised. Every row records what this policy chose under conditions this
+policy created, so evaluating an alternative offline requires assumptions about overlap that nothing in
+the deployment establishes.
 
-The first is how to make the outcome observable without asking for it. Termination currently depends
-on a voluntary tap, which is both the stop signal and the only source of outcome data. Missingness is
-therefore not random: a user who forgets to tap produces a NULL, and the mornings least likely to be
-recorded are the rushed ones — the class the label is about. Recovering departure from signals already
-present, rather than from a button, is a measurement design problem before it is a modelling one, and
-it would improve the system and the dataset at the same time.
+That problem sits on top of a measurement one. Termination depends on a voluntary tap, which is both
+the stop signal and the only source of outcome data. Missingness is therefore correlated with the
+label: a user who forgets to tap produces a NULL, and the mornings least likely to be recorded are the
+rushed ones — the class `is_late` is about. Recovering departure from signals already present, rather
+than from a button, would improve the system and the dataset in the same change.
 
-The second is whether the decision log carries enough signal to replace the rules that produced it.
-`commute_logs` stores (features, action, outcome) by construction, and the obvious formulation —
-predict the buffer that would have produced on-time arrival with the least excess waiting — is a
-regression on one number with the current rule table as the baseline. What makes it non-trivial is
-that the actions were never randomised. Every row records what this policy chose, so the data supports
-counterfactual evaluation only under assumptions nothing here establishes.
+The third came out of the instrumentation itself. The provider failure rate this system can compute
+conflates three things — a provider outage, a timeout this client imposed at between 2.2 and 4.8
+seconds, and a quota error — because the logging records that a call returned nothing usable without
+recording why. Separating a failure from the artifact of its recording is a problem I have now hit from
+both directions: once when the failures were invisible, once when the record of them was.
 
-The third is separating genuine failure from artifacts of its recording. This system measures a
-provider failure rate that conflates outages, its own client-side timeouts, and quota errors, because
-the instrumentation records that a call did not return usable data without recording why. Designing
-instrumentation that distinguishes the failure from the recording of it is a methodological problem I
-have now run into from both directions.
+**The kiosk shaped the architecture.** The dashboard was built for a Raspberry Pi on a hallway wall,
+which is why it speaks rather than notifies and why the household handoff exists at all — a shared
+display has to know whose turn it is. Running it in a browser is the fallback, not the design.
 
-**The unfinished piece** is the physical one. The dashboard was designed for a Raspberry Pi kiosk on a
-hallway wall — which is why it speaks rather than notifies, and why the household handoff exists at
-all: a shared display has to know whose turn it is. The deployment was planned and not carried out, so
-what is here runs in a browser instead.
-
-These questions are why I am applying to graduate study in AI. What is here is the layer beneath a
-learned policy: a hand-written baseline, honest about being one, with the instrumentation that would be
-needed to replace it already in place and already showing where its own data falls short.
+These are the questions I want to work on. What is here is the layer underneath a learned policy: a
+hand-written baseline that says so, instrumented well enough to show where its own data would fail to
+support the replacement.
 
 ---
 
