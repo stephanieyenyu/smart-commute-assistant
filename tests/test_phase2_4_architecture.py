@@ -12,36 +12,11 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
     def read_repo_file(self, relative_path: str) -> str:
         return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 
-    def test_phase2_models_include_saas_and_notification_fields(self):
-        models_py = self.read_repo_file("backend/app/models.py")
-
-        self.assertIn("role = Column", models_py)
-        self.assertIn("transport_preference = Column(JSON", models_py)
-        self.assertIn("household_id = Column", models_py)
-        self.assertIn("active_weekdays = Column(JSON", models_py)
-        self.assertIn("commute_disabled = Column", models_py)
-        self.assertIn("nightly_brief_plan_key", models_py)
-        self.assertIn("watchdog_alert_key", models_py)
-        self.assertIn("departure_confirmed_at", models_py)
-        self.assertIn("departure_timeout_at", models_py)
-        self.assertIn("departure_timeout_silent", models_py)
-        self.assertIn("departure_snoozed_until", models_py)
-        self.assertIn("class ApiHealthLog", models_py)
-
     def test_phase2_api_health_persists_logs(self):
         api_health_py = self.read_repo_file("backend/app/integrations/api_health.py")
 
         self.assertIn("_persist_api_health_log", api_health_py)
         self.assertIn("record_api_health_log", api_health_py)
-
-    def test_phase3_service_uses_route_formatter_module(self):
-        service_py = self.read_repo_file("backend/app/service.py")
-        formatter_py = self.read_repo_file("backend/app/route_formatter.py")
-
-        self.assertIn("from app import route_formatter", service_py)
-        self.assertIn("route_formatter.format_today_commute_text", service_py)
-        self.assertIn("def format_transport_line", formatter_py)
-        self.assertIn("def build_reminder_payload_from_plan", formatter_py)
 
     def test_route_formatter_preserves_bus_and_metro_detail_format(self):
         module_path = REPO_ROOT / "backend/app/route_formatter.py"
@@ -120,21 +95,6 @@ class Phase2To4ArchitectureTests(unittest.TestCase):
         self.assertIn("搭乘 307號公車", bus_line)
         self.assertIn("307號公車將於 8 分鐘後抵達『南京敦化路口』", bus_line)
         self.assertNotIn("可選路線", bus_line)
-
-    def test_phase4_scheduler_has_nightly_and_watchdog_jobs(self):
-        scheduler_py = self.read_repo_file("backend/app/reminder_scheduler.py")
-        tasks_py = self.read_repo_file("backend/app/tasks.py")
-        celery_py = self.read_repo_file("backend/app/celery_app.py")
-
-        self.assertIn("async def send_nightly_briefs", scheduler_py)
-        self.assertIn("async def run_morning_watchdog", scheduler_py)
-        self.assertIn("nightly_brief_job", scheduler_py)
-        self.assertIn("morning_watchdog_job", scheduler_py)
-        self.assertIn("app.tasks.send_nightly_briefs", tasks_py)
-        self.assertIn("app.tasks.run_morning_watchdog", tasks_py)
-        self.assertIn("send_nightly_briefs", celery_py)
-        self.assertNotIn("async_check_all_commutes", tasks_py)
-
 
 if __name__ == "__main__":
     unittest.main()

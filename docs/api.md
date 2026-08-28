@@ -86,7 +86,7 @@ mounted, and once directly on `app` in `main.py`. The `main.py` one is live.
 | Method | Path | Purpose | Side effects |
 |---|---|---|---|
 | GET | `/dashboard` | Personal dashboard page | — |
-| GET | `/dashboard/family` | Family dashboard page — **returns 404**, see below | — |
+| GET | `/dashboard/family` | Family dashboard page | — |
 | GET | `/family-dashboard` | Alternate spelling of the above | — |
 | GET | `/api/dashboard/status` | Live commute status for the dashboard | read-only |
 | GET | `/api/commute-status` | Commute status, separate handler | read-only |
@@ -95,17 +95,13 @@ mounted, and once directly on `app` in `main.py`. The `main.py` one is live.
 | POST | `/api/alert/acknowledge/{user_id}` | Dismiss the departure alert | writes `alert_status = 'acknowledged'` |
 
 `app.mount("/dashboard", StaticFiles(..., html=True))` serves the static bundle under
-`/dashboard/*`. **It is registered before the route decorators above**, at `main.py:250` against
-handlers declared from line 755 onward, and Starlette matches in registration order.
+`/dashboard/*`. It is registered at the bottom of `main.py`, after every route decorator, because
+Starlette matches in registration order: mounted earlier, it claimed every path below `/dashboard/`
+and `GET /dashboard/family` returned 404 while the mount looked for a file named `family`.
 
-`GET /dashboard` still reaches its handler, because a `Mount` only claims paths strictly below its
-prefix. **`GET /dashboard/family` does not: it returns 404.** The mount intercepts it, looks for a
-file named `family` in `app/static/dashboard/` — which contains only `index.html` — and fails.
-
-Verified with `TestClient` on 2026-08-27: `/dashboard` → 200 from the handler, `/dashboard/family`
-→ 404, `/family-dashboard` → 200 from the same handler. Nothing links to the broken path;
-`dashboard_links.py` builds `/api/v1/dashboard/...` URLs and `webhook.py` builds `/dashboard?view=`.
-Recorded as [D-7](known-issues.md#d-7dashboardfamily-returns-404).
+Verified with `TestClient`: `/dashboard`, `/dashboard/family` and `/family-dashboard` all return 200
+from their handlers, and the static bundle still serves under `/dashboard/`. Recorded as
+[D-7](known-issues.md#d-7dashboardfamily-returns-404).
 
 ---
 

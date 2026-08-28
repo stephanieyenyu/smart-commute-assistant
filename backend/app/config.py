@@ -21,3 +21,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TDX_CLIENT_ID = os.getenv("TDX_CLIENT_ID", "")
 TDX_CLIENT_SECRET = os.getenv("TDX_CLIENT_SECRET", "")
 UNDELETE_API_KEY = os.getenv("UNDELETE_API_KEY", "default-secret-key-change-me")
+
+# LIFF application ID. Not a secret — it appears in every URL the user taps — but
+# it is deployment configuration, so it does not belong in source. See known-issues D-6.
+LIFF_ID = os.getenv("LIFF_ID", "2009982765-aKb3T2ca")
+LIFF_URL = f"https://liff.line.me/{LIFF_ID}"
