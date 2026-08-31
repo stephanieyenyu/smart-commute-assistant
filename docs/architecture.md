@@ -122,7 +122,3 @@ known and simply has not been needed.
 - [API reference](api.md) — what is actually reachable, grouped by caller
 - [Known issues](known-issues.md) — verified defects and open questions
 - [Metrics](metrics.md) — how each figure in the README is derived
-
----
-
-**Source** `backend/app/` @ `80ee635` — verified line by line
