@@ -22,13 +22,17 @@ from app.crud import (
     clear_today_reminder_state_db,
 )
 from app.service import freeze_today_reminder_payload, build_today_commute_payload
+from app.reminder_timing import (
+    evaluate_departure_reminder,
+    ReminderTimingDecision,
+    STALE_REMINDER_GRACE_SECONDS,
+)
 
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 _PREPARE_ATTEMPT_CACHE: dict[tuple[int, str], datetime] = {}
 PREPARE_RETRY_SECONDS = 300
-STALE_REMINDER_GRACE_SECONDS = 120
 SCHEDULER_TICK_SECONDS = 30
 EXACT_TRIGGER_WINDOW_SECONDS = 75
 NIGHTLY_BRIEF_HOUR = 21
@@ -78,10 +82,6 @@ def current_seconds_of_day() -> int:
 
 def _is_inside_trigger_window(now_sec: int, trigger_sec: int) -> bool:
     return trigger_sec <= now_sec < trigger_sec + EXACT_TRIGGER_WINDOW_SECONDS
-
-
-def _is_departure_confirmation_window(now_sec: int, departure_sec: int) -> bool:
-    return departure_sec <= now_sec <= departure_sec + STALE_REMINDER_GRACE_SECONDS
 
 
 async def ensure_today_reminders_prepared(db, today, schedules_today: list[CommuteSchedule]):
@@ -275,7 +275,8 @@ async def check_and_send_departure_reminders():
 
                 if (
                     not override.departure_question_sent_at
-                    and _is_departure_confirmation_window(now_sec, departure_sec)
+                    and evaluate_departure_reminder(now_sec, override.frozen_departure_time)
+                    == ReminderTimingDecision.SEND
                 ):
                     await _send_departure_question(
                         db,
