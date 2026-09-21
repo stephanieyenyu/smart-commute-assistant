@@ -39,7 +39,6 @@ MODE_LABELS = {
     "google_transit": "目前以 Google 大眾運輸估算為主",
     "bus": "今天搭公車",
     "metro": "建議改搭捷運",
-    "bus_to_metro": "今天搭公車轉捷運",
 }
 
 
@@ -616,10 +615,6 @@ async def choose_commute_option_with_override(
             },
             "selection_source": "manual",
         }
-
-    if requested_mode == "bus_to_metro":
-        # Simplified for now, can be expanded if we have specific bus_to_metro logic
-        return {"best_option": google_option, "selection_source": "manual"}
 
     # auto priority: Metro > Bus > Google
     if metro_option:

@@ -23,7 +23,7 @@ else. Row counts too small for the B-class checks to be conclusive, so they stay
 | C-2 | LIFF and dashboard routes accept an unverified identifier | Security | Fix recommended |
 | C-3 | Database driver differs across three declarations | Configuration | **Fixed** — reconciled |
 | C-4 | Degradation is toward optimism | Design limitation | Accepted, not fixed |
-| C-5 | `bus_to_metro` is accepted but returns the default | Defect | Fix recommended |
+| C-5 | `bus_to_metro` is accepted but returns the default | Defect | **Fixed** — removed |
 | C-6 | Two source files differ only by letter case | Defect | **Fixed** — dead copy deleted |
 | C-7 | `schema_guard` overlaps Alembic's role | Design limitation | Accepted, not fixed |
 | C-8 | The scheduler holds no lock | Design limitation | Accepted, not fixed |
@@ -433,6 +433,15 @@ value.
 
 **Severity.** Low functionally, higher in honesty terms. It is the one place the system tells the
 user something that is not true.
+
+**Fixed 2026-09-21, second option.** The command was judged not worth building — no real routing
+logic distinguishes it from `auto`, and nothing indicated it was actually in use. Removed
+entirely: the `set_mode_bus_to_metro` alias and its handler in `webhook.py`, the
+`"bus_to_metro"` entries in the two `TRANSPORT_MODE_NAME_MAP`s (`webhook.py`, `main.py`) and
+`service.py`'s `MODE_LABELS`, and the no-op branch in `choose_commute_option_with_override()`. A
+`transport_mode_override` value of `bus_to_metro` left over from before this fix (the column is
+an unconstrained VARCHAR) now falls through to the same `auto` priority order every other
+unrecognised value would.
 
 ---
 

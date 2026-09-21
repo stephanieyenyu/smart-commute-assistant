@@ -676,7 +676,7 @@ def decision():
                 M_STATE, 60, 970, 240, 66)
     n7b = d.box("auto\n捷運 → 公車 → Google，取第一個能建立的\n不比較、不評分",
                 M_STATE, 320, 970, 240, 66)
-    n7c = d.box("bus／metro\n強制。快照不可用時回傳只帶懲罰常數的空殼\nbus_to_metro 未實作，直接回 Google",
+    n7c = d.box("bus／metro\n強制。快照不可用時回傳只帶懲罰常數的空殼",
                 M_STATE, 580, 970, 240, 66)
 
     n8 = d.box("天氣緩衝\n降雨機率 ≥80 → +10　≥60 → +8　≥40 → +5\n"
