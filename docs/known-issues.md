@@ -344,6 +344,15 @@ identifier they were not meant to have could read another user's commute schedul
 pattern, or delete their schedules. That is a real privacy exposure for a system that knows where
 someone lives and when they leave.
 
+**Considered, not attempted, 2026-09-21.** Confirmed `schedule_form.html` calls `liff.init()` but
+never `liff.getIDToken()` — no ID token is fetched or sent anywhere in the current frontend. A
+real fix means both sides: the frontend has to start requesting and sending the token, and the
+backend has to verify it. Neither side is testable here — verifying an ID token means checking it
+against LINE's real servers, and getting a real token to test with means running inside an actual
+LINE client, which this environment cannot do. Shipping an unverified two-sided auth change to a
+live daily-use bot on that basis was judged worse than leaving the gap open and documented. Not
+touched.
+
 ---
 
 ### C-3　Database driver differs across three declarations
