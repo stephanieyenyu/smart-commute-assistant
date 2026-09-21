@@ -397,11 +397,6 @@ class ScheduleSubmitPayload(BaseModel):
         return self
 
 
-class ScheduleDeletePayload(BaseModel):
-    userId: str
-    scheduleId: int
-
-
 # ── 排程總覽 Flex Builder ─────────────────────────────────────────────────────
 
 def _build_schedule_summary_flex(schedule) -> list[dict]:
@@ -603,41 +598,6 @@ async def submit_schedule(payload: ScheduleSubmitPayload, db: Session = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.options("/api/schedule/submit/", include_in_schema=False)
-async def submit_schedule_trailing_options():
-    return {"ok": True}
-
-
-@app.post("/api/schedule/submit/", include_in_schema=False)
-async def submit_schedule_trailing_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
-    return await submit_schedule(payload, db)
-
-
-@app.post("/liff/schedule/submit", include_in_schema=False)
-async def submit_schedule_liff_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
-    return await submit_schedule(payload, db)
-
-
-@app.options("/api/schedule/add", include_in_schema=False)
-async def submit_schedule_add_options():
-    return {"ok": True}
-
-
-@app.post("/api/schedule/add", include_in_schema=False)
-async def submit_schedule_add_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
-    return await submit_schedule(payload, db)
-
-
-@app.options("/api/schedule/add/", include_in_schema=False)
-async def submit_schedule_add_trailing_options():
-    return {"ok": True}
-
-
-@app.post("/api/schedule/add/", include_in_schema=False)
-async def submit_schedule_add_trailing_alias(payload: ScheduleSubmitPayload, db: Session = Depends(get_db)):
-    return await submit_schedule(payload, db)
-
-
 # ── GET /api/schedule ─────────────────────────────────────────────────────────
 
 def _schedule_response_list(schedules):
@@ -724,20 +684,6 @@ async def delete_schedule_by_path(
     db: Session = Depends(get_db),
 ):
     return await delete_schedule(userId=userId, scheduleId=schedule_id, db=db)
-
-
-@app.post("/api/schedule/delete")
-async def post_delete_schedule(payload: ScheduleDeletePayload, db: Session = Depends(get_db)):
-    schedule = delete_commute_schedule(db, payload.userId, payload.scheduleId)
-    if not schedule:
-        raise HTTPException(status_code=404, detail="找不到指定排程，或該排程已刪除")
-    schedules = get_commute_schedules(db, payload.userId)
-    return {
-        "ok": True,
-        "message": "排程已刪除",
-        "deletedScheduleId": schedule.id,
-        "schedules": _schedule_response_list(schedules),
-    }
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────

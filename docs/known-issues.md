@@ -30,7 +30,7 @@ else. Row counts too small for the B-class checks to be conclusive, so they stay
 | D-1 | The tested timing logic is not the running timing logic | Documentation | **Fixed** |
 | D-2 | Celery and Redis are declared but not deployed | Documentation | **Fixed** — dead Celery path removed |
 | D-3 | Two parallel grouping mechanisms exist | Documentation | Fix recommended |
-| D-4 | Duplicate route spellings | Documentation | Fix recommended |
+| D-4 | Duplicate route spellings | Documentation | **Fixed, mostly** — submit/add consolidated, delete has two paths left |
 | D-5 | Two dashboard front ends are now both reachable | Documentation | Fix recommended |
 | D-6 | LIFF ID hardcoded in two source files | Configuration | **Fixed** — moved to `LIFF_ID` |
 | D-7 | `/dashboard/family` returns 404 | Defect | **Fixed** — mount moved |
@@ -605,6 +605,24 @@ spelling is canonical.
 
 **Fix.** Keep one path per operation, let `redirect_slashes` handle trailing slashes, and remove the
 rest once the LIFF front end is updated.
+
+**Fixed, mostly, 2026-09-21.** The LIFF front end is server-rendered from this same repository
+(`backend/static/schedule_form.html`, served by `liff_routes.py`) rather than a separately
+deployed client, so there was no external app to coordinate with — confirmed its only two calls
+are `GET /api/schedule` and `POST /api/schedule/submit`, and `webhook.py`'s delete command calls
+`delete_commute_schedule()` directly rather than any HTTP route. Removed the five submit/add
+aliases (`POST /liff/schedule/submit`, `POST /api/schedule/submit/`, `POST /api/schedule/add`,
+`POST /api/schedule/add/`, and their `OPTIONS` counterparts), leaving `POST /api/schedule/submit`
+as the one path — `redirect_slashes` now handles the trailing-slash case FastAPI's default way
+instead of an explicit duplicate route. Also removed `POST /api/schedule/delete`, the
+semantically-wrong-verb third way to delete.
+
+**What's not fixed.** The delete operation still has two paths (`DELETE /api/schedule` and
+`DELETE /api/schedule/{schedule_id}`) rather than one. Neither has an internal caller either, but
+unlike the submit/add aliases neither was already marked `include_in_schema=False` as a known
+compatibility shim, so there's no equivalent evidence either is safe to remove outright — left as
+a smaller, honest remainder rather than guessed at. Test suite unchanged (33 passed, 2 xfailed)
+throughout.
 
 ---
 
