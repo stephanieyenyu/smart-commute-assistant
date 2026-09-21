@@ -27,8 +27,8 @@ else. Row counts too small for the B-class checks to be conclusive, so they stay
 | C-6 | Two source files differ only by letter case | Defect | **Fixed** — dead copy deleted |
 | C-7 | `schema_guard` overlaps Alembic's role | Design limitation | Accepted, not fixed |
 | C-8 | The scheduler holds no lock | Design limitation | Accepted, not fixed |
-| D-1 | The tested timing logic is not the running timing logic | Documentation | Fix recommended |
-| D-2 | Celery and Redis are declared but not deployed | Documentation | Fix recommended |
+| D-1 | The tested timing logic is not the running timing logic | Documentation | **Fixed** |
+| D-2 | Celery and Redis are declared but not deployed | Documentation | **Fixed** — dead Celery path removed |
 | D-3 | Two parallel grouping mechanisms exist | Documentation | Fix recommended |
 | D-4 | Duplicate route spellings | Documentation | Fix recommended |
 | D-5 | Two dashboard front ends are now both reachable | Documentation | Fix recommended |
@@ -528,6 +528,12 @@ the duplicated constant. The signature already matches what the scheduler needs.
 **Severity.** Medium. Tests that do not cover the running code are worse than no tests, because
 they are read as coverage.
 
+**Fixed 2026-09-21.** `reminder_scheduler.py` now imports `evaluate_departure_reminder`,
+`ReminderTimingDecision` and `STALE_REMINDER_GRACE_SECONDS` from `reminder_timing.py`;
+`_is_departure_confirmation_window()` and the duplicated constant are gone. Verified behaviourally
+identical to the removed inline check across the boundary (departure time exactly, +119s, +120s,
++121s) before replacing it, and the existing test suite (33 passed, 2 xfailed) is unchanged.
+
 ---
 
 ### D-2　Celery and Redis are declared but not deployed
@@ -548,6 +554,16 @@ than the code suggests.
 **Fix.** Either provision both in `render.yaml`, or remove `celery_app.py` and `tasks.py` and
 rename `redis_cache.py` to reflect what it actually does. Documented in
 [`architecture.md`](architecture.md#known-deviations) in the meantime.
+
+**Fixed, partially, 2026-09-21.** `celery_app.py` and `tasks.py` are removed, along with the
+`celery_worker`/`celery_beat` services in `docker-compose.yml` and the `celery` line in
+`requirements.txt` — confirmed unused outside those two files and `docker-compose.yml` before
+removal; `tasks.py`'s own header comment already stated Render production never ran them.
+`redis_cache.py` was left as-is and not renamed: it is actively imported by `maps_client.py` and
+`tdx_client.py`, correctly attempts Redis before falling back to in-process memory, and renaming
+an imported file for a documentation nuance wasn't worth the risk on a live service. The
+underlying gap — no Redis is provisioned on Render, so the fallback path is what actually runs —
+is unchanged and stays documented in `architecture.md`.
 
 ---
 

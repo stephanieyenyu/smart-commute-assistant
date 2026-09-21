@@ -97,11 +97,13 @@ the service currently serves two dashboards over the same data. See
 duplicated copy of `STALE_REMINDER_GRACE_SECONDS`. See
 [`known-issues.md`](known-issues.md#d-1the-tested-timing-logic-is-not-the-running-timing-logic).
 
-**Celery and Redis are declared but not deployed.** `app/celery_app.py` and `app/tasks.py` define
-a beat schedule duplicating both APScheduler jobs; `render.yaml` declares no worker service.
+**Redis caching degrades to per-process memory when unconfigured.**
 `app/integrations/redis_cache.py` is imported by `maps_client.py` and `tdx_client.py`, but
-`REDIS_URL` defaults to `redis://localhost:6379/0` and no Redis service is provisioned, so every
-cache operation falls through to the in-process `_fallback_cache` — per-process and lost on restart.
+`REDIS_URL` defaults to `redis://localhost:6379/0` and no Redis service is provisioned on Render,
+so every cache operation falls through to the in-process `_fallback_cache` — per-process and lost
+on restart. `app/celery_app.py` and `app/tasks.py`, which duplicated both APScheduler jobs for
+local `docker compose up` only, were removed 2026-09-21 — Render production always ran the
+APScheduler jobs in `start_reminder_scheduler()` and never the Celery ones.
 
 ## Consequence of a single process
 

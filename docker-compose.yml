@@ -21,44 +21,6 @@ services:
     volumes:
       - ./backend:/app
 
-  celery_worker:
-    build: ./backend
-    container_name: smart_commute_celery_worker
-    command: celery -A app.celery_app worker --loglevel=info
-    environment:
-      - DATABASE_URL=postgresql+psycopg2://postgres:postgres@db:5432/smart_commute
-      - REDIS_URL=redis://redis:6379/0
-      - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
-      - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
-      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
-      - CWA_API_KEY=${CWA_API_KEY}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    volumes:
-      - ./backend:/app
-
-  celery_beat:
-    build: ./backend
-    container_name: smart_commute_celery_beat
-    command: celery -A app.celery_app beat --loglevel=info
-    environment:
-      - DATABASE_URL=postgresql+psycopg2://postgres:postgres@db:5432/smart_commute
-      - REDIS_URL=redis://redis:6379/0
-      - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
-      - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
-      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
-      - CWA_API_KEY=${CWA_API_KEY}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    volumes:
-      - ./backend:/app
-
   db:
     image: postgres:15-alpine
     container_name: smart_commute_db
