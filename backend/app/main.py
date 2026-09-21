@@ -748,7 +748,6 @@ TRANSPORT_MODE_NAME_MAP = {
     "shortest": "最短時間優先 (Google)",
     "bus": "公車優先",
     "metro": "捷運優先",
-    "bus_to_metro": "公車轉捷運",
 }
 
 

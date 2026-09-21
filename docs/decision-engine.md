@@ -150,11 +150,6 @@ Forced. If the snapshot is unavailable the option is still returned, as a stub c
 penalty constants and the Google response. The user gets the mode they asked for, with a
 lower-quality estimate and no indication that the estimate is degraded.
 
-### `bus_to_metro`
-
-Accepted as a command, returns the unrestricted Google option unchanged. Not implemented. See
-[`known-issues.md`](known-issues.md#c-5bus_to_metro-is-accepted-but-returns-the-default).
-
 ### Penalty constants
 
 | Mode | Wait | Reliability penalty | Transfer |

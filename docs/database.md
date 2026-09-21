@@ -147,7 +147,7 @@ user's intent for the day, the frozen plan, and the delivery guards.
 | Column | Type | Notes |
 |---|---|---|
 | `target_arrival_time` | VARCHAR | Wins over `commute_schedules.time` when present |
-| `transport_mode_override` | VARCHAR | `auto` / `shortest` / `bus` / `metro` / `bus_to_metro` |
+| `transport_mode_override` | VARCHAR | `auto` / `shortest` / `bus` / `metro` |
 | `commute_disabled` | BOOLEAN | |
 | `commute_enabled` | BOOLEAN | Separate column, not the negation of the above — both nullable, so "unset" is distinguishable from "explicitly off" |
 

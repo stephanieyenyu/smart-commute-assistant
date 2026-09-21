@@ -143,14 +143,14 @@ Not HTTP routes. Everything arrives through `POST /webhooks/line`.
 
 ### Text commands
 
-25 keys in `COMMAND_ALIASES`, each mapping to a set of accepted spellings — 60-odd surface strings
-in total, since most commands accept traditional and simplified variants and an English form.
+25 keys in `COMMAND_ALIASES`, each mapping to a set of accepted spellings — 60 surface strings in
+total, since most commands accept traditional and simplified variants and an English form.
 
 | Group | Keys |
 |---|---|
 | Plan queries | `today_commute`, `tomorrow_departure`, `view_settings` |
 | Arrival time | `edit_today_arrival`, `edit_tomorrow_arrival` |
-| Transport mode for today | `set_mode_auto`, `set_mode_shortest`, `set_mode_bus`, `set_mode_metro`, `set_mode_bus_to_metro` |
+| Transport mode for today | `set_mode_auto`, `set_mode_shortest`, `set_mode_bus`, `set_mode_metro` |
 | Reminders | `enable_reminder`, `disable_reminder`, `view_reminder_setting` |
 | Schedules | `add_schedule`, `weekly_schedule`, `edit_schedule`, `delete_schedule` |
 | Dashboard links | `personal_dashboard_link`, `family_dashboard_link`, `board_management_help` |
@@ -161,12 +161,6 @@ in total, since most commands accept traditional and simplified variants and an 
 **`departed` is the outcome-writing path.** The `✅ 已出門` Quick Reply on the departure question
 sends the literal text `已出門`, which resolves through this table and writes
 `commute_overrides.departed_at`. The entire outcome half of `commute_logs` depends on this one tap.
-
-**`set_mode_bus_to_metro` is accepted but not implemented.** It writes
-`transport_mode_override = 'bus_to_metro'`, and `choose_commute_option_with_override()` returns the
-unrestricted Google option for that value with a comment saying so. The user is told the mode was
-applied. Recorded in
-[`known-issues.md`](known-issues.md#c-5bus_to_metro-is-accepted-but-returns-the-default).
 
 ### Postback actions
 

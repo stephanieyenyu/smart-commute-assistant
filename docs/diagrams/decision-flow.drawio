@@ -73,8 +73,7 @@ auto／shortest／metro　TDX 捷運 3.5 秒" style="rounded=1;absoluteArcSize=1
           <mxGeometry x="320" y="970" width="240" height="66" as="geometry" />
         </mxCell>
         <mxCell id="c18" value="bus／metro
-強制。快照不可用時回傳只帶懲罰常數的空殼
-bus_to_metro 未實作，直接回 Google" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
+強制。快照不可用時回傳只帶懲罰常數的空殼" style="rounded=1;absoluteArcSize=1;arcSize=10;html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="580" y="970" width="240" height="66" as="geometry" />
         </mxCell>
         <mxCell id="c19" value="天氣緩衝

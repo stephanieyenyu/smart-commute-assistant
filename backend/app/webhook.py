@@ -122,7 +122,7 @@ OVERRIDE_TOMORROW_QR = [
 TRANSPORT_MODE_NAME_MAP = {
     None: "自動判斷", "auto": "自動判斷",
     "shortest": "最短時間優先 (Google)",
-    "bus": "公車優先", "metro": "捷運優先", "bus_to_metro": "公車轉捷運",
+    "bus": "公車優先", "metro": "捷運優先",
 }
 
 COMMAND_ALIASES = {
@@ -138,7 +138,6 @@ COMMAND_ALIASES = {
     "set_mode_shortest":    {"優先選擇通勤時間短", "今天最短時間"},
     "set_mode_bus":         {"今天搭公車", "今天坐公車"},
     "set_mode_metro":       {"今天搭捷運", "今天坐捷運"},
-    "set_mode_bus_to_metro":{"今天搭公車轉捷運", "今天公車轉捷運"},
     "enable_reminder":      {"開啟自動提醒"},
     "disable_reminder":     {"關閉自動提醒"},
     "view_reminder_setting":{"查看提醒設定"},
@@ -900,9 +899,6 @@ async def line_webhook(
                 continue
             if command_text in COMMAND_ALIASES["set_mode_metro"]:
                 await set_mode_and_reply("metro", "好的，今天切換為：捷運優先。")
-                continue
-            if command_text in COMMAND_ALIASES["set_mode_bus_to_metro"]:
-                await set_mode_and_reply("bus_to_metro", "好的，今天切換為：公車轉捷運。")
                 continue
 
             # ── 今天通勤建議 ──────────────────────────────────────────────
