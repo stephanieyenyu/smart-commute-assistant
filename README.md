@@ -24,6 +24,8 @@ and both are argued in Design. **It contains no learned components.**
 
 *Schedule setup → dashboard opens → T−60 reminder → T−5 countdown → departure confirmed → monitoring stops.*
 
+[Demo (35 sec)](https://youtu.be/iqMYAJAwQOc)
+
 ---
 
 ## What it does
