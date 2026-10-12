@@ -22,7 +22,7 @@ and both are argued in Design. **It contains no learned components.**
 
 ![Full commute cycle](docs/images/demo.gif)
 
-*Schedule setup → dashboard opens → T−60 reminder → T−5 countdown → departure confirmed → monitoring stops.*
+*Schedule setup → dashboard opens → T−60 reminder → T−5 countdown.*
 
 [Demo (35 sec)](https://youtu.be/iqMYAJAwQOc)
 
